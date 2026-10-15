@@ -27,6 +27,7 @@ import { SmartFilters, type FilterConfig, type FilterValues } from "@/components
 import { useUser } from "@/lib/auth-context";
 import CatalogoPicker, { filaListaAItem, traerListaCompleta, buscarProveedorCRM, type FilaLista } from "@/components/presupuestos/catalogo-picker";
 import DescripcionLista from "@/components/presupuestos/descripcion-lista";
+import PreciosCostosIA, { type FilaPrecioAnterior, type LineaCosto, type MejorCosto } from "@/components/presupuestos/precios-costos-ia";
 import { claveArticulo, ultimosPrecios, filaPorCodigo, resumenPresupuesto, type PRVendido } from "@/lib/presupuesto-ayudas";
 import CotizacionExpress from "@/components/presupuestos/cotizacion-express";
 import { EmailComposeModal } from "@/components/email-compose-modal";
@@ -1310,6 +1311,41 @@ export default function PresupuestosPage() {
       .map((p) => ({ numero: p.numero, fecha: p.fecha || "", moneda: p.moneda, items: p.items.map((it) => ({ codigo: it.codigo, descripcion: it.descripcion, precioVenta: Number(it.precioVenta) })) }));
     return ultimosPrecios(vendidos);
   }, [presupuestos, newPR.cliente_id, editingPRId, facturadoIds]);
+  // "Precios y costos (IA)": mantener el último precio al cliente y buscar mejores costos.
+  const [showPC, setShowPC] = useState(false);
+  const preciosAnteriores: FilaPrecioAnterior[] = useMemo(() => {
+    const out: FilaPrecioAnterior[] = [];
+    newPR.items.forEach((it, idx) => {
+      const u = ultimosDelCliente.get(claveArticulo(it.codigo, it.descripcion));
+      if (!u || u.moneda !== newPR.moneda) return;
+      const neto = precioNeto(it, descGeneral);
+      if (neto > 0 && Math.abs(neto - u.precio) > 0.004) out.push({ idx, descripcion: it.descripcion, actual: neto, anterior: u.precio, numero: u.numero, fecha: u.fecha });
+    });
+    return out;
+  }, [newPR.items, newPR.moneda, ultimosDelCliente, descGeneral]);
+  function aplicarPreciosAnteriores(cambios: Array<{ idx: number; precio: number }>) {
+    // igual que el "usar" de cada renglón: sin descuento y con ese precio; el markup se recalcula solo
+    setNewPR((p) => ({ ...p, items: p.items.map((x, i) => (cambios.some((c) => c.idx === i) ? { ...x, descuento_porcentaje: 0 } : x)) }));
+    for (const c of cambios) updateNewPRItem(c.idx, "precio_venta", c.precio);
+    toast.success(`${cambios.length} precio(s) vuelven al último que pagó el cliente`);
+  }
+  async function aplicarMejoresCostos(cambios: MejorCosto[]) {
+    const provIds = await Promise.all(cambios.map((c) => proveedorDeLista(c.cand.proveedor)));
+    setNewPR((p) => ({
+      ...p,
+      items: p.items.map((x, i) => {
+        const k = cambios.findIndex((c) => c.idx === i);
+        if (k < 0) return x;
+        const c = cambios[k];
+        const costoMoneda = c.cand.moneda === "ARS" ? "ARS" : String(c.cand.moneda).toLowerCase().includes("divisa") ? "USD Divisa" : "USD";
+        const costoConv = convertCosto(c.cand.costo, costoMoneda, p.moneda, p.tipo_cambio, p.tipo_cambio_divisas);
+        // El precio de venta NO cambia: se recalcula el markup (sube el margen).
+        return { ...x, proveedor_nombre: c.cand.proveedor, proveedor_lista: c.cand.proveedor, proveedor_id: provIds[k] || "", costo_moneda: costoMoneda as NewPRItem["costo_moneda"], precio_costo: c.cand.costo, price_rule_source: undefined,
+          markup_porcentaje: costoConv > 0 && x.precio_venta > 0 ? Number((((x.precio_venta / costoConv) - 1) * 100).toFixed(2)) : x.markup_porcentaje };
+      }),
+    }));
+    toast.success(`${cambios.length} costo(s) mejorados: el precio de venta no cambió, subió el margen`);
+  }
   // Presupuestos anteriores del cliente, para "Repetir presupuesto anterior".
   const anterioresDelCliente = useMemo(() => presupuestos
     .filter((p) => !!newPR.cliente_id && p.clienteId === newPR.cliente_id && p.id !== editingPRId && !(p as any).eliminado && p.estado !== "solicitud")
@@ -4117,6 +4153,10 @@ export default function PresupuestosPage() {
               >
                 <Search className="h-3.5 w-3.5" /> Lista de costos
               </button>
+              <button type="button" onClick={() => setShowPC(true)} title="Mantener el último precio que pagó el cliente y buscar el mismo artículo a mejor costo"
+                className="flex items-center gap-1.5 rounded-lg border border-violet-300 px-3 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-50 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-950/30">
+                <Sparkles className="h-3.5 w-3.5" /> Precios y costos (IA)
+              </button>
               {newPR.cliente_id && anterioresDelCliente.length > 0 && (
                 <div className="relative">
                   <button type="button" onClick={() => setVerRepetir((v) => !v)} disabled={repitiendo}
@@ -4148,6 +4188,18 @@ export default function PresupuestosPage() {
               <Sparkles className="h-3 w-3" /> Cotización express (IA)
             </button>
           </div>
+
+          <PreciosCostosIA
+            open={showPC}
+            onClose={() => setShowPC(false)}
+            moneda={newPR.moneda}
+            tc={newPR.tipo_cambio}
+            tcDivisas={newPR.tipo_cambio_divisas}
+            precios={preciosAnteriores}
+            lineas={newPR.items.map((it, idx): LineaCosto => ({ idx, codigo: it.codigo, descripcion: it.descripcion, cantidad: it.cantidad, costoPR: it.stock_propio ? 0 : convertCosto(it.precio_costo, it.costo_moneda, newPR.moneda, newPR.tipo_cambio, newPR.tipo_cambio_divisas), proveedor: it.proveedor_nombre }))}
+            onAplicarPrecios={aplicarPreciosAnteriores}
+            onAplicarCostos={aplicarMejoresCostos}
+          />
 
           <CotizacionExpress
             open={showExpress}
