@@ -154,6 +154,91 @@ export function leerExtractoBbva(filas: unknown[][]): ExtractoLeido {
   };
 }
 
+/** "13-10-2026" o "13/10/2026" → "2026-10-13". */
+function leerFechaGuiones(v: unknown): string | null {
+  const m = String(v ?? "").trim().match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  return m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : null;
+}
+
+/**
+ * Lee el Excel "Movimientos" del home banking del BBVA (hojas "Movimientos del Día" y "Movimientos Históricos").
+ * No trae el saldo de cada línea: se calcula hacia atrás desde el "Saldo:" del encabezado.
+ * Si se pasa `ancla` (último saldo que el CRM ya tiene de esa cuenta), se VERIFICA que el cálculo llegue a ese mismo saldo:
+ * si no cierra (por ejemplo falta el último día cerrado), tira un error explicando la diferencia y no se guarda nada.
+ */
+export function leerMovimientosBbva(hojas: unknown[][][], ancla?: { fecha: string; saldo: number } | null): ExtractoLeido {
+  type Crudo = LineaBanco & { orden: number };
+  let cuentaTexto = "", saldoHeader = null as number | null;
+  const dia: Crudo[] = [], hist: Crudo[] = [];
+  for (const filas of hojas) {
+    let iniEnc = -1, esDia = false;
+    filas.forEach((f, i) => {
+      const a = String(f?.[0] ?? "").trim();
+      if (/^cuenta:?$/i.test(a) && !cuentaTexto) cuentaTexto = String(f?.[1] ?? "").trim();
+      if (/^saldo:?$/i.test(a) && saldoHeader === null) saldoHeader = leerImporte(f?.[1]);
+      if (iniEnc < 0 && /^fecha$/i.test(a) && /concepto/i.test(String(f?.[2] ?? ""))) {
+        iniEnc = i;
+        esDia = /nro de cheque|saldo parcial/i.test((f || []).join("|"));
+      }
+    });
+    if (iniEnc < 0) continue;
+    const enc = (filas[iniEnc] || []).map((c) => String(c ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim());
+    const cCred = enc.findIndex((c) => c.startsWith("credito")), cDeb = enc.findIndex((c) => c.startsWith("debito"));
+    const cDet = enc.findIndex((c) => c === "detalle"), cOfi = enc.findIndex((c) => c === "oficina");
+    if (cCred < 0 || cDeb < 0) continue;
+    filas.slice(iniEnc + 1).forEach((f, k) => {
+      const fecha = leerFechaGuiones(f?.[0]);
+      if (!fecha) return;
+      const importe = (leerImporte(f?.[cCred]) || 0) + (leerImporte(f?.[cDeb]) || 0);
+      if (!importe) return;
+      let concepto = String(f?.[2] ?? "").replace(/\s+/g, " ").trim();
+      const det = cDet >= 0 ? String(f?.[cDet] ?? "").replace(/\s+/g, " ").trim() : "";
+      // El detalle suele nombrar al que pagó (ej. "CTE 007875 285-… FUNDACION CARGI"): se agrega para poder identificarlo.
+      if (det && !/^[\d ]+$/.test(det) && !/saldo disponible/i.test(det)) concepto += ` · ${det}`;
+      const sucursal = cOfi >= 0 ? String(f?.[cOfi] ?? "").replace(/\s+/g, " ").trim() : "";
+      const l = { fecha, concepto, sucursal, importe: r2(importe), saldo: null as number | null };
+      (esDia ? dia : hist).push({ ...l, clave: "", orden: k });
+    });
+  }
+  if (!cuentaTexto || saldoHeader === null || (!dia.length && !hist.length)) {
+    throw new Error("No reconozco este Excel del BBVA (ni \"Detalle de Movimientos de Cuenta\" ni \"Movimientos\" con saldo).");
+  }
+  // "Movimientos del Día" viene de la más nueva a la más vieja. El histórico trae cada día de la más vieja a la más nueva
+  // y los días de más nuevo a más viejo: se da vuelta dentro de cada día para dejar todo "más nueva primero".
+  const diaMin = dia.length ? dia.map((l) => l.fecha).sort()[0] : "9999-12-31";
+  const porFecha = new Map<string, Crudo[]>();
+  for (const l of hist.filter((x) => x.fecha < diaMin)) porFecha.set(l.fecha, [...(porFecha.get(l.fecha) || []), l]);
+  const ordenado: Crudo[] = [...dia];
+  for (const f of [...porFecha.keys()].sort().reverse()) ordenado.push(...(porFecha.get(f) || []).slice().reverse());
+  // Saldos hacia atrás desde el saldo actual.
+  let saldo = saldoHeader;
+  const lineas: LineaBanco[] = [];
+  for (const l of ordenado) {
+    const base = { fecha: l.fecha, concepto: l.concepto, sucursal: l.sucursal, importe: l.importe, saldo: r2(saldo) };
+    lineas.push({ ...base, clave: claveLinea(base) });
+    saldo = r2(saldo - l.importe);
+  }
+  lineas.reverse();
+
+  let saltos = 0;
+  if (ancla) {
+    const hasta = saldoAl(lineas, ancla.fecha);
+    if (hasta === null || centavos(hasta) !== centavos(ancla.saldo)) {
+      const dif = hasta === null ? null : r2(hasta - ancla.saldo);
+      throw new Error(`Los saldos no cierran contra lo que ya está cargado (al ${ancla.fecha.split("-").reverse().join("/")} el CRM tiene ${ancla.saldo.toLocaleString("es-AR")} y este Excel da ${hasta === null ? "—" : hasta.toLocaleString("es-AR")}${dif === null ? "" : `, diferencia ${dif.toLocaleString("es-AR")}`}). Suele pasar cuando el Excel no incluye el último día cerrado: volvé a bajarlo cuando el banco lo actualice, o usá el "Detalle_mov_cuenta".`);
+    }
+  }
+  const ultima = lineas[lineas.length - 1];
+  return {
+    cuentaTexto,
+    cuentaDigitos: digitosCuenta(cuentaTexto.replace(/\(.*$/, "")),
+    lineas,
+    saldoFinal: ultima?.saldo ?? saldoHeader,
+    saldoFecha: ultima?.fecha ?? null,
+    saltos,
+  };
+}
+
 /** Saldo del extracto al cierre de un día (el de la última línea hasta esa fecha). */
 export function saldoAl(lineas: LineaBanco[], fecha: string): number | null {
   let s: number | null = null;

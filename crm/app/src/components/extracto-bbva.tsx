@@ -11,7 +11,7 @@ import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import {
-  leerExtractoBbva, leerListadoCheques, chequesParaCompletar, unirListados, cruzarExtracto, totalesBancoPorMes, numeroCheque,
+  leerExtractoBbva, leerMovimientosBbva, leerListadoCheques, chequesParaCompletar, unirListados, cruzarExtracto, totalesBancoPorMes, numeroCheque,
   CLASIFICACION_LABEL, SUBTIPO_LABEL,
   type ExtractoLeido, type ChequeListado, type ClasificacionLinea, type MovCruce, type ChequeCruce, type ReglaCruce, type Propuesta,
   digitosCuenta,
@@ -252,8 +252,19 @@ export default function ExtractoBbva({ onIrACheques }: { onIrACheques?: () => vo
     const out: ArchivoPreview[] = [];
     for (const f of Array.from(files)) {
       try {
-        const [hoja] = await leerHojas(f);
-        const leido = leerExtractoBbva(hoja || []);
+        const hojas = await leerHojas(f);
+        let leido;
+        try {
+          leido = leerExtractoBbva(hojas[0] || []);
+        } catch {
+          // Excel "Movimientos" del home banking (sin saldo por línea): se calcula y se verifica contra el último saldo cargado.
+          const prueba = leerMovimientosBbva(hojas, null);
+          const c0 = cuentas.find((c) => digitosCuenta(c.numero) === prueba.cuentaDigitos);
+          const ancla = c0 && c0.saldo_banco !== null && c0.saldo_banco !== undefined && c0.saldo_banco_fecha
+            ? { fecha: String(c0.saldo_banco_fecha).slice(0, 10), saldo: Number(c0.saldo_banco) }
+            : null;
+          leido = leerMovimientosBbva(hojas, ancla);
+        }
         const cuenta = cuentas.find((c) => digitosCuenta(c.numero) === leido.cuentaDigitos) || null;
         const desdeCorte = cuenta ? leido.lineas.filter((l) => l.fecha > cuenta.fecha_corte) : leido.lineas;
         const claves = cuenta ? clavesPorCuenta.get(cuenta.id) || new Set<string>() : new Set<string>();
