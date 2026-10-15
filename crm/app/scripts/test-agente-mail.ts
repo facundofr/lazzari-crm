@@ -49,4 +49,14 @@ assert.deepEqual(r.facturas.map((x) => x.id), ["c"]);
 // entrada del banco ya cruzada
 r = cruzarPago({ facturas: [{ numero: "16-18" }], monto_neto: 1348076.59, fecha_pago: "2026-10-05" }, abiertas, [{ ...banco[0], estado: "matcheado" }]);
 assert.equal(r.entrada_banco?.ya_cruzada, true); assert.equal(r.confianza, "media");
+// facturas gemelas (FA en pesos y FCEA en dólares con el mismo número): elige por importe; factura en USD pagada en pesos
+const gem = [
+  { ...f("g1", 15, 2, 285512.49), estado: "pagada" },
+  { ...f("g2", 15, 2, 4700.85), tipo: "FCEA", moneda: "USD", total: 4700.85, saldo: 4700.85, tipo_cambio: 1512.5, estado: "emitida" },
+];
+r = cruzarPago({ facturas: [{ numero: "0015A00000002", importe: 7110035.63 }] }, gem, []);
+assert.equal(r.facturas.length, 1); assert.equal(r.facturas[0].id, "g2"); assert.ok(r.notas.some((n) => n.includes("en dólares")));
+r = cruzarPago({ facturas: [{ numero: "00015-00000017", importe: 966929.4 }], monto_total: 966929.4 },
+  [{ ...f("t", 15, 17, 631.98), moneda: "USD", total: 631.98, saldo: 631.98, tipo_cambio: 1530, estado: "emitida" }], []);
+assert.equal(r.facturas[0].id, "t"); assert.ok(!r.notas.some((n) => n.includes("revisar diferencia")));
 console.log("OK agente-mail");

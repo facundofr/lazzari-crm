@@ -69,7 +69,7 @@ export function normalizarCategoria(x: unknown): CategoriaMail {
 export type FacturaAbierta = {
   id: string; tipo: string | null; punto_venta: number | null; numero: number | null;
   cliente_id: string | null; cliente_nombre: string | null; cliente_cuit: string | null;
-  total: number; saldo: number; moneda: string | null; estado?: string | null;
+  total: number; saldo: number; moneda: string | null; estado?: string | null; tipo_cambio?: number | null;
 };
 export type EntradaBanco = { id: string; fecha: string; monto: number; descripcion: string | null; estado?: string | null };
 export type PagoExtraido = {
@@ -133,19 +133,40 @@ export function cruzarPago(pago: PagoExtraido, facturas: FacturaAbierta[], entra
     elegidas.set(f.id, { id: f.id, etiqueta: etiquetaFactura(f), saldo: f.saldo, motivo, cobrada: f.saldo < UMBRAL_COBRADA || f.estado === "pagada" });
   const abiertas = facturas.filter((f) => f.saldo >= UMBRAL_COBRADA && f.estado !== "pagada");
 
-  // 1) Por número de factura mencionado en el aviso (entre todas, abiertas o no).
+  // 1) Por número de factura mencionado en el aviso (entre todas, abiertas o no). Si hay varias con el mismo número
+  //    (ej. FA 15-2 en pesos y FCEA 15-2 en dólares), se elige la que coincide con el importe del aviso (pesos, o dólares × cotización).
   for (const m of pago.facturas || []) {
     const p = parseNumeroFactura(m.numero);
     if (!p) continue;
-    const f = facturas.find((x) => x.punto_venta === p.pv && x.numero === p.num);
-    if (f) agregar(f, "número de factura en el aviso");
-    else notas.push(`El aviso nombra ${m.numero} pero no figura en el CRM.`);
+    const candidatas = facturas.filter((x) => x.punto_venta === p.pv && x.numero === p.num);
+    if (!candidatas.length) { notas.push(`El aviso nombra ${m.numero} pero no figura en el CRM.`); continue; }
+    const importe = m.importe && m.importe > 0 ? m.importe : null;
+    const puntaje = (f: FacturaAbierta) => {
+      let pts = 0;
+      if (importe) {
+        if (Math.abs(importe - f.total) <= Math.max(1, f.total * 0.005)) pts += 3;
+        else if (f.moneda === "USD" && f.total > 0) {
+          const tc = importe / f.total;
+          const ref = f.tipo_cambio && f.tipo_cambio > 0 ? f.tipo_cambio : null;
+          if (tc > 300 && tc < 5000 && (!ref || Math.abs(tc - ref) / ref <= 0.03)) pts += 3;
+        }
+      }
+      if (f.saldo >= UMBRAL_COBRADA && f.estado !== "pagada") pts += 1;
+      const letras = String(m.numero || "").toUpperCase().match(/[A-Z]{1,5}/g)?.join("") || "";
+      if (letras && f.tipo && letras.includes(f.tipo.toUpperCase())) pts += 1;
+      return pts;
+    };
+    const mejor = [...candidatas].sort((a, b) => puntaje(b) - puntaje(a))[0];
+    agregar(mejor, importe ? "número e importe del aviso" : "número de factura en el aviso");
+    if (mejor.moneda === "USD" && importe && mejor.total > 0) {
+      notas.push(`${etiquetaFactura(mejor)} es en dólares: US$ ${mejor.total.toFixed(2)} × ${(importe / mejor.total).toFixed(2)} = $ ${importe.toFixed(2)} (el pago llegó en pesos).`);
+    }
   }
 
   // 2) Sin número: por CUIT (o nombre) del cliente y suma exacta de saldos abiertos con el total pagado.
   if (!elegidas.size && pago.monto_total) {
     const cuit = cuitSolo(pago.cliente_cuit);
-    const delCliente = abiertas.filter((f) => (cuit && cuitSolo(f.cliente_cuit) === cuit) || (!cuit && mismoCliente(f.cliente_nombre, pago.cliente_nombre)));
+    const delCliente = abiertas.filter((f) => f.moneda !== "USD" && (cuit && cuitSolo(f.cliente_cuit) === cuit) || (!cuit && mismoCliente(f.cliente_nombre, pago.cliente_nombre)));
     const objetivo = enCentavos(pago.monto_total);
     const unica = delCliente.filter((f) => enCentavos(f.saldo) === objetivo);
     if (unica.length === 1) agregar(unica[0], "saldo = total pagado");
@@ -170,7 +191,7 @@ export function cruzarPago(pago: PagoExtraido, facturas: FacturaAbierta[], entra
   const cobradas = lista.filter((f) => f.cobrada);
   if (cobradas.length) notas.push(`${cobradas.map((f) => f.etiqueta).join(", ")} ya figura${cobradas.length > 1 ? "n" : ""} cobrada${cobradas.length > 1 ? "s" : ""} en el CRM.`);
   const abiertasElegidas = lista.filter((f) => !f.cobrada);
-  if (pago.monto_total && abiertasElegidas.length && !cobradas.length) {
+  if (pago.monto_total && abiertasElegidas.length && !cobradas.length && abiertasElegidas.every((f) => (facturas.find((x) => x.id === f.id)?.moneda || "ARS") !== "USD")) {
     const totalSaldo = abiertasElegidas.reduce((a, f) => a + f.saldo, 0);
     if (enCentavos(totalSaldo) !== enCentavos(pago.monto_total)) notas.push(`Las facturas abiertas suman ${totalSaldo.toFixed(2)} y el aviso paga ${pago.monto_total.toFixed(2)}: revisar diferencia.`);
   }

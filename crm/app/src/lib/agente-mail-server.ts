@@ -119,7 +119,7 @@ Categorías: pago_retencion = aviso de pago, orden de pago, transferencia, reten
 
 const SISTEMA_PROFUNDO = `Sos el asistente administrativo de Lazzari Soluciones Industriales (Argentina). Te paso un mail y sus adjuntos. Extraé los datos con mucho cuidado: los montos argentinos usan punto de miles y coma decimal ($1.234.567,89 = 1234567.89); devolvé números planos con punto decimal.
 Devolvé SOLO un JSON: {"resumen": "máx 300 caracteres", "accion_sugerida": "máx 160 caracteres",
- "pago": null | {"direccion": "recibido" (un cliente nos pagó) | "emitido" (nosotros le pagamos a un proveedor), "cliente_nombre": str|null (quien PAGA), "cliente_cuit": str|null (CUIT de quien PAGA), "monto_neto": número|null (lo que se transfiere/deposita), "monto_total": número|null (suma de facturas pagadas antes de retenciones), "retenciones_total": número|null, "retenciones": [{"tipo": "iva|ganancias|iibb|suss|otra", "monto": número}], "fecha_pago": "YYYY-MM-DD"|null, "medio": str|null, "referencia": str|null, "facturas": [{"numero": "ej. 00016-00000018", "importe": número|null}]},
+ "pago": null | {"direccion": "recibido" (un cliente nos pagó) | "emitido" (nosotros le pagamos a un proveedor), "cliente_nombre": str|null (quien PAGA), "cliente_cuit": str|null (CUIT de quien PAGA), "monto_neto": número|null (lo que se transfiere/deposita), "monto_total": número|null (suma de facturas pagadas antes de retenciones), "retenciones_total": número|null, "retenciones": [{"tipo": "iva|ganancias|iibb|suss|otra", "monto": número}], "fecha_pago": "YYYY-MM-DD"|null (las fechas argentinas son día/mes/año: 08/10/2026 es el 8 de octubre), "medio": str|null, "referencia": str|null, "facturas": [{"numero": "ej. 00016-00000018", "importe": número|null}]},
  "reclamo": null | {"de": str, "tema": str, "importe": número|null},
  "factura": null | {"emisor": str, "cuit": str|null, "numero": str|null, "importe": número|null, "vencimiento": "YYYY-MM-DD"|null, "es_nota_credito": bool}}
 Los mails "Orden de Pago OP-0000xx — Lazzari Soluciones Industriales" son órdenes de pago NUESTRAS a un proveedor (direccion "emitido"), no cobros. Nuestra empresa es Lazzari (también figura como "Lazzari Augusto", "Lazzari Soluciones Industriales" o "Grupo LA"; CUIT 20-37930912-8 y 30-71939604-2): NUNCA es el cliente que paga, es quien cobra. El cliente es la empresa que emite la orden de pago o la transferencia. En "facturas" poné TODOS los comprobantes que el aviso dice que paga, con su número completo (punto de venta y número) y su importe. Completá solo lo que corresponda al mail; lo demás va null. Si un dato no está en el documento, null: no inventes.`;
@@ -127,7 +127,7 @@ Los mails "Orden de Pago OP-0000xx — Lazzari Soluciones Industriales" son órd
 // ── Datos del CRM para el cruce ──────────────────────────────────────────────
 async function cargarFacturasAbiertas(db: any): Promise<(FacturaAbierta & { sociedad_id: string })[]> {
   const { data: fs } = await db.from("facturas")
-    .select("id, tipo, punto_venta, numero, cliente_id, total, total_acreditado, moneda, sociedad_id, estado, clientes(razon_social, cuit)")
+    .select("id, tipo, punto_venta, numero, cliente_id, total, total_acreditado, moneda, tipo_cambio, sociedad_id, estado, clientes(razon_social, cuit)")
     .in("estado", ["emitida", "parcial", "vencida", "pagada"]).gte("fecha", "2026-01-01").limit(3000);
   const ids = (fs || []).map((f: any) => f.id);
   const aplicado = new Map<string, number>();
@@ -138,7 +138,7 @@ async function cargarFacturasAbiertas(db: any): Promise<(FacturaAbierta & { soci
   return (fs || []).map((f: any) => ({
     id: f.id, tipo: f.tipo, punto_venta: f.punto_venta, numero: f.numero, cliente_id: f.cliente_id,
     cliente_nombre: f.clientes?.razon_social ?? null, cliente_cuit: f.clientes?.cuit ?? null,
-    total: Number(f.total), moneda: f.moneda, sociedad_id: f.sociedad_id, estado: f.estado,
+    total: Number(f.total), moneda: f.moneda, tipo_cambio: f.tipo_cambio ? Number(f.tipo_cambio) : null, sociedad_id: f.sociedad_id, estado: f.estado,
     saldo: Math.max(0, Number(f.total) - (aplicado.get(f.id) || 0) - Number(f.total_acreditado || 0)),
   }));
 }
@@ -188,6 +188,8 @@ export async function correrAgenteMail(db: any, origen: "cron" | "manual"): Prom
 
     const facturas = await cargarFacturasAbiertas(db);
     const entradas = await cargarEntradasBanco(db);
+    const { data: ult } = await db.from("extracto_movimientos").select("fecha").order("fecha", { ascending: false }).limit(1);
+    const extractoHasta: string | null = ult?.[0]?.fecha ? String(ult[0].fecha).slice(0, 10) : null;
     let visionUsada = 0;
 
     const procesarUno = async (id: string) => {
@@ -255,6 +257,9 @@ export async function correrAgenteMail(db: any, origen: "cron" | "manual"): Prom
             const cruce = cruzarPago(
               { cliente_nombre: p.cliente_nombre, cliente_cuit: p.cliente_cuit, monto_neto: p.monto_neto, monto_total: p.monto_total, retenciones_total: p.retenciones_total, fecha_pago: p.fecha_pago, facturas: p.facturas },
               abiertasSoc, entradas.filter((e) => !sociedad || e.sociedad_id === sociedad || !e.sociedad_id));
+            if (!cruce.entrada_banco && extractoHasta && p.fecha_pago && String(p.fecha_pago).slice(0, 10) > extractoHasta) {
+              cruce.notas.push(`El extracto cargado llega hasta el ${extractoHasta.split("-").reverse().join("/")}: falta cargar el extracto del banco para ver la entrada.`);
+            }
             datos.cruce = cruce;
             if (!sociedad && cruce.facturas.length) sociedad = facturas.find((f) => f.id === cruce.facturas[0].id)?.sociedad_id || null;
             const pendientesCobro = cruce.facturas.filter((f) => !f.cobrada);
