@@ -24,7 +24,11 @@ export async function POST(req: Request) {
   const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY) as any;
   // "Volver a leer": borra solo las filas del propio agente que Augusto todavía no marcó como vistas, y las lee de nuevo.
   const cuerpo = await req.json().catch(() => ({}));
-  if (cuerpo?.releer) {
+  if (Array.isArray(cuerpo?.ids) && cuerpo.ids.length) {
+    // Volver a leer mails puntuales (los que elige la persona en la pantalla).
+    const { error } = await db.from("agente_mail_procesados").delete().in("id", cuerpo.ids.slice(0, 50));
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  } else if (cuerpo?.releer) {
     const { error } = await db.from("agente_mail_procesados").delete().is("visto_at", null);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   }

@@ -2,26 +2,24 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Header } from "@/components/layout/header";
-import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/toast";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { ROLE_PERMISSIONS } from "@/lib/types";
-import {
-  CATEGORIAS_MAIL, armarReclamoCobranza, etiquetaFactura, ordenCategoria, type FacturaVencida,
-} from "@/lib/agente-mail";
-import { AlertTriangle, Check, ClipboardCopy, Loader2, Mail, RefreshCw, Paperclip } from "lucide-react";
+import { CATEGORIAS_MAIL, armarReclamoCobranza, etiquetaFactura, ordenCategoria, type FacturaVencida } from "@/lib/agente-mail";
+import { Check, ChevronDown, ChevronRight, ClipboardCopy, Loader2, Mail, Paperclip, RefreshCw, RotateCcw } from "lucide-react";
 
 type MailFila = {
   id: string; fecha_mail: string | null; remitente: string | null; asunto: string | null; categoria: string; prioridad: string;
   resumen: string | null; accion_sugerida: string | null; datos: any; adjuntos: { nombre: string; metodo: string }[] | null;
   visto_at: string | null; error: string | null;
 };
-type Corrida = { id: string; inicio: string; mails_nuevos: number; pendientes_restantes: number; costo_usd: number; topeado: boolean; resumen: string | null; error: string | null; origen: string };
+type Corrida = { id: string; inicio: string; mails_nuevos: number; pendientes_restantes: number; costo_usd: number; resumen: string | null; error: string | null };
 type Reclamo = { clienteId: string; cliente: string; email: string | null; facturas: FacturaVencida[]; total: number; asunto: string; texto: string };
 
 const fmt = (n: number) => n.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtFechaHora = (iso: string | null) => (iso ? new Date(iso).toLocaleString("es-AR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "");
+const nombreRemitente = (r: string | null) => (r || "").replace(/<.*>/, "").replace(/"/g, "").trim() || "—";
 
 export default function MailCobrosPage() {
   const { role, sociedadActiva } = useUser();
@@ -30,12 +28,15 @@ export default function MailCobrosPage() {
   const permitido = (ROLE_PERMISSIONS[role] || []).some((p) => p.module === "*" || p.module === "finanzas");
 
   const [mails, setMails] = useState<MailFila[]>([]);
-  const [corridas, setCorridas] = useState<Corrida[]>([]);
+  const [corrida, setCorrida] = useState<Corrida | null>(null);
   const [reclamos, setReclamos] = useState<Reclamo[]>([]);
   const [cargando, setCargando] = useState(true);
   const [faltaMigracion, setFaltaMigracion] = useState(false);
   const [verVistos, setVerVistos] = useState(false);
   const [ejecutando, setEjecutando] = useState(false);
+  const [abierto, setAbierto] = useState<string | null>(null);
+  const [verReclamos, setVerReclamos] = useState(false);
+  const [reclamoAbierto, setReclamoAbierto] = useState<string | null>(null);
 
   const cargar = useCallback(async () => {
     if (!sociedadId) return;
@@ -47,14 +48,14 @@ export default function MailCobrosPage() {
     if (e1 && /agente_mail|relation|does not exist/i.test(e1.message || "")) { setFaltaMigracion(true); setCargando(false); return; }
     setFaltaMigracion(false);
     setMails((m as MailFila[]) || []);
-    const { data: c } = await db.from("agente_mail_corridas").select("*").order("inicio", { ascending: false }).limit(5);
-    setCorridas((c as Corrida[]) || []);
+    const { data: c } = await db.from("agente_mail_corridas").select("*").not("fin", "is", null).order("inicio", { ascending: false }).limit(1);
+    setCorrida(((c as Corrida[]) || [])[0] || null);
     await cargarReclamos(db);
     setCargando(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sociedadId]);
 
-  // Reclamos de cobranza sugeridos: facturas de venta abiertas y vencidas, agrupadas por cliente. Es solo un borrador para copiar.
+  // Reclamos de cobranza sugeridos: facturas de venta abiertas y vencidas, por cliente. Solo un borrador para copiar.
   async function cargarReclamos(db: any) {
     const hoy = new Date();
     const hoyISO = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, "0")}-${String(hoy.getDate()).padStart(2, "0")}`;
@@ -85,17 +86,17 @@ export default function MailCobrosPage() {
     const lista = [...porCliente.values()].map((r) => {
       r.facturas.sort((a, b) => a.vencimiento.localeCompare(b.vencimiento));
       const { asunto, texto } = armarReclamoCobranza(r.cliente, r.facturas, sociedadActiva?.nombre || "Lazzari", hoy);
-      return { clienteId: r.clienteId, cliente: r.cliente, email: r.email, facturas: r.facturas, total: r.total, asunto, texto } as Reclamo;
+      return { ...r, asunto, texto } as Reclamo;
     }).sort((a, b) => b.total - a.total);
     setReclamos(lista);
   }
 
   useEffect(() => { cargar(); }, [cargar]);
 
-  async function revisarAhora(releer = false) {
+  async function ejecutar(cuerpo: { releer?: boolean; ids?: string[] }) {
     setEjecutando(true);
     try {
-      const r = await fetch("/api/agente-mail/ejecutar", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ releer }) });
+      const r = await fetch("/api/agente-mail/ejecutar", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpo) });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) toast.error(j.error || j.resumen || "No se pudo revisar el correo");
       else toast.success(j.resumen || "Listo");
@@ -124,74 +125,71 @@ export default function MailCobrosPage() {
     return [...g.entries()].sort((a, b) => ordenCategoria(a[0]) - ordenCategoria(b[0]));
   }, [visibles]);
   const sinVer = mails.filter((m) => !m.visto_at).length;
-  const ultima = corridas[0];
 
   if (!permitido) return <div className="p-6 text-sm text-gray-500">Tu usuario no tiene acceso a esta pantalla.</div>;
 
   return (
     <div>
-      <Header title="Mail y cobros" subtitle="Lo que llegó a administración y lo que conviene reclamar. Todo es sugerencia: no se registra ni se envía nada solo." />
-      <div className="space-y-4 p-4 md:p-6">
-        {faltaMigracion && (
-          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">Falta correr la migración del agente (20261015100000_agente_mail). Sin eso la pantalla queda vacía; no rompe nada.</div>
-        )}
+      <Header title="Mail y cobros" subtitle="Sugerencias del correo de administración. No se registra ni se envía nada solo." />
+      <div className="mx-auto max-w-5xl space-y-5 p-4 md:p-6">
+        {faltaMigracion && <p className="text-sm text-amber-700">Falta correr la migración del agente (20261015100000_agente_mail).</p>}
 
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-gray-200 bg-white p-3 text-sm">
-          <Mail className="h-4 w-4 text-gray-400" />
-          <div className="min-w-0 flex-1">
-            {ultima ? (
-              <>
-                <span className="font-medium">Última revisión {fmtFechaHora(ultima.inicio)}:</span> {ultima.error ? <span className="text-red-600">{ultima.resumen}</span> : ultima.resumen}
-                {ultima.pendientes_restantes > 0 && <span className="text-gray-500"> · faltan leer {ultima.pendientes_restantes} (octubre, de a tandas)</span>}
-              </>
-            ) : <span className="text-gray-500">Todavía no se hizo ninguna revisión. Revisa sola lunes a viernes 8:30, 12:30 y 16:00.</span>}
-          </div>
-          <button onClick={() => revisarAhora()} disabled={ejecutando || faltaMigracion} className="inline-flex items-center gap-1.5 rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50">
+        {/* Una sola línea de estado + acciones */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-gray-500">
+          <span className="min-w-0 flex-1 truncate" title={corrida?.resumen || ""}>
+            {corrida ? <>Última revisión {fmtFechaHora(corrida.inicio)} · {corrida.error ? "con error" : `${corrida.mails_nuevos} mails`}{corrida.pendientes_restantes > 0 ? ` · faltan leer ${corrida.pendientes_restantes}` : ""}</> : "Sin revisiones todavía (lun-vie 8:30, 12:30 y 16:00)"}
+          </span>
+          <label className="flex items-center gap-1"><input type="checkbox" checked={verVistos} onChange={(e) => setVerVistos(e.target.checked)} /> ver vistos</label>
+          {sinVer > 0 && <button onClick={() => marcarVistos(mails.filter((m) => !m.visto_at).map((m) => m.id))} className="hover:text-gray-900 hover:underline">Marcar todos vistos</button>}
+          <button onClick={() => ejecutar({})} disabled={ejecutando || faltaMigracion} className="inline-flex items-center gap-1.5 rounded-md bg-gray-900 px-3 py-1.5 font-medium text-white disabled:opacity-50">
             {ejecutando ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Revisar ahora
           </button>
         </div>
 
+        {/* Mails */}
         <section>
-          <div className="mb-2 flex flex-wrap items-center gap-3">
-            <h2 className="text-sm font-semibold">Mails de administración <span className="font-normal text-gray-500">({sinVer} sin ver)</span></h2>
-            <label className="flex items-center gap-1 text-xs text-gray-600"><input type="checkbox" checked={verVistos} onChange={(e) => setVerVistos(e.target.checked)} /> ver también los ya vistos</label>
-            {sinVer > 0 && <button disabled={ejecutando} onClick={() => { if (window.confirm("Se vuelven a leer los mails que todavía no marcaste como vistos (los vistos no se tocan). ¿Seguimos?")) revisarAhora(true); }} className="text-xs text-gray-600 hover:underline">Volver a leer los no vistos</button>}
-            {sinVer > 0 && <button onClick={() => marcarVistos(mails.filter((m) => !m.visto_at).map((m) => m.id))} className="text-xs text-blue-600 hover:underline">Marcar todos como vistos</button>}
-          </div>
+          <h2 className="mb-1 text-sm font-semibold">Para mirar <span className="font-normal text-gray-500">{sinVer ? `· ${sinVer} sin ver` : ""}</span></h2>
           {cargando ? <Loader2 className="h-4 w-4 animate-spin text-gray-400" /> : grupos.length === 0 ? (
-            <p className="text-sm text-gray-500">No hay mails para mirar.</p>
+            <p className="py-4 text-sm text-gray-500">Nada para mirar.</p>
           ) : grupos.map(([cat, filas]) => (
-            <div key={cat} className="mb-3 overflow-hidden rounded-lg border border-gray-200 bg-white">
-              <div className="flex items-center justify-between bg-gray-50 px-3 py-1.5 text-xs font-semibold text-gray-700">
+            <div key={cat} className="mb-4">
+              <div className="mb-0.5 flex items-center justify-between border-b border-gray-200 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
                 <span>{CATEGORIAS_MAIL.find((c) => c.id === cat)?.label || "Otros"} · {filas.length}</span>
-                {filas.some((f) => !f.visto_at) && <button onClick={() => marcarVistos(filas.filter((f) => !f.visto_at).map((f) => f.id))} className="font-normal text-blue-600 hover:underline">Marcar vistos</button>}
+                {filas.some((f) => !f.visto_at) && <button onClick={() => marcarVistos(filas.filter((f) => !f.visto_at).map((f) => f.id))} className="font-normal normal-case hover:text-gray-900 hover:underline">marcar vistos</button>}
               </div>
               <ul className="divide-y divide-gray-100">
                 {filas.map((m) => {
-                  const cruce = m.datos?.cruce;
-                  const pago = m.datos?.pago;
+                  const cruce = m.datos?.cruce, pago = m.datos?.pago, abierta = abierto === m.id;
                   return (
-                    <li key={m.id} className={`flex gap-3 px-3 py-2 text-sm ${m.visto_at ? "opacity-60" : ""}`}>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          {m.prioridad === "alta" && <Badge variant="danger">Urgente</Badge>}
-                          <span className="font-medium">{m.asunto || "(sin asunto)"}</span>
-                          <span className="text-xs text-gray-500">{m.remitente?.replace(/<.*>/, "").trim()} · {fmtFechaHora(m.fecha_mail)}</span>
-                        </div>
-                        {m.resumen && <p className="text-gray-700">{m.resumen}</p>}
-                        {pago && (pago.monto_neto || pago.monto_total) && (
-                          <p className="text-xs text-gray-600">
-                            Pago: neto {pago.monto_neto ? `$ ${fmt(Number(pago.monto_neto))}` : "—"}
-                            {pago.retenciones_total ? ` · retenciones $ ${fmt(Number(pago.retenciones_total))}` : ""}
-                            {cruce?.confianza && <> · cruce <Badge variant={cruce.confianza === "alta" ? "success" : cruce.confianza === "media" ? "warning" : "outline"}>{cruce.confianza}</Badge></>}
+                    <li key={m.id} className={m.visto_at ? "opacity-50" : ""}>
+                      <div className="flex items-start gap-2 py-1.5">
+                        <button onClick={() => setAbierto(abierta ? null : m.id)} className="mt-0.5 text-gray-400 hover:text-gray-700" aria-label="Ver detalle">
+                          {abierta ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                        </button>
+                        <div className="min-w-0 flex-1 cursor-pointer" onClick={() => setAbierto(abierta ? null : m.id)}>
+                          <p className="truncate text-sm">
+                            {m.prioridad === "alta" && <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-red-500 align-middle" title="Urgente" />}
+                            <span className="font-medium">{m.asunto || "(sin asunto)"}</span>
+                            <span className="text-gray-500"> · {nombreRemitente(m.remitente)} · {fmtFechaHora(m.fecha_mail)}</span>
                           </p>
-                        )}
-                        {m.accion_sugerida && <p className="text-xs text-blue-700">👉 {m.accion_sugerida}</p>}
-                        {cruce?.notas?.length > 0 && <p className="flex items-center gap-1 text-xs text-amber-700"><AlertTriangle className="h-3 w-3" /> {cruce.notas.join(" ")}</p>}
-                        {m.adjuntos?.length ? <p className="flex items-center gap-1 text-xs text-gray-500"><Paperclip className="h-3 w-3" /> {m.adjuntos.map((a) => `${a.nombre}${a.metodo === "revisar_a_mano" ? " (revisar a mano)" : ""}`).join(", ")}</p> : null}
-                        {m.error && <p className="text-xs text-red-600">{m.error}</p>}
+                          {(m.accion_sugerida || m.resumen) && <p className={abierta ? "text-sm text-gray-700" : "truncate text-xs text-gray-600"}>{m.accion_sugerida || m.resumen}</p>}
+                          {abierta && (
+                            <div className="mt-1 space-y-1 text-xs text-gray-600">
+                              {m.accion_sugerida && m.resumen && <p>{m.resumen}</p>}
+                              {pago && (pago.monto_neto || pago.monto_total) && (
+                                <p>Pago: neto {pago.monto_neto ? `$ ${fmt(Number(pago.monto_neto))}` : "—"}{pago.retenciones_total ? ` · retenciones $ ${fmt(Number(pago.retenciones_total))}` : ""}{cruce?.confianza ? ` · cruce ${cruce.confianza}` : ""}</p>
+                              )}
+                              {cruce?.notas?.length > 0 && <p className="text-amber-700">{cruce.notas.join(" ")}</p>}
+                              {m.adjuntos?.length ? <p className="flex items-center gap-1"><Paperclip className="h-3 w-3" /> {m.adjuntos.map((a) => `${a.nombre}${a.metodo === "revisar_a_mano" ? " (revisar a mano)" : ""}`).join(", ")}</p> : null}
+                              {m.error && <p className="text-red-600">{m.error}</p>}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex shrink-0 gap-1">
+                          <button onClick={() => ejecutar({ ids: [m.id] })} disabled={ejecutando} title="Volver a leer este mail" className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-40"><RotateCcw className="h-3.5 w-3.5" /></button>
+                          {!m.visto_at && <button onClick={() => marcarVistos([m.id])} title="Marcar como visto" className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-green-600"><Check className="h-4 w-4" /></button>}
+                        </div>
                       </div>
-                      {!m.visto_at && <button onClick={() => marcarVistos([m.id])} title="Marcar como visto" className="h-7 shrink-0 rounded border border-gray-200 px-2 text-xs text-gray-600 hover:bg-gray-50"><Check className="h-3.5 w-3.5" /></button>}
                     </li>
                   );
                 })}
@@ -200,28 +198,33 @@ export default function MailCobrosPage() {
           ))}
         </section>
 
+        {/* Reclamos de cobranza: cerrado por defecto */}
         <section>
-          <h2 className="mb-1 text-sm font-semibold">Reclamos de cobranza sugeridos <span className="font-normal text-gray-500">({reclamos.length} clientes con facturas vencidas)</span></h2>
-          <p className="mb-2 text-xs text-gray-500">Son borradores: copialos y mandalos vos. Antes de reclamar, fijate que no haya un pago avisado en los mails de arriba.</p>
-          {reclamos.length === 0 ? <p className="text-sm text-gray-500">No hay facturas vencidas sin cobrar.</p> : (
-            <div className="space-y-2">
-              {reclamos.map((r) => (
-                <details key={r.clienteId} className="rounded-lg border border-gray-200 bg-white">
-                  <summary className="flex cursor-pointer flex-wrap items-center gap-2 px-3 py-2 text-sm">
-                    <span className="font-medium">{r.cliente}</span>
-                    <span className="text-xs text-gray-500">{r.facturas.length} factura{r.facturas.length === 1 ? "" : "s"} · $ {fmt(r.total)}{r.facturas.some((f) => f.moneda === "USD") ? " + USD" : ""}</span>
-                  </summary>
-                  <div className="border-t border-gray-100 px-3 py-2">
-                    <pre className="whitespace-pre-wrap font-sans text-sm text-gray-800">{r.texto}</pre>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <button onClick={() => copiar(r.texto)} className="inline-flex items-center gap-1 rounded-md border border-gray-300 px-2.5 py-1 text-xs"><ClipboardCopy className="h-3.5 w-3.5" /> Copiar texto</button>
-                      {r.email && <a href={`mailto:${r.email}?subject=${encodeURIComponent(r.asunto)}&body=${encodeURIComponent(r.texto)}`} className="inline-flex items-center gap-1 rounded-md border border-gray-300 px-2.5 py-1 text-xs"><Mail className="h-3.5 w-3.5" /> Abrir en mi correo</a>}
+          <button onClick={() => setVerReclamos(!verReclamos)} className="flex w-full items-center gap-1 border-b border-gray-200 pb-1 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+            {verReclamos ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            Reclamos de cobranza sugeridos · {reclamos.length} clientes con facturas vencidas
+          </button>
+          {verReclamos && (reclamos.length === 0 ? <p className="py-3 text-sm text-gray-500">No hay facturas vencidas sin cobrar.</p> : (
+            <ul className="divide-y divide-gray-100">
+              {reclamos.map((r) => {
+                const abierta = reclamoAbierto === r.clienteId;
+                return (
+                  <li key={r.clienteId} className="py-1.5">
+                    <div className="flex items-center gap-2 text-sm">
+                      <button onClick={() => setReclamoAbierto(abierta ? null : r.clienteId)} className="min-w-0 flex-1 truncate text-left">
+                        <span className="font-medium">{r.cliente}</span>
+                        <span className="text-gray-500"> · {r.facturas.length} fact. · $ {fmt(r.total)}{r.facturas.some((f) => f.moneda === "USD") ? " + USD" : ""}</span>
+                      </button>
+                      <button onClick={() => copiar(r.texto)} title="Copiar el mensaje" className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"><ClipboardCopy className="h-4 w-4" /></button>
+                      {r.email && <a href={`mailto:${r.email}?subject=${encodeURIComponent(r.asunto)}&body=${encodeURIComponent(r.texto)}`} title="Abrir en mi correo" className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"><Mail className="h-4 w-4" /></a>}
                     </div>
-                  </div>
-                </details>
-              ))}
-            </div>
-          )}
+                    {abierta && <pre className="mt-1 whitespace-pre-wrap rounded bg-gray-50 p-2 font-sans text-xs text-gray-700">{r.texto}</pre>}
+                  </li>
+                );
+              })}
+            </ul>
+          ))}
+          {verReclamos && reclamos.length > 0 && <p className="mt-2 text-xs text-gray-500">Borradores para copiar: antes de reclamar, fijate que no haya un pago avisado arriba.</p>}
         </section>
       </div>
     </div>
