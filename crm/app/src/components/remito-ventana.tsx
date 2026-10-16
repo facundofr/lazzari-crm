@@ -324,7 +324,8 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
   const avisoExceso = new Set(avisosExceso.map((e) => e.key));
   const hayLlegada = renglones.some((r) => r.disponible != null);
   const ocCambiada = !!pr && oc.trim() !== (pr.oc_cliente || "").trim() && oc.trim() !== ocInicial.trim();
-  const sucNombre = (id: string | null) => sucursales.find((s) => s.id === id)?.nombre || "";
+  const opcionesSucursal = useMemo(() => [{ valor: "__principal", texto: "Dirección principal" }, ...sucursales.map((s) => ({ valor: s.id, texto: s.nombre, detalle: [s.direccion, s.localidad].filter(Boolean).join(", ") || undefined }))], [sucursales]);
+  const nombreSucursal = (id: string) => { const s = sucursales.find((x) => x.id === id); return s ? `${s.nombre}${s.localidad ? ` · ${s.localidad}` : ""}` : "Dirección principal"; };
   const cantidadRemitos = repartir && sucursales.length > 1 ? agruparPorSucursal(conCantidad, true, null).length : 1;
 
   // ── Guardar ──────────────────────────────────────────────────────
@@ -522,11 +523,12 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
                       {editando ? (
                         <span className="py-1 text-sm text-zinc-800 dark:text-zinc-200">{tipo === "muestra" ? "Muestra" : original?.cai_numero ? `Remito R ${numeroCAI(original.punto_venta_cai, original.nro_comprobante_cai) || ""}` : "Sin CAI"}</span>
                       ) : (
-                        <select value={tipo} onChange={(e) => setTipo(e.target.value as Tipo)} className={inputCls}>
-                          <option value="cai">Remito R (con CAI)</option>
-                          <option value="sincai">Sin CAI (interno)</option>
-                          <option value="muestra">Muestra</option>
-                        </select>
+                        <span className="flex gap-1">
+                          {([["cai", "Con CAI"], ["sincai", "Sin CAI"], ["muestra", "Muestra"]] as const).map(([v, t]) => (
+                            <button key={v} type="button" onClick={() => setTipo(v)} title={v === "cai" ? "Remito R con número de CAI" : v === "sincai" ? "Remito interno, no gasta número de CAI" : "Remito de muestra"}
+                              className={`flex-1 rounded-md px-2 py-1 text-xs font-medium ${tipo === v ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>{t}</button>
+                          ))}
+                        </span>
                       )}
                     </label>
 
@@ -535,10 +537,8 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
                         <span className="py-1 text-xs text-zinc-600 dark:text-zinc-300">Elegí la sucursal en cada renglón · salen {cantidadRemitos} remito(s) <button onClick={() => setRepartir(false)} className="text-orange-600 hover:underline">una sola</button></span>
                       ) : (
                         <span className="flex items-center gap-2">
-                          <select value={sucursal} onChange={(e) => setSucursal(e.target.value)} className={`${inputCls} flex-1`}>
-                            <option value="">Dirección principal</option>
-                            {sucursales.map((s) => <option key={s.id} value={s.id}>{s.nombre}{s.localidad ? ` · ${s.localidad}` : ""}</option>)}
-                          </select>
+                          <Autocompletar className="flex-1 !py-1 !text-sm placeholder:text-zinc-800 dark:placeholder:text-zinc-200" mostrarSinEscribir opciones={opcionesSucursal}
+                            placeholder={nombreSucursal(sucursal)} onElegir={(v) => setSucursal(v === "__principal" ? "" : v)} />
                           {!editando && sucursales.length > 1 && <button onClick={() => { setRepartir(true); setRenglones((prev) => prev.map((r) => ({ ...r, sucursal_id: r.sucursal_id || sucursal || null }))); }} className="whitespace-nowrap text-[11px] text-orange-600 hover:underline">repartir en varias</button>}
                         </span>
                       )}
@@ -574,8 +574,6 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
                         <tr>
                           <th className="px-2 py-1 text-left">Artículo</th>
                           {pr && <th className="px-1 py-1 text-right" title="Lo que pidió el PR / lo que ya se remitió">Pedido</th>}
-                          {pr && hayLlegada && <th className="px-1 py-1 text-right" title="Lo que llegó del proveedor y todavía no se remitió">Llegó</th>}
-                          {pr && <th className="px-1 py-1 text-right">Falta</th>}
                           <th className="px-1 py-1 text-right">Remitar</th>
                           {repartir && <th className="px-1 py-1 text-left">Sucursal</th>}
                           <th className="w-6" />
@@ -592,18 +590,14 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
                               {avisoExceso.has(r.key) && <span className="mt-0.5 flex items-center gap-1 text-[10px] text-amber-700 dark:text-amber-400"><AlertTriangle className="h-3 w-3" /> Más de lo que falta entregar ({r.pendiente})</span>}
                             </td>
                             {pr && <td className="px-1 py-1 text-right text-zinc-500">{r.pedido != null ? <>{r.pedido}{r.remitido ? <span className="text-zinc-400"> / {r.remitido}</span> : null}</> : "—"}</td>}
-                            {pr && hayLlegada && <td className="px-1 py-1 text-right">{r.disponible == null ? <span className="text-zinc-300">—</span> : <span className={r.disponible >= (r.pendiente || 0) ? "text-emerald-600" : "text-amber-600"}>{r.disponible}</span>}</td>}
-                            {pr && <td className="px-1 py-1 text-right text-zinc-500">{r.pendiente ?? "—"}</td>}
                             <td className="px-1 py-1 text-right">
                               <input type="number" min={0} step="any" value={r.cantidad === 0 ? "" : r.cantidad} placeholder="0" onChange={(e) => cambiar(r.key, { cantidad: Math.max(0, Number(e.target.value) || 0) })}
                                 className={`${inputCls} w-20 text-right ${avisoExceso.has(r.key) ? "border-amber-400" : ""}`} />
                             </td>
                             {repartir && (
                               <td className="px-1 py-1">
-                                <select value={r.sucursal_id || ""} onChange={(e) => cambiar(r.key, { sucursal_id: e.target.value || null })} className={`${inputCls} max-w-[150px] text-xs`}>
-                                  <option value="">Dir. principal</option>
-                                  {sucursales.map((s) => <option key={s.id} value={s.id}>{s.nombre}</option>)}
-                                </select>
+                                <Autocompletar chico className="w-[150px] placeholder:text-zinc-800 dark:placeholder:text-zinc-200" mostrarSinEscribir opciones={opcionesSucursal}
+                                  placeholder={nombreSucursal(r.sucursal_id || "")} onElegir={(v) => cambiar(r.key, { sucursal_id: v === "__principal" ? null : v })} />
                               </td>
                             )}
                             <td className="px-1 py-1">{!r.presupuesto_item_id && <button onClick={() => setRenglones((prev) => prev.filter((x) => x.key !== r.key))} className="text-zinc-300 hover:text-red-500"><Trash2 className="h-3.5 w-3.5" /></button>}</td>
