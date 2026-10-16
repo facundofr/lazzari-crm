@@ -11,7 +11,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { RemitoVentana } from "@/components/remito-ventana";
 import { useToast } from "@/components/ui/toast";
 import { abrirRemitoPDF, remitoPDFBase64 } from "@/lib/remito-pdf";
-import { numeroCAI, descripcionCorta } from "@/lib/remitos-crear";
+import { numeroCAI, descripcionCorta, numeroRemito, nombrePDFRemito } from "@/lib/remitos-crear";
 import { prepararArchivo } from "@/lib/preparar-foto";
 import { useUser } from "@/lib/auth-context";
 import { formatDate, formatCurrency, todayAR } from "@/lib/utils";
@@ -720,7 +720,7 @@ export default function RemitosPage() {
     if (!r) return;
     const template = await loadEmailTemplate("remito", sociedadActiva?.id || "");
     const vars = {
-      numero: r.numero,
+      numero: numeroRemito(r),
       sociedad: sociedadActiva?.razonSocial || "Lazzari",
       fecha: formatDate(r.fecha),
       cliente: r.clientes?.razon_social || "",
@@ -729,7 +729,7 @@ export default function RemitosPage() {
       to: r.clientes?.email || "",
       subject: applyTemplateVars(template.asunto, vars),
       body: applyTemplateVars(template.cuerpo, vars),
-      filename: `Remito-${r.numero}.pdf`,
+      filename: nombrePDFRemito(numeroRemito(r), r.clientes?.razon_social),
       id: r.id,
     });
     setEmailModalOpen(true);
@@ -789,7 +789,7 @@ export default function RemitosPage() {
         moneda: t.moneda,
       })),
     }, soc);
-    openPDFWindow(html, `Remito-${r.numero}.pdf`);
+    openPDFWindow(html, nombrePDFRemito(numeroRemito(r), r.clientes?.razon_social));
   }
 
   async function handleCreateTransporteFromRemito() {
@@ -864,7 +864,7 @@ export default function RemitosPage() {
           <DataTable<RemitoRow>
             columns={[
               { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="whitespace-nowrap text-zinc-500">{formatDate(row.fecha)}</span> },
-              { key: "numero", label: "N° remito", sortable: true, render: (row) => <span className="whitespace-nowrap font-mono text-xs font-bold">{row.numero}</span> },
+              { key: "numero", label: "N° remito", sortable: true, sortValue: (row) => numeroRemito(row), render: (row) => <span className="whitespace-nowrap font-mono text-xs font-bold" title={row.numero}>{numeroRemito(row)}</span> },
               { key: "presupuesto_id", label: "N° PR", sortable: true, sortValue: (row) => row.presupuesto_numero || "", render: (row) => row.presupuesto_id ? <span className="whitespace-nowrap font-mono text-xs text-blue-700 dark:text-blue-300">{row.presupuesto_numero || "Vinculado"}</span> : <span className="text-zinc-400">{"—"}</span> },
               { key: "oc_cliente", label: "N° OC", sortable: true, sortValue: (row) => row.oc_cliente || "", render: (row) => row.oc_cliente ? <span className="font-mono text-xs">{row.oc_cliente}</span> : <span className="text-zinc-400">{"—"}</span> },
               { key: "clientes", label: "Cliente", sortable: true, sortKey: "clienteNombre", render: (row) => (
@@ -880,7 +880,7 @@ export default function RemitosPage() {
               { key: "tipo_remito", label: "Tipo remito", sortable: true, sortValue: (row) => `${tipoRemitoTexto(row)} ${numeroCAI(row.punto_venta_cai, row.nro_comprobante_cai) || ""}`, render: (row) => {
                 const k = tipoRemitoClave(row);
                 const cai = numeroCAI(row.punto_venta_cai, row.nro_comprobante_cai);
-                if (k === "cai" && cai) return <span className="whitespace-nowrap text-xs font-medium text-emerald-700 dark:text-emerald-400" title={`CAI ${row.cai_numero}`}>Remito R {cai}</span>;
+                if (k === "cai" && cai) return <span className="whitespace-nowrap text-xs font-medium text-emerald-700 dark:text-emerald-400" title={`CAI ${row.cai_numero}`}>Remito R</span>;
                 return <Badge variant={k === "arca" ? "info" : k === "muestra" ? "purple" : k === "manual" ? "orange" : "default"}>{tipoRemitoTexto(row)}</Badge>;
               } },
               { key: "transportistas", label: "Transporte", sortable: true, sortValue: (row) => (row.transportistas || []).join(" "), render: (row) => (row.transportistas || []).length ? <span className="text-xs">{(row.transportistas || []).join(", ")}</span> : <span className="text-zinc-400">{"—"}</span> },
@@ -948,7 +948,7 @@ export default function RemitosPage() {
             <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700 sticky top-0 bg-white dark:bg-zinc-900 z-10">
               <div>
                 <div className="flex items-center gap-3">
-                  <h2 className="text-lg font-semibold font-mono dark:text-white">{detailRemito.numero}</h2>
+                  <h2 className="text-lg font-semibold font-mono dark:text-white">{numeroRemito(detailRemito)}</h2>
                   <Badge variant={(estadoConfig[detailRemito.estado] || { variant: "info" as const }).variant}>
                     {(estadoConfig[detailRemito.estado] || { label: detailRemito.estado }).label}
                   </Badge>

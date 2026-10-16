@@ -2,6 +2,7 @@
 
 import { supabase } from "@/lib/supabase/client";
 import { generateRemitoPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
+import { numeroRemito, nombrePDFRemito } from "@/lib/remitos-crear";
 
 type SociedadPDF = Parameters<typeof getSociedadPDF>[0] & { id: string };
 
@@ -49,7 +50,7 @@ export async function htmlRemito(remitoId: string, sociedad: SociedadPDF, valorD
     items: (items || []).map((it: any) => ({ descripcion: it.descripcion, cantidad: Number(it.cantidad), unidad: it.unidad })),
     transportes: (transportes || []).map((t: any) => ({ transportista: t.transportista, destino: t.destino, costo: t.costo, moneda: t.moneda })),
   }, getSociedadPDF(sociedad));
-  return { html, filename: `Remito-${r.numero}.pdf`, remito: r as { id: string; numero: string; fecha: string; cliente_id: string; clientes?: { razon_social?: string; email?: string } | null } };
+  return { html, filename: nombrePDFRemito(numeroRemito(r), r.clientes?.razon_social), remito: r as { id: string; numero: string; fecha: string; cliente_id: string; clientes?: { razon_social?: string; email?: string } | null } };
 }
 
 /** Abre el PDF del remito (descarga). */

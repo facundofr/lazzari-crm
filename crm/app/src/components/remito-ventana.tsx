@@ -21,7 +21,7 @@ import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { renglonesParaEntregar } from "@/lib/remitos-armado";
-import { valorSugerido, excesos, agruparPorSucursal, ocAnteriorDistinta, numeroCAI, type RenglonVentana } from "@/lib/remitos-crear";
+import { valorSugerido, excesos, agruparPorSucursal, ocAnteriorDistinta, numeroCAI, nombrePDFRemito, type RenglonVentana } from "@/lib/remitos-crear";
 import { buscarCandidatos, type CatalogoCandidato } from "@/lib/catalogo-busqueda";
 import { abrirRemitoPDF, remitoPDFBase64 } from "@/lib/remito-pdf";
 import { AlertTriangle, Download, FileText, Loader2, Mail, Plus, Sparkles, Trash2, Truck, X } from "lucide-react";
@@ -351,13 +351,13 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
     if (!sociedadActiva) return;
     const template = await loadEmailTemplate("remito", sociedadActiva.id);
     const { data: cli } = clienteId ? await db.from("clientes").select("email").eq("id", clienteId).maybeSingle() : { data: null };
-    const vars = { numero: h.numero, sociedad: sociedadActiva.razonSocial || "Lazzari", fecha: formatDate(fecha), cliente: clienteNombre };
-    setMail({ remitoId: h.id, to: cli?.email || "", subject: applyTemplateVars(template.asunto, vars), body: applyTemplateVars(template.cuerpo, vars), filename: `Remito-${h.numero}.pdf` });
+    const vars = { numero: h.cai || h.numero, sociedad: sociedadActiva.razonSocial || "Lazzari", fecha: formatDate(fecha), cliente: clienteNombre };
+    setMail({ remitoId: h.id, to: cli?.email || "", subject: applyTemplateVars(template.asunto, vars), body: applyTemplateVars(template.cuerpo, vars), filename: nombrePDFRemito(h.cai || h.numero, clienteNombre) });
   }
 
   if (!open) return null;
 
-  const titulo = editando ? `Editar remito ${original?.numero || ""}` : pr ? `Remitar — ${pr.numero}` : "Nuevo remito";
+  const titulo = editando ? `Editar remito ${numeroCAI(original?.punto_venta_cai, original?.nro_comprobante_cai) || original?.numero || ""}` : pr ? `Remitar — ${pr.numero}` : "Nuevo remito";
   const desdeRemitos = !prId && !remitoId;
   const tieneNumeroImpreso = editando && !!(original?.cai_numero || original?.cae);
 
@@ -377,8 +377,8 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
             <div className="space-y-2">
               {hechos.map((h) => (
                 <div key={h.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-700">
-                  <span className="font-mono text-sm font-bold dark:text-white">{h.numero}</span>
-                  {h.cai && <span className="text-xs text-emerald-600">Remito R {h.cai}</span>}
+                  <span className="font-mono text-sm font-bold dark:text-white">{h.cai || h.numero}</span>
+                  <span className="text-xs text-zinc-500">{h.cai ? "Remito R (con CAI)" : "Sin CAI"}</span>
                   <span className="ml-auto flex gap-2">
                     <button onClick={() => pdf(h.id)} className="flex items-center gap-1 rounded-md border border-zinc-200 px-2.5 py-1 text-xs font-medium hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"><Download className="h-3.5 w-3.5" /> Descargar PDF</button>
                     <button onClick={() => abrirMail(h)} className="flex items-center gap-1 rounded-md border border-zinc-200 px-2.5 py-1 text-xs font-medium hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"><Mail className="h-3.5 w-3.5" /> Enviar por mail</button>

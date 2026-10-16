@@ -42,3 +42,12 @@ assert.deepEqual(descripcionCorta([{ descripcion: "Pantalón", orden: 2 }, { des
 assert.deepEqual(descripcionCorta([]), { corta: "", todas: "" });
 
 console.log("test-remitos-crear OK");
+
+// Número visible y nombre del PDF.
+import { numeroRemito, nombrePDFRemito } from "../src/lib/remitos-crear";
+assert.equal(numeroRemito({ numero: "R-2026-1088", punto_venta_cai: 18, nro_comprobante_cai: 82 }), "0018-00000082");
+assert.equal(numeroRemito({ numero: "R-2026-1083", punto_venta_cai: null, nro_comprobante_cai: null }), "R-2026-1083");
+assert.equal(nombrePDFRemito("0018-00000082", "SYNERTECH INDUSTRIAS S.A."), "Remito 0018-00000082 - SYNERTECH INDUSTRIAS S.A.pdf");
+assert.equal(nombrePDFRemito("R-2026-1083", "A/B: C"), "Remito R-2026-1083 - A B C.pdf");
+assert.equal(nombrePDFRemito("R-1", null), "Remito R-1.pdf");
+console.log("test número/nombre PDF OK");

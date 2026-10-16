@@ -72,3 +72,15 @@ export function descripcionCorta(items: { descripcion?: string | null; orden?: n
   if (!orden.length) return { corta: "", todas: "" };
   return { corta: orden.length > 1 ? `${orden[0]} +${orden.length - 1} más` : orden[0], todas: orden.join("\n") };
 }
+
+/** Número que se ve del remito: el mismo que sale impreso en el PDF ("0018-00000082" si tiene CAI; si no, el interno R-2026-NNNN). */
+export function numeroRemito(r: { numero?: string | null; punto_venta_cai?: number | null; nro_comprobante_cai?: number | null }): string {
+  return numeroCAI(r.punto_venta_cai, r.nro_comprobante_cai) || r.numero || "";
+}
+
+/** Nombre del PDF: "Remito 0018-00000082 - SYNERTECH INDUSTRIAS S.A.pdf" (sin caracteres que Windows no acepta). */
+export function nombrePDFRemito(numero: string, cliente?: string | null): string {
+  const limpio = (t: string) => t.replace(/[\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim();
+  const emp = limpio(cliente || "").slice(0, 60).replace(/\.+$/, "");
+  return `Remito ${limpio(numero)}${emp ? ` - ${emp}` : ""}.pdf`;
+}
