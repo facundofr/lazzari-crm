@@ -26,8 +26,8 @@ export function leerArcaRecibidos(csv: string): FacturaArca[] {
   if (!filas.length) return [];
   const cab = filas[0].split(";").map((c) => c.replace(/^"|"$/g, "").trim().toLowerCase());
   const col = (nombre: RegExp) => cab.findIndex((c) => nombre.test(c));
-  const iFecha = col(/fecha de emisi/), iTipo = col(/tipo de comprobante/), iPv = col(/punto de venta/), iNum = col(/n[úu]mero desde/);
-  const iDoc = col(/nro\.? doc\.? emisor/), iNom = col(/denominaci[óo]n emisor/), iNeto = col(/imp\.? neto gravado total/), iIva = col(/total iva/), iTot = col(/imp\.? total/);
+  const iFecha = col(/fecha de emisi/), iTipo = col(/tipo de comprobante/), iPv = col(/punto de venta/), iNum = col(/n.{1,2}mero desde/);
+  const iDoc = col(/nro\.? doc\.? emisor/), iNom = col(/denominaci.{1,2}n emisor/), iNeto = col(/imp\.? neto gravado total/), iIva = col(/total iva/), iTot = col(/imp\.? total/);
   if ([iFecha, iTipo, iPv, iNum, iDoc, iTot].some((i) => i < 0)) return [];
   return filas.slice(1).map((l) => {
     const c = l.split(";").map((x) => x.replace(/^"|"$/g, "").trim());
@@ -43,7 +43,7 @@ export function leerArcaRecibidos(csv: string): FacturaArca[] {
 
 /**
  * Factura que paga una salida al CUIT `cuit` por `importe`: mismo total al centavo, emitida hasta 5 días después del pago.
- * Si hay varias del mismo importe (abono mensual), la más reciente anterior al pago y no usada; `unica` = false.
+ * Acepta 1 centavo de diferencia (redondeo entre la factura y ARCA). Si hay varias del mismo importe (abono mensual), la más reciente anterior al pago y no usada; `unica` = false.
  */
 export function facturaDelPago(cuit: string, importe: number, fecha: string, facturas: FacturaArca[], usadas: Set<string> = new Set()) {
   const cent = (n: number) => Math.round(Math.abs(n) * 100);
@@ -51,7 +51,7 @@ export function facturaDelPago(cuit: string, importe: number, fecha: string, fac
   limite.setUTCDate(limite.getUTCDate() + 5);
   const tope = limite.toISOString().slice(0, 10);
   const clave = (f: FacturaArca) => `${f.cuit}|${f.tipo}|${f.punto_venta}|${f.numero}`;
-  const cands = facturas.filter((f) => !f.esNC && f.cuit === cuit && cent(f.total) === cent(importe) && f.fecha <= tope && !usadas.has(clave(f)))
+  const cands = facturas.filter((f) => !f.esNC && f.cuit === cuit && Math.abs(cent(f.total) - cent(importe)) <= 1 && f.fecha <= tope && !usadas.has(clave(f)))
     .sort((a, b) => b.fecha.localeCompare(a.fecha));
   if (!cands.length) return null;
   const antes = cands.filter((f) => f.fecha <= fecha);
