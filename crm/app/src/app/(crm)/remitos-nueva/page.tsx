@@ -107,7 +107,7 @@ export default function RemitosNuevaPage() {
   const { toast } = useToast();
   const sociedadId = sociedadActiva?.id;
 
-  const [tab, setTab] = useState<"entregar" | "camino" | "preguntas">("entregar");
+  const [tab, setTab] = useState<"entregar" | "camino" | "entregados" | "preguntas">("entregar");
   const [prs, setPrs] = useState<PR[]>([]);
   const [prItems, setPrItems] = useState<PRItem[]>([]);
   const [remitos, setRemitos] = useState<Remito[]>([]);
@@ -248,6 +248,9 @@ export default function RemitosNuevaPage() {
 
   const enCamino = useMemo(() => remitos.filter((r) => r.estado === "pendiente")
     .sort((a, b) => String(a.fecha).localeCompare(String(b.fecha))), [remitos]);
+
+  const entregados = useMemo(() => remitos.filter((r) => (r.estado === "entregado" || r.estado === "parcial") && (diasDesde(r.entregado_at || r.fecha) ?? 0) <= 60)
+    .sort((a, b) => String(b.entregado_at || b.fecha).localeCompare(String(a.entregado_at || a.fecha))), [remitos]);
 
   const pregPR = useMemo(() => prs.filter((p) => p.estado === "facturado" && !(remitosDePR[p.id] || []).length
     && entregas[p.id] && entregas[p.id].estado !== "completo" && !respuestaDe("pr_sin_remito", p.id))
@@ -508,8 +511,9 @@ export default function RemitosNuevaPage() {
     if (!files?.length || !sociedadId) return;
     const para = fotoPara.current;
     fotoPara.current = null;
-    setTab("camino");
-    const candidatos = para ? enCamino.filter((r) => r.id === para) : enCamino;
+    if (!para || remitos.find((r) => r.id === para)?.estado === "pendiente") setTab("camino");
+    const candidatos = para ? remitos.filter((r) => r.id === para) : enCamino;
+    const yaEntregado = !!para && candidatos[0]?.estado !== "pendiente";
     const lista = Array.from(files).slice(0, 10);
     setLeyendo((n) => n + lista.length);
     for (const file of lista) {
@@ -533,8 +537,12 @@ export default function RemitosNuevaPage() {
           candidatos.map((r) => ({ id: r.id, numero: r.numero, nro_comprobante_cai: r.nro_comprobante_cai, cliente: nombreCliente(r.cliente_id) })));
         const leida: FotoLeida = { key, nombre: file.name, url, remito_id: remitoId, ...data };
         if (eS) leida.error = `La foto no se pudo guardar (${eS.message}); lo leído sirve igual`;
-        // Conforme y sin dudas: la IA lo marca entregado sola (con Deshacer).
-        if (remitoId && data.conforme && data.firmado) {
+        if (yaEntregado && remitoId) {
+          // Ya estaba entregado: solo se adjunta la foto y lo leído (con Deshacer).
+          const r = candidatos[0];
+          if (url && await adjuntarFoto(r, { recibio: data.recibio, foto_url: url, foto_ia: data, nota_ia: data.anotaciones })) leida.aplicado = true;
+        } else if (remitoId && data.conforme && data.firmado) {
+          // Conforme y sin dudas: la IA lo marca entregado sola (con Deshacer).
           const r = enCamino.find((x) => x.id === remitoId);
           if (r && await marcarEntregado(r, { recibio: data.recibio, foto_url: url, foto_ia: data, nota_ia: data.anotaciones }, true)) leida.aplicado = true;
         }
@@ -546,6 +554,21 @@ export default function RemitosNuevaPage() {
       }
     }
     await cargar();
+  }
+
+  async function adjuntarFoto(r: Remito, extra: { recibio?: string | null; foto_url: string; foto_ia: any; nota_ia?: string | null }): Promise<boolean> {
+    const cambios: Record<string, unknown> = { foto_url: extra.foto_url, foto_ia: extra.foto_ia };
+    if (extra.recibio && !r.recibio) cambios.recibio = extra.recibio;
+    if (extra.nota_ia && !r.nota_ia) cambios.nota_ia = extra.nota_ia;
+    const { error: e } = await db.from("remitos").update(cambios).eq("id", r.id).eq("sociedad_id", sociedadId);
+    if (e) { toast.error(`${r.numero}: no se pudo guardar la foto (${e.message})`); return false; }
+    const antes: Record<string, unknown> = {};
+    for (const k of Object.keys(cambios)) antes[k] = (r as any)[k] ?? null;
+    anotarDeshacer(`foto de ${r.numero}`, async () => {
+      const { error: u } = await db.from("remitos").update(antes).eq("id", r.id).eq("sociedad_id", sociedadId);
+      if (u) throw u;
+    });
+    return true;
   }
 
   async function aplicarFoto(f: FotoLeida, remitoId: string) {
@@ -688,7 +711,7 @@ export default function RemitosNuevaPage() {
 
         {/* Pestañas */}
         <div className="flex flex-wrap items-center gap-1 border-b border-zinc-200 dark:border-zinc-700">
-          {([["entregar", "Para entregar", paraEntregar.length], ["camino", "En camino", enCamino.length], ["preguntas", "Preguntas", totalPreguntas]] as const).map(([k, t, n]) => (
+          {([["entregar", "Para entregar", paraEntregar.length], ["camino", "En camino", enCamino.length], ["entregados", "Entregados", entregados.length], ["preguntas", "Preguntas", totalPreguntas]] as const).map(([k, t, n]) => (
             <button key={k} onClick={() => setTab(k)} className={`-mb-px border-b-2 px-3 py-1.5 text-sm font-medium ${tab === k ? "border-orange-500 text-orange-600" : "border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"}`}>
               {t} <span className={`ml-1 rounded-full px-1.5 text-xs ${k === "preguntas" && n ? "bg-amber-100 text-amber-700" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"}`}>{n}</span>
             </button>
@@ -788,7 +811,7 @@ export default function RemitosNuevaPage() {
         )}
 
         {/* EN CAMINO */}
-        {tab === "camino" && !cargando && (
+        {(tab === "camino" || tab === "entregados") && !cargando && (
           <div className="space-y-2">
             {fotos.length > 0 && (
               <div className="space-y-1 rounded-lg border border-orange-200 bg-orange-50/40 p-2 dark:border-orange-900 dark:bg-orange-950/10">
@@ -807,7 +830,7 @@ export default function RemitosNuevaPage() {
                           {r && <span className="font-mono font-semibold">{r.numero}</span>}
                           {f.recibio && <span className="text-zinc-500">recibió {f.recibio}</span>}
                           {!f.firmado && <span className="text-amber-600">sin firma</span>}
-                          {f.aplicado && r && r.estado !== "pendiente" ? <span className="font-medium text-emerald-600">✓ marcado entregado (Deshacer arriba)</span> : (
+                          {f.aplicado && r && r.estado !== "pendiente" ? <span className="font-medium text-emerald-600">✓ {r.foto_url === f.url ? "foto guardada en el remito" : "marcado entregado"} (Deshacer arriba)</span> : (
                             <span className="flex flex-wrap items-center gap-1.5">
                               {!r && (
                                 <span className="w-56"><Autocompletar chico opciones={enCamino.map((x) => ({ valor: x.id, texto: `${x.numero} · ${nombreCliente(x.cliente_id)}` }))} placeholder="¿De qué remito es?" onElegir={(v) => setFotos((prev) => prev.map((x) => (x.key === f.key ? { ...x, remito_id: v } : x)))} /></span>
@@ -829,7 +852,7 @@ export default function RemitosNuevaPage() {
                 })}
               </div>
             )}
-            <div className="rounded-lg border border-zinc-200 dark:border-zinc-700">
+            {tab === "camino" && <div className="rounded-lg border border-zinc-200 dark:border-zinc-700">
               {!enCamino.length && <p className="py-6 text-center text-sm text-zinc-500">No hay remitos en camino.</p>}
               {enCamino.map((r) => {
                 const s = semaforoEnCamino(r.fecha);
@@ -877,7 +900,27 @@ export default function RemitosNuevaPage() {
                   </div>
                 );
               })}
-            </div>
+            </div>}
+
+            {/* ENTREGADOS (últimos 60 días) */}
+            {tab === "entregados" && (
+              <div className="rounded-lg border border-zinc-200 dark:border-zinc-700">
+                {!entregados.length && <p className="py-6 text-center text-sm text-zinc-500">No hay entregas en los últimos 60 días.</p>}
+                {entregados.map((r) => (
+                  <div key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-zinc-100 px-3 py-1.5 text-sm last:border-0 dark:border-zinc-800">
+                    <span className="font-mono text-xs font-semibold">{r.numero}</span>
+                    <span className="font-medium">{nombreCliente(r.cliente_id)}</span>
+                    <span className="min-w-0 flex-1 truncate text-xs text-zinc-500">
+                      {numeroPR(r.presupuesto_id) || "sin PR"} · {r.estado === "parcial" ? "entregado en parte" : "entregado"} {formatDate(r.entregado_at || r.fecha)}
+                      {r.recibio ? ` · recibió ${r.recibio}` : ""}{r.entregado_por && nombres[r.entregado_por] ? ` · marcó ${nombres[r.entregado_por]}` : ""}
+                    </span>
+                    {r.foto_url
+                      ? <a href={r.foto_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-sky-600 hover:underline" title={r.foto_ia?.anotaciones ? `Anotado: ${r.foto_ia.anotaciones}` : "Remito firmado"}><Camera className="h-3.5 w-3.5" /> firmado</a>
+                      : <button onClick={() => elegirFoto(r.id)} disabled={leyendo > 0} className="flex items-center gap-1 text-xs text-zinc-400 hover:text-orange-600" title="Subir la foto del remito firmado"><Camera className="h-3.5 w-3.5" /> sin foto</button>}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { mockRemitos } from "@/lib/mock-data";
-import { Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, Trash2, Minus, ShieldCheck, GitBranch, MapPin, Maximize2, Search } from "lucide-react";
+import { Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, Trash2, Minus, ShieldCheck, GitBranch, MapPin, Maximize2, Search, Camera } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useUser } from "@/lib/auth-context";
 import { formatDate, formatCurrency, todayAR } from "@/lib/utils";
@@ -87,6 +87,11 @@ interface RemitoRow {
   presupuesto_modalidad?: string | null;
   ocs_numeros?: string[];
   remito_items: { id: string }[];
+  // Entrega (Remitos nueva): foto del remito firmado y quién recibió
+  foto_url?: string | null;
+  recibio?: string | null;
+  entregado_at?: string | null;
+  foto_ia?: { anotaciones?: string | null } | null;
   // CAI fields
   cai_numero?: string | null;
   punto_venta_cai?: number | null;
@@ -1281,6 +1286,7 @@ export default function RemitosPage() {
                       <Truck className={`h-4 w-4 ${hasCai ? "text-emerald-500" : "text-zinc-400"}`} />
                       <span className="font-mono text-xs font-bold">{displayNum}</span>
                       {hasCai && <span title="CAI autorizado"><ShieldCheck className="h-3 w-3 text-emerald-400" /></span>}
+                      {row.foto_url && <a href={row.foto_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} title={`Remito firmado${row.recibio ? ` · recibió ${row.recibio}` : ""}`}><Camera className="h-3.5 w-3.5 text-sky-500 hover:text-sky-700" /></a>}
                     </div>
                   );
                 },
@@ -1749,6 +1755,16 @@ export default function RemitosPage() {
                       </button>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {detailRemito.foto_url && (
+                <div className="rounded-lg bg-emerald-50 dark:bg-emerald-950/20 p-3 text-sm">
+                  <span className="text-xs text-zinc-400 block mb-1">Remito firmado</span>
+                  <a href={detailRemito.foto_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sky-600 hover:underline"><Camera className="h-3.5 w-3.5" /> Ver foto</a>
+                  {detailRemito.recibio && <span className="ml-2 text-zinc-600 dark:text-zinc-300">· recibió {detailRemito.recibio}</span>}
+                  {detailRemito.entregado_at && <span className="ml-2 text-zinc-400">· {formatDate(detailRemito.entregado_at)}</span>}
+                  {detailRemito.foto_ia?.anotaciones && <p className="mt-1 text-xs text-zinc-500">Anotado en el remito: {detailRemito.foto_ia.anotaciones}</p>}
                 </div>
               )}
 

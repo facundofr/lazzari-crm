@@ -72,7 +72,7 @@ interface VentaFactura {
   email_enviado_a?: string | null;
 }
 
-interface VentaRemito { id: string; numero: string; fecha: string; estado: string; presupuesto_id: string | null }
+interface VentaRemito { id: string; numero: string; fecha: string; estado: string; presupuesto_id: string | null; foto_url?: string | null; recibio?: string | null }
 interface VentaOC { id: string; numero: string; fecha: string; estado: string; total: number; moneda: string; medio_pago: string | null; estado_pago: string | null; presupuesto_origen_id: string }
 
 /** Igual que Órdenes de compra: pagada con tarjeta. */
@@ -186,7 +186,7 @@ export default function VentasPage() {
       const pIds = presupuestos.map((p: any) => p.id);
       const [facturasRes, remitosRes, ocRes] = pIds.length > 0 ? await Promise.all([
         (supabase as any).from("facturas").select("id, tipo, punto_venta, numero, fecha, cae, total, total_acreditado, moneda, estado, presupuesto_id, fecha_vencimiento, email_enviado_at, email_enviado_a").in("presupuesto_id", pIds).eq("sociedad_id", sociedadActiva.id),
-        (supabase as any).from("remitos").select("id, numero, fecha, estado, presupuesto_id").in("presupuesto_id", pIds).eq("sociedad_id", sociedadActiva.id),
+        (supabase as any).from("remitos").select("id, numero, fecha, estado, presupuesto_id, foto_url, recibio").in("presupuesto_id", pIds).eq("sociedad_id", sociedadActiva.id),
         (supabase as any).from("ordenes_compra").select("id, numero, fecha, estado, total, moneda, medio_pago, estado_pago, presupuesto_origen_id").in("presupuesto_origen_id", pIds).eq("sociedad_id", sociedadActiva.id),
       ]) : [{ data: [] }, { data: [] }, { data: [] }];
       if (request !== ventasRequest.current) return;
@@ -638,6 +638,7 @@ function DetalleVenta({
             <div key={r.id} className="flex items-center gap-2">
               <span className="font-mono font-semibold">{r.numero || "Sin número"}</span>
               <span className="text-zinc-400">{formatDate(r.fecha)}</span>
+              {r.foto_url && <a href={r.foto_url} target="_blank" rel="noreferrer" className={linkClass} title={r.recibio ? `Recibió ${r.recibio}` : "Remito firmado"}>📷 firmado</a>}
               <span className={`ml-auto rounded px-1.5 text-[10px] font-medium ${r.estado === "entregado" ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400" : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400"}`}>{r.estado}</span>
               {r.estado !== "entregado" && <button onClick={() => onMarcarEntregado(r.id)} className="text-green-600 hover:text-green-700 font-medium">Entregado</button>}
             </div>

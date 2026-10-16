@@ -253,6 +253,8 @@ interface TimelineEvent {
   titulo: string;
   detalle: string;
   estado?: string;
+  /** Link a un adjunto (ej. foto del remito firmado). */
+  url?: string | null;
 }
 
 export default function ClientesPage() {
@@ -747,9 +749,9 @@ export default function ClientesPage() {
         }
 
         // Remitos
-        let remsQ = supabase
+        let remsQ = (supabase as any)
           .from("remitos")
-          .select("id, numero, fecha, estado")
+          .select("id, numero, fecha, estado, foto_url, recibio")
           .eq("cliente_id", clienteId)
           .order("fecha", { ascending: false })
           .limit(20);
@@ -762,8 +764,9 @@ export default function ClientesPage() {
               tipo: "remito",
               fecha: r.fecha,
               titulo: `Remito ${r.numero || ""}`,
-              detalle: r.estado === "entregado" ? "Entregado" : r.estado === "parcial" ? "Entrega parcial" : "Pendiente",
+              detalle: (r.estado === "entregado" ? "Entregado" : r.estado === "parcial" ? "Entrega parcial" : "Pendiente") + ((r as any).recibio ? ` · recibió ${(r as any).recibio}` : ""),
               estado: r.estado,
+              url: (r as any).foto_url || null,
             });
           }
         }
@@ -2422,7 +2425,7 @@ export default function ClientesPage() {
                                       </span>
                                     )}
                                   </div>
-                                  <p className="text-xs text-zinc-500 mt-0.5">{ev.detalle}</p>
+                                  <p className="text-xs text-zinc-500 mt-0.5">{ev.detalle}{ev.url && <> · <a href={ev.url} target="_blank" rel="noreferrer" className="text-sky-600 hover:underline">📷 remito firmado</a></>}</p>
                                   <p className="text-[10px] text-zinc-400 mt-0.5">{formatDate(ev.fecha)}</p>
                                 </div>
                               </div>
