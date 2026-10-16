@@ -16,9 +16,10 @@ import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { facturaDesdeDatos, lineKey, type FacturaCarga } from "@/lib/factura-compra-leida";
 import { cargarLineasOc, sugerirEquivalencias, type AnalisisIA, type Manual, type OcLinea } from "@/lib/conciliacion-compras-analisis";
 import { cargarLineasSinProveedor, asignarRenglonesAProveedor } from "@/lib/oc-sin-proveedor";
+import { traerTarjetas, tarjetaSugerida, registrarPagoTarjeta, movimientoPagoTarjeta } from "@/lib/pago-tarjeta";
 import { matchPurchaseLines, heuristicEquivalences, citaOc, parseVariant, puntajeParecido, type InvoiceLineInput } from "@/lib/purchase-matching";
 import { armarRenglones, repartirEnvio, importePorOc, faltantesPorOc, cant, type RenglonVista } from "@/lib/cargar-factura";
-import { AlertTriangle, Check, FileUp, Loader2, Sparkles, Truck, UserPlus, X } from "lucide-react";
+import { AlertTriangle, Check, CreditCard, FileUp, Loader2, Sparkles, Truck, UserPlus, X } from "lucide-react";
 
 const db = supabase as any;
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -29,8 +30,11 @@ const SOCIEDAD_POR_CUIT: Record<string, { id: string; nombre: string }> = {
 };
 
 type Proveedor = { id: string; razon_social: string; cuit: string | null; talles_especiales?: string[] | null; tolerancia_precio_pct?: number | null };
+// sinProveedor = el renglón es de una OC sin proveedor o de otro proveedor (ej. Mercado Libre): al guardar pasa al proveedor real.
 type Linea = OcLinea & { sinProveedor?: boolean };
-type OcResumen = { ocId: string; ocNumero: string; fecha: string; unidades: number; renglones: number; sinProveedor: boolean; pr: string; cliente: string };
+type OcResumen = { ocId: string; ocNumero: string; fecha: string; unidades: number; renglones: number; sinProveedor: boolean; pr: string; cliente: string; provNombre: string; esML: boolean };
+type InfoOc = { pr: string; cliente: string; medioPago: string; provNombre: string; esML: boolean };
+const esMercadoLibre = (t: string | null | undefined) => /mercado\s*libre/i.test(String(t || ""));
 type NoEsta = { tipo: "aparte" } | { tipo: "otra"; ocLineId: string; ocId: string; cantidad: number } | { tipo: "agregar"; ocId: string };
 
 const btnSi = "rounded-md bg-violet-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-violet-700";
@@ -50,7 +54,12 @@ export default function CargarFacturaSimple({ sociedadId, onClose, onGuardada }:
   const [lineasProv, setLineasProv] = useState<Linea[]>([]);
   const [lineasSinProv, setLineasSinProv] = useState<Linea[]>([]);
   const [conSinProv, setConSinProv] = useState(false);
-  const [infoOc, setInfoOc] = useState<Record<string, { pr: string; cliente: string }>>({});
+  const [infoOc, setInfoOc] = useState<Record<string, InfoOc>>({});
+  // Vendedor nuevo (sin OC): se muestran todas las OC abiertas; el filtro achica a las de Mercado Libre.
+  const [todasLasOc, setTodasLasOc] = useState(false);
+  const [soloML, setSoloML] = useState(false);
+  // Pago: null = lo que sugiere el sistema (Visa si la OC dice tarjeta o es de Mercado Libre).
+  const [conVisa, setConVisa] = useState<boolean | null>(null);
   const [cargandoOcs, setCargandoOcs] = useState(false);
   const [elegidas, setElegidas] = useState<Set<string>>(new Set());
   const [analisis, setAnalisis] = useState<AnalisisIA | null>(null);
@@ -68,6 +77,7 @@ export default function CargarFacturaSimple({ sociedadId, onClose, onGuardada }:
   async function leer(file: File) {
     setError(""); setLeyendo(true); setFactura(null); setProveedor(null); setLineasProv([]); setElegidas(new Set()); setAnalisis(null);
     setReclamar(new Set()); setRechazadas(new Set()); setNoEsta({}); setDeMasAparte(new Set()); setCerrarOc(new Set()); setEnvioEditado({});
+    setConSinProv(false); setLineasSinProv([]); setTodasLasOc(false); setSoloML(false); setConVisa(null);
     try {
       const body = new FormData(); body.append("file", file);
       const res = await fetch("/api/parse-factura-compra", { method: "POST", body });
@@ -100,6 +110,14 @@ export default function CargarFacturaSimple({ sociedadId, onClose, onGuardada }:
       const usables = lineas.filter(l => !legacy.has(l.ocId));
       setLineasProv(usables);
       await traerInfoOc(usables.map(l => l.ocId));
+      // Vendedor nuevo o sin OC: se muestran TODAS las OC abiertas (con el filtro "Solo Mercado Libre").
+      if (!usables.length) {
+        const ls = await cargarLineasAbiertas(db, sociedadId, p.id);
+        setLineasSinProv(ls); setConSinProv(true); setTodasLasOc(true);
+        await traerInfoOc(ls.map(l => l.ocId));
+        void analizar(p, f, ls);
+        return;
+      }
       // Tildadas de entrada: las OC que la factura cita; si hay una sola OC, esa.
       const ocIds = [...new Set(usables.map(l => l.ocId))];
       const citadas = ocIds.filter(id => (f.ocRefs || []).some(r => citaOc(r, usables.find(l => l.ocId === id)?.ocNumero || "")));
@@ -113,8 +131,16 @@ export default function CargarFacturaSimple({ sociedadId, onClose, onGuardada }:
   async function traerInfoOc(ids: string[]) {
     const faltan = [...new Set(ids)].filter(id => !infoOc[id]);
     if (!faltan.length) return;
-    const { data } = await db.from("ordenes_compra").select("id, presupuesto_origen:presupuesto_origen_id(numero, clientes(razon_social))").in("id", faltan.slice(0, 300));
-    setInfoOc(prev => ({ ...prev, ...Object.fromEntries((data || []).map((o: any) => [o.id, { pr: o.presupuesto_origen?.numero || "", cliente: o.presupuesto_origen?.clientes?.razon_social || "" }])) }));
+    const filas: any[] = [];
+    for (let i = 0; i < faltan.length; i += 100) {
+      const { data } = await db.from("ordenes_compra").select("id, medio_pago, observaciones, proveedores(razon_social, nombre_fantasia), presupuesto_origen:presupuesto_origen_id(numero, clientes(razon_social))").in("id", faltan.slice(i, i + 100));
+      filas.push(...(data || []));
+    }
+    setInfoOc(prev => ({ ...prev, ...Object.fromEntries(filas.map((o: any) => {
+      const provNombre = o.proveedores?.nombre_fantasia || o.proveedores?.razon_social || "";
+      return [o.id, { pr: o.presupuesto_origen?.numero || "", cliente: o.presupuesto_origen?.clientes?.razon_social || "", medioPago: o.medio_pago || "", provNombre,
+        esML: esMercadoLibre(provNombre) || esMercadoLibre(o.proveedores?.razon_social) || esMercadoLibre(o.observaciones) }];
+    })) }));
   }
 
   // La IA busca equivalencias una vez contra TODAS las OC disponibles; tildar o destildar no la vuelve a llamar.
@@ -149,12 +175,17 @@ export default function CargarFacturaSimple({ sociedadId, onClose, onGuardada }:
   const ocsDisponibles = useMemo(() => {
     const m = new Map<string, OcResumen>();
     for (const l of todas) {
-      const x = m.get(l.ocId) || { ocId: l.ocId, ocNumero: l.ocNumero, fecha: l.ocFecha, unidades: 0, renglones: 0, sinProveedor: !!l.sinProveedor, pr: infoOc[l.ocId]?.pr || "", cliente: infoOc[l.ocId]?.cliente || "" };
+      const i = infoOc[l.ocId];
+      const x = m.get(l.ocId) || { ocId: l.ocId, ocNumero: l.ocNumero, fecha: l.ocFecha, unidades: 0, renglones: 0, sinProveedor: !!l.sinProveedor, pr: i?.pr || "", cliente: i?.cliente || "", provNombre: i?.provNombre || "", esML: !!i?.esML };
       x.unidades = round2(x.unidades + l.cantidad); x.renglones++;
       m.set(l.ocId, x);
     }
     return [...m.values()].sort((a, b) => Number(elegidas.has(b.ocId)) - Number(elegidas.has(a.ocId)) || Number(a.sinProveedor) - Number(b.sinProveedor) || b.fecha.localeCompare(a.fecha));
   }, [todas, infoOc, elegidas]);
+  const ocsVisibles = useMemo(() => (soloML ? ocsDisponibles.filter(o => o.esML || elegidas.has(o.ocId)) : ocsDisponibles), [ocsDisponibles, soloML, elegidas]);
+  // Visa sugerida: compra de Mercado Libre u OC marcada "pagada con tarjeta". Se puede cambiar.
+  const visaSugerida = useMemo(() => esMercadoLibre(proveedor?.razon_social) || [...elegidas].some(id => infoOc[id]?.medioPago === "tarjeta" || infoOc[id]?.esML), [proveedor, elegidas, infoOc]);
+  const pagaVisa = conVisa ?? visaSugerida;
 
   const manual = useMemo<Manual>(() => {
     const m: Manual = {};
@@ -283,7 +314,17 @@ export default function CargarFacturaSimple({ sociedadId, onClose, onGuardada }:
       const mover = [...new Set(asign.map(a => a.orden_compra_item_id).filter(id => sinProvItems.has(id)))];
       if (mover.length) {
         const r = await asignarRenglonesAProveedor(db, { sociedadId, itemIds: mover, proveedorId: proveedor.id, proveedorNombre: proveedor.razon_social, nota: `FC ${factura.numero.trim()}` });
-        for (const a of r.avisos) toast.warning(a);
+        for (const a of r.avisos) if (!/ya tiene algo recibido/.test(a)) toast.warning(a);
+        // Lo que ya tenía algo llegado no se mueve renglón por renglón: si la OC es de Mercado Libre o sin proveedor,
+        // la OC entera pasa al vendedor real (regla de Augusto: en Mercado Libre el proveedor es siempre el vendedor).
+        const { data: quedaron } = await db.from("orden_compra_items").select("id, orden_id, ordenes_compra(proveedor_id, numero, observaciones)").in("id", mover);
+        for (const ocId of new Set(((quedaron || []) as any[]).filter(q => q.ordenes_compra?.proveedor_id !== proveedor.id).map(q => q.orden_id as string))) {
+          const oc = (quedaron as any[]).find(q => q.orden_id === ocId)?.ordenes_compra;
+          if (oc?.proveedor_id && !infoOc[ocId]?.esML) throw new Error(`La ${oc.numero} es de otro proveedor y ya tiene mercadería llegada: cambiale el proveedor desde la OC y volvé a cargar la factura.`);
+          const { error: eP } = await db.from("ordenes_compra").update({ proveedor_id: proveedor.id, observaciones: `${oc?.observaciones || ""}
+Proveedor real ${proveedor.razon_social} (FC ${factura.numero.trim()})`.trim() }).eq("id", ocId).eq("sociedad_id", sociedadId);
+          if (eP) throw new Error(`No se pudo pasar la ${oc?.numero || "OC"} a ${proveedor.razon_social}: ${eP.message}`);
+        }
         if (recibirDespues.length) for (const id of recibirDespues) await db.from("orden_compra_items").update({ cantidad_recibida: 1 }).eq("id", id);
       }
 
@@ -331,13 +372,26 @@ export default function CargarFacturaSimple({ sociedadId, onClose, onGuardada }:
           if (u?.publicUrl) await db.from("facturas_compra").update({ archivo_url: u.publicUrl, archivo_nombre: factura.file.name }).eq("id", facturaId);
         }
       }
+      // Pago: con Visa queda pagada (el gasto va a la tarjeta); si no, va directo a Pagos (sin "Por aprobar").
+      let pagoTxt = "va a Pagos";
+      if (facturaId && pagaVisa) {
+        const visa = tarjetaSugerida(await traerTarjetas(db, sociedadId), { ocConTarjeta: true });
+        const r = visa ? await registrarPagoTarjeta(db, facturaId, visa, movimientoPagoTarjeta({
+          sociedadId, proveedorId: proveedor.id, facturaId, tarjeta: visa, total: factura.total, moneda: factura.moneda, fecha: factura.fecha || todayAR(),
+          comprobante: `${factura.tipo} ${factura.numero.trim()}`, proveedorNombre: proveedor.razon_social,
+        })) : { error: "no hay ninguna tarjeta cargada" };
+        if (r.error) { toast.warning(`No se pudo registrar el pago con Visa (${r.error}): la factura quedó para Pagos.`); await db.from("facturas_compra").update({ estado: "pendiente" }).eq("id", facturaId).eq("estado", "pendiente_aprobacion"); }
+        else pagoTxt = `pagada con ${visa!.nombre}`;
+      } else if (facturaId) {
+        await db.from("facturas_compra").update({ estado: "pendiente" }).eq("id", facturaId).eq("estado", "pendiente_aprobacion");
+      }
       const cerradas: string[] = [];
       for (const f of faltantes) if (cerrarOc.has(f.ocId)) {
         const { error: eC } = await db.rpc("cerrar_saldo_oc", { p_sociedad_id: sociedadId, p_oc_id: f.ocId, p_cerrar: true, p_motivo: `Vinieron ${cant(f.vienen)} de ${cant(f.total)}; el resto no llega (FC ${factura.numero.trim()})` });
         cerradas.push(eC ? `${f.ocNumero} no se pudo cerrar (${eC.message})` : f.ocNumero);
       }
       const pendientes = faltantes.filter(f => !cerrarOc.has(f.ocId)).map(f => `${f.ocNumero} (faltan ${cant(f.faltan)})`);
-      toast.success([`✔ FC ${factura.numero.trim()} cargada`, pendientes.length ? pendientes.join(", ") : "", cerradas.length ? `cerrada: ${cerradas.join(", ")}` : "",
+      toast.success([`✔ FC ${factura.numero.trim()} cargada`, pagoTxt, pendientes.length ? pendientes.join(", ") : "", cerradas.length ? `cerrada: ${cerradas.join(", ")}` : "",
         Number(data?.presupuestos_items_actualizados) ? `${data.presupuestos_items_actualizados} costo(s) actualizados en el PR` : ""].filter(Boolean).join(" · "));
       if (data?.aviso) toast.warning(String(data.aviso));
       for (const x of (data?.sin_presupuesto || []) as string[]) toast.warning(`No se encontró en el presupuesto: ${x}`);
@@ -399,17 +453,21 @@ export default function CargarFacturaSimple({ sociedadId, onClose, onGuardada }:
                 <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">¿De qué OC es? Tildá una o más {cargandoOcs && <Loader2 className="ml-1 inline h-3 w-3 animate-spin" />}</p>
                 {!ocsDisponibles.length && !cargandoOcs && <p className="text-sm text-zinc-500">{proveedor?.razon_social} no tiene OC con artículos pendientes.</p>}
                 <div className="flex max-h-48 flex-wrap gap-1.5 overflow-y-auto overflow-x-hidden">
-                  {ocsDisponibles.map(o => (
+                  {ocsVisibles.map(o => (
                     <label key={o.ocId} className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-2 py-1 text-xs ${elegidas.has(o.ocId) ? "border-violet-400 bg-violet-50 dark:border-violet-700 dark:bg-violet-950/30" : "border-zinc-200 dark:border-zinc-700"}`}>
                       <input type="checkbox" checked={elegidas.has(o.ocId)} onChange={() => tildar(o.ocId)} />
                       <b className="font-mono">{o.ocNumero}</b>
                       <span className="max-w-[180px] truncate text-zinc-500" title={`${o.pr} ${o.cliente}`}>{o.pr ? `${o.pr} · ` : ""}{o.cliente || formatDate(o.fecha)}</span>
                       <span className="text-zinc-400">{cant(o.unidades)} u.</span>
-                      {o.sinProveedor && <span className="rounded bg-amber-100 px-1 text-[10px] text-amber-700">sin proveedor</span>}
+                      {o.sinProveedor && <span className="rounded bg-amber-100 px-1 text-[10px] text-amber-700">{o.esML ? "Mercado Libre" : o.provNombre || "sin proveedor"}</span>}
                     </label>
                   ))}
                 </div>
-                {!conSinProv && <button onClick={() => void verSinProveedor()} className="mt-1 text-xs text-zinc-500 underline">Buscar también en OC sin proveedor</button>}
+                <div className="mt-1 flex flex-wrap items-center gap-3 text-xs">
+                  {todasLasOc && <span className="text-amber-700 dark:text-amber-400">{proveedor?.razon_social} no tiene OC: se muestran todas las OC abiertas.</span>}
+                  {conSinProv && <label className="flex items-center gap-1"><input type="checkbox" checked={soloML} onChange={e => setSoloML(e.target.checked)} /> Solo Mercado Libre</label>}
+                  {!conSinProv && <button onClick={() => void verSinProveedor()} className="text-zinc-500 underline">Buscar también en OC sin proveedor</button>}
+                </div>
               </div>
             )}
 
@@ -440,6 +498,14 @@ export default function CargarFacturaSimple({ sociedadId, onClose, onGuardada }:
             )}
             {listo && !resultado && ocsDisponibles.length > 0 && <p className="text-sm text-zinc-500">Tildá la o las OC de esta factura para ver cómo cierra.</p>}
 
+            {listo && (
+              <div className="flex flex-wrap items-center gap-3 text-sm">
+                <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">¿Cómo se paga?</span>
+                <label className="flex items-center gap-1"><input type="radio" checked={!pagaVisa} onChange={() => setConVisa(false)} /> Va a Pagos</label>
+                <label className="flex items-center gap-1"><input type="radio" checked={pagaVisa} onChange={() => setConVisa(true)} /> <CreditCard className="h-4 w-4 text-blue-600" /> Ya pagada con Visa</label>
+                {visaSugerida && conVisa === null && <span className="text-xs text-zinc-500">(la OC es de Mercado Libre o se pagó con tarjeta)</span>}
+              </div>
+            )}
             {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400">{error}</p>}
             <div className="flex justify-end gap-2">
               <button onClick={onClose} disabled={guardando} className="rounded-lg border px-4 py-2 text-sm dark:border-zinc-600">Cancelar</button>
@@ -460,6 +526,28 @@ export default function CargarFacturaSimple({ sociedadId, onClose, onGuardada }:
         onSaved={row => { setCrearProv(false); if (factura) void elegirProveedor({ id: row.id as string, razon_social: row.razon_social as string, cuit: row.cuit as string }, factura); }} />
     </div>
   );
+}
+
+/** Vendedor nuevo: renglones pendientes de TODAS las OC abiertas de la sociedad (de otros proveedores o sin proveedor). */
+async function cargarLineasAbiertas(db: any, sociedadId: string, proveedorId: string): Promise<Linea[]> {
+  const { data: ocs, error } = await db.from("ordenes_compra").select("id, numero, fecha, estado, moneda, saldo_cerrado, proveedor_id")
+    .eq("sociedad_id", sociedadId).neq("estado", "cancelada").order("fecha");
+  if (error) throw error;
+  const abiertas = (ocs || []).filter((o: any) => !o.saldo_cerrado && o.proveedor_id !== proveedorId);
+  const porId = new Map<string, any>(abiertas.map((o: any) => [o.id, o]));
+  const out: Linea[] = [];
+  for (let i = 0; i < abiertas.length; i += 100) {
+    const { data: ls, error: e2 } = await db.from("orden_compra_items_pendientes").select("id, orden_id, codigo, descripcion, cantidad_pendiente, precio_unitario")
+      .in("orden_id", abiertas.slice(i, i + 100).map((o: any) => o.id));
+    if (e2) throw e2;
+    for (const l of ls || []) {
+      const o = porId.get(l.orden_id); const c = round2(Number(l.cantidad_pendiente));
+      if (!o || !(c > 0)) continue;
+      out.push({ id: l.id, ocId: o.id, ocNumero: o.numero, ocFecha: o.fecha || "", codigo: l.codigo, descripcion: l.descripcion, descripcionOc: l.descripcion,
+        cantidad: c, precio: Number(l.precio_unitario) || 0, moneda: o.moneda || "ARS", ocEstado: o.estado || "", sinProveedor: true });
+    }
+  }
+  return out;
 }
 
 function lineasDe(f: FacturaCarga): InvoiceLineInput[] {

@@ -23,6 +23,12 @@ git -c core.safecrlf=false commit -q -m "V$NUEVA: $MSG
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>" 2>/dev/null
 git push -q origin HEAD:main 2>&1 | tail -1
 git log --oneline -1 | cut -c1-80
+# Si el push no entró (otro chat publicó en el medio), NO se publica en Vercel: se pisaría lo del otro chat.
+git fetch -q
+if ! git merge-base --is-ancestor HEAD origin/main; then
+  echo "NO SE PUBLICO: otro chat subio algo en el medio (el push fue rechazado). Volve a correr el script."
+  cd /c/Users/lazza/lazzari; git worktree remove --force $WT >/dev/null 2>&1; exit 1
+fi
 cd crm/app
 vercel.cmd --prod --yes > /tmp/vauto.txt 2>&1
 U=$(grep -o "https://lazzari-[a-z0-9]*-augusto[^ ]*" /tmp/vauto.txt | grep -v vercel.com | head -1)
