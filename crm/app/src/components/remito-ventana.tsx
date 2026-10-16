@@ -62,6 +62,9 @@ export interface RemitoVentanaProps {
   onGuardado?: (remitoIds: string[]) => void;
 }
 
+/** Última lista de PR y clientes por sociedad: la ventana abre al instante la próxima vez. */
+const listasGuardadas: Record<string, { prs: PRFila[]; clientes: { id: string; razon_social: string; cuit: string | null }[] }> = {};
+
 let claveN = 0;
 const nuevaClave = () => `r${++claveN}`;
 
@@ -136,6 +139,13 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
   const [original, setOriginal] = useState<RemitoEdit | null>(null);
   const [hechos, setHechos] = useState<Hecho[] | null>(null);
   const [mail, setMail] = useState<{ remitoId: string; to: string; subject: string; body: string; filename: string } | null>(null);
+  // Aparición suave (baja un poco y se aclara)
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    if (!open) { setVisible(false); return; }
+    const t = requestAnimationFrame(() => setVisible(true));
+    return () => cancelAnimationFrame(t);
+  }, [open]);
 
   // ── Carga al abrir ───────────────────────────────────────────────
   useEffect(() => {
@@ -159,47 +169,33 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
   }, [open, prId, remitoId, sociedadId]);
 
   async function cargarListas() {
+    // Lo último que se cargó se muestra al instante; igual se vuelve a leer por detrás.
+    const guardado = sociedadId ? listasGuardadas[sociedadId] : null;
+    if (guardado) { setPrsBuscables(guardado.prs); setClientes(guardado.clientes); setCargando(false); }
+    // Una sola consulta: PR con sus renglones y lo ya remitido (antes eran muchas en fila).
     const [prs, { data: cls }] = await Promise.all([
-      traerTodo<any>(() => db.from("presupuestos").select("id, numero, fecha, created_at, estado, oc_cliente, subtotal, moneda, sucursal_id, vendedor_id, created_by, clientes(razon_social)").eq("sociedad_id", sociedadId).in("estado", ESTADOS_PR_REMITO).order("created_at", { ascending: false })),
+      traerTodo<any>(() => db.from("presupuestos")
+        .select("id, numero, fecha, created_at, estado, oc_cliente, subtotal, moneda, clientes(razon_social), sucursal:sucursal_id(nombre), vendedor_profile:vendedor_id(full_name), created_by_profile:created_by(full_name), presupuesto_items(id, descripcion, cantidad, orden), remitos(remito_items(presupuesto_item_id, descripcion, orden, cantidad))")
+        .eq("sociedad_id", sociedadId).in("estado", ESTADOS_PR_REMITO).order("created_at", { ascending: false }), 200),
       db.from("clientes").select("id, razon_social, cuit, activo").eq("sociedad_id", sociedadId).order("razon_social"),
     ]);
-    setClientes((cls || []).filter((c: any) => c.activo !== false).map((c: any) => ({ id: c.id, razon_social: c.razon_social, cuit: c.cuit })));
-    // Renglones, remitos ya hechos, sucursales y vendedores de esos PR (para mostrar el detalle y lo que falta entregar).
-    const ids = prs.map((p: any) => p.id);
-    const items: any[] = [], rems: any[] = [], ris: any[] = [];
-    for (let i = 0; i < ids.length; i += 150) {
-      const t = ids.slice(i, i + 150);
-      const [its, rs] = await Promise.all([
-        traerTodo<any>(() => db.from("presupuesto_items").select("id, presupuesto_id, descripcion, cantidad, orden").in("presupuesto_id", t).order("id")),
-        traerTodo<any>(() => db.from("remitos").select("id, presupuesto_id").in("presupuesto_id", t).order("id")),
-      ]);
-      items.push(...its); rems.push(...rs);
-    }
-    const remIds = rems.map((r) => r.id);
-    for (let i = 0; i < remIds.length; i += 150) ris.push(...await traerTodo<any>(() => db.from("remito_items").select("remito_id, presupuesto_item_id, descripcion, orden, cantidad").in("remito_id", remIds.slice(i, i + 150)).order("id")));
-    const sucIds = [...new Set(prs.map((p: any) => p.sucursal_id).filter(Boolean))] as string[];
-    const vendIds = [...new Set(prs.map((p: any) => p.vendedor_id || p.created_by).filter(Boolean))] as string[];
-    const [{ data: sucs }, { data: vends }] = await Promise.all([
-      sucIds.length ? db.from("cliente_sucursales").select("id, nombre").in("id", sucIds) : Promise.resolve({ data: [] }),
-      vendIds.length ? db.from("profiles").select("id, full_name").in("id", vendIds) : Promise.resolve({ data: [] }),
-    ]);
-    const sucNom: Record<string, string> = Object.fromEntries((sucs || []).map((x: any) => [x.id, x.nombre]));
-    const vendNom: Record<string, string> = Object.fromEntries((vends || []).map((x: any) => [x.id, (x.full_name || "").split(" ")[0]]));
-    const remPR: Record<string, string> = Object.fromEntries(rems.map((r) => [r.id, r.presupuesto_id]));
-    const itemsPR: Record<string, any[]> = {}, risPR: Record<string, any[]> = {};
-    for (const it of items) (itemsPR[it.presupuesto_id] ||= []).push(it);
-    for (const ri of ris) { const pid = remPR[ri.remito_id]; if (pid) (risPR[pid] ||= []).push(ri); }
-    setPrsBuscables(prs.map((p: any) => {
-      const its = (itemsPR[p.id] || []).sort((x, y) => (x.orden ?? 0) - (y.orden ?? 0));
-      const ent = renglonesParaEntregar(its, risPR[p.id] || [], [], []);
+    const listaClientes = (cls || []).filter((c: any) => c.activo !== false).map((c: any) => ({ id: c.id, razon_social: c.razon_social, cuit: c.cuit }));
+    const filas: PRFila[] = prs.map((p: any) => {
+      const its = [...(p.presupuesto_items || [])].sort((x: any, y: any) => (x.orden ?? 0) - (y.orden ?? 0));
+      const remitidos = (p.remitos || []).flatMap((r: any) => r.remito_items || []);
+      const ent = renglonesParaEntregar(its, remitidos, [], []);
       const d = descripcionCorta(its);
+      const vend = p.vendedor_profile?.full_name || p.created_by_profile?.full_name || "";
       return {
-        id: p.id, numero: p.numero, fecha: p.fecha || (p.created_at || "").slice(0, 10), cliente: p.clientes?.razon_social || "", sucursal: sucNom[p.sucursal_id] || "",
+        id: p.id, numero: p.numero, fecha: p.fecha || (p.created_at || "").slice(0, 10), cliente: p.clientes?.razon_social || "", sucursal: p.sucursal?.nombre || "",
         oc: p.oc_cliente, detalle: d.corta, detalleTodo: d.todas, subtotal: p.subtotal != null ? Number(p.subtotal) : null, moneda: p.moneda,
-        vendedor: vendNom[p.vendedor_id || p.created_by] || "", estado: p.estado,
+        vendedor: vend.split(" ")[0], estado: p.estado,
         pedido: ent.reduce((t, r) => t + r.pedido, 0), falta: ent.reduce((t, r) => t + r.pendiente, 0),
       };
-    }));
+    });
+    if (sociedadId) listasGuardadas[sociedadId] = { prs: filas, clientes: listaClientes };
+    setPrsBuscables(filas);
+    setClientes(listaClientes);
   }
 
   async function cargarSucursales(cid: string) {
@@ -426,8 +422,8 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
 
   return (
     <>
-      <div className="fixed inset-0 z-50 bg-black/40" onClick={() => !guardando && onClose()} />
-      <div className="fixed inset-x-2 top-4 bottom-4 z-50 mx-auto flex max-w-4xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl dark:bg-zinc-900 sm:inset-x-6">
+      <div className={`fixed inset-0 z-50 bg-zinc-900/10 backdrop-blur-[2px] transition-opacity duration-300 dark:bg-black/30 ${visible ? "opacity-100" : "opacity-0"}`} onClick={() => !guardando && onClose()} />
+      <div className={`fixed inset-x-2 top-4 bottom-4 z-50 mx-auto flex max-w-4xl flex-col overflow-hidden rounded-2xl border border-white/60 bg-white/85 shadow-[0_20px_60px_-15px_rgba(0,0,0,0.25)] backdrop-blur-xl transition-all duration-300 ease-out dark:border-zinc-700/60 dark:bg-zinc-900/85 sm:inset-x-6 ${visible ? "translate-y-0 opacity-100" : "-translate-y-4 opacity-0"}`}>
         <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-2.5 dark:border-zinc-700">
           <h3 className="flex items-center gap-2 text-base font-bold text-zinc-900 dark:text-white"><Truck className="h-4 w-4 text-orange-500" />{titulo}</h3>
           <button onClick={onClose} disabled={guardando} className="rounded p-1 text-zinc-400 hover:text-zinc-600"><X className="h-4 w-4" /></button>
@@ -454,7 +450,11 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
         ) : (
           <>
             <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3 text-sm">
-              {cargando && <div className="flex items-center gap-2 text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Cargando…</div>}
+              {cargando && (
+                <div className="space-y-2 py-1" aria-label="Cargando">
+                  {[0, 1, 2, 3, 4, 5].map((i) => <div key={i} className="h-7 animate-pulse rounded-md bg-zinc-200/60 dark:bg-zinc-700/40" style={{ animationDelay: `${i * 90}ms`, width: `${100 - (i % 3) * 6}%` }} />)}
+                </div>
+              )}
 
               {tieneNumeroImpreso && (
                 <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">⚠️ Este remito ya tiene número {original?.cae ? "de ARCA" : "de CAI"}. Podés cambiarlo, pero si ya lo imprimiste o lo mandaste, el papel va a quedar distinto al sistema. El número no cambia.</p>
