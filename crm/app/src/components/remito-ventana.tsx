@@ -27,7 +27,8 @@ import { abrirRemitoPDF, remitoPDFBase64 } from "@/lib/remito-pdf";
 import { AlertTriangle, Download, FileText, Loader2, Mail, Plus, Sparkles, Trash2, Truck, X } from "lucide-react";
 
 const db = supabase as any;
-const ESTADOS_PR_REMITO = ["aprobado", "facturar", "facturado", "remitido"];
+// "remitido" no existe en la base (enum pr_status): pedirlo hace fallar la consulta.
+const ESTADOS_PR_REMITO = ["aprobado", "facturar", "facturado"];
 const inputCls = "rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm outline-none focus:border-orange-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white";
 const esUSD = (m: string | null | undefined) => String(m || "").toUpperCase().startsWith("USD");
 
@@ -148,9 +149,7 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
       db.from("presupuestos").select("id, numero, estado, oc_cliente, clientes(razon_social)").eq("sociedad_id", sociedadId).in("estado", ESTADOS_PR_REMITO).order("created_at", { ascending: false }).limit(1000),
       db.from("clientes").select("id, razon_social, cuit, activo").eq("sociedad_id", sociedadId).order("razon_social"),
     ]);
-    // Los PR que todavía no están remitidos van primero.
-    const lista = (prs || []).map((p: any) => ({ id: p.id, numero: p.numero, cliente: p.clientes?.razon_social || "", oc: p.oc_cliente, estado: p.estado }));
-    setPrsBuscables([...lista.filter((p: any) => p.estado !== "remitido"), ...lista.filter((p: any) => p.estado === "remitido")]);
+    setPrsBuscables((prs || []).map((p: any) => ({ id: p.id, numero: p.numero, cliente: p.clientes?.razon_social || "", oc: p.oc_cliente, estado: p.estado })));
     setClientes((cls || []).filter((c: any) => c.activo !== false).map((c: any) => ({ id: c.id, razon_social: c.razon_social, cuit: c.cuit })));
   }
 
@@ -322,13 +321,6 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
       hechosAhora.push({ id: rem.id, numero: rem.numero || "", cai: cai ? numeroCAI(cai.punto_venta, cai.nro_comprobante) : null });
     }
     if (!hechosAhora.length) return null;
-    // PR aprobado con todo remitido → "remitido" (como el Remitar de siempre). Si ya está facturado no se toca.
-    if (pr && pr.estado === "aprobado") {
-      const remitidoAhora: Record<string, number> = {};
-      for (const g of grupos.slice(0, hechosAhora.length)) for (const r of g.renglones) if (r.presupuesto_item_id) remitidoAhora[r.presupuesto_item_id] = (remitidoAhora[r.presupuesto_item_id] || 0) + Number(r.cantidad);
-      const todo = renglones.every((r) => r.pendiente == null || (remitidoAhora[r.presupuesto_item_id || ""] || 0) >= r.pendiente - 1e-9);
-      if (todo) await db.from("presupuestos").update({ estado: "remitido" }).eq("id", pr.id).eq("sociedad_id", sociedadId);
-    }
     return hechosAhora;
   }
 
@@ -413,7 +405,7 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
                     <button onClick={() => setModo("libre")} className="rounded-md bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300">Remito independiente</button>
                   </div>
                   <Autocompletar className="w-full" mostrarSinEscribir placeholder="Buscá el PR por número, cliente u OC…"
-                    opciones={prsBuscables.map((p) => ({ valor: p.id, texto: `${p.numero} · ${p.cliente}`, detalle: [p.oc ? `OC ${p.oc}` : "", p.estado === "remitido" ? "ya remitido" : ""].filter(Boolean).join(" · ") || undefined }))}
+                    opciones={prsBuscables.map((p) => ({ valor: p.id, texto: `${p.numero} · ${p.cliente}`, detalle: p.oc ? `OC ${p.oc}` : undefined }))}
                     onElegir={(id) => { setCargando(true); cargarPR(id, null).catch((e) => setError(e?.message || "No se pudo cargar el PR")).finally(() => setCargando(false)); }} />
                 </div>
               )}
