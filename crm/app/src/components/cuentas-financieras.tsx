@@ -92,7 +92,7 @@ export function finDeSemana(f: string): string {
 
 export interface AvisoHoy { texto: ReactNode; tab?: string; color?: "rojo" | "ambar" | "gris" }
 
-export default function CuentasFinancieras({ onIrACheques, resumen, cobertura, onIr, pagosSemana, avisos }: {
+export default function CuentasFinancieras({ onIrACheques, resumen, cobertura, onIr, pagosSemana, avisos, caja }: {
   onIrACheques?: () => void;
   /** Si viene, reemplaza a los recuadros de totales (Finanzas → Hoy usa el Resumen económico). */
   resumen?: (totales: { ARS: TotalesCuentas; USD: TotalesCuentas }) => ReactNode;
@@ -104,6 +104,8 @@ export default function CuentasFinancieras({ onIrACheques, resumen, cobertura, o
   pagosSemana?: { ARS: number; USD: number; cantidad: number; vencidas: number };
   /** Avisos que arma Finanzas (además de los propios de las cuentas). */
   avisos?: AvisoHoy[];
+  /** Finanzas → Hoy: caja de las próximas 4 semanas (recibe la plata de hoy). */
+  caja?: (totales: { ARS: TotalesCuentas; USD: TotalesCuentas }) => ReactNode;
 }) {
   const { sociedadActiva } = useUser();
   const sociedadId = sociedadActiva?.id;
@@ -390,6 +392,9 @@ export default function CuentasFinancieras({ onIrACheques, resumen, cobertura, o
           )}
         </div>
       )}
+
+      {/* 2b) Caja de las próximas 4 semanas */}
+      {onIr && caja && caja(resultado.totales)}
 
       {/* 3) "¿Cubro los gastos fijos?" y el resumen, en una sola franja */}
       {resumen ? (

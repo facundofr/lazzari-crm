@@ -4,7 +4,8 @@
 export type FinanzasTab =
   | "cuentas" | "para_confirmar" | "correo" | "movimientos" | "recibos" | "vencimientos" | "facturas_compra" | "ordenes_pago"
   | "gastos_manuales" | "echeqs" | "cheques_tercero" | "cc_clientes" | "cc_proveedores" | "extractos"
-  | "lineas_credito" | "gastos_fijos" | "objetivos" | "facturacion" | "retenciones" | "revisar" | "informes";
+  | "lineas_credito" | "gastos_fijos" | "objetivos" | "facturacion" | "retenciones" | "revisar" | "informes"
+  | "cobrar_clientes" | "pagar_semana";
 
 export type FinanzasGrupo = "hoy" | "cobrar" | "pagar" | "bancos";
 
@@ -34,6 +35,8 @@ export const FINANZAS_GRUPOS: FinanzasGrupoDef[] = [
   {
     id: "cobrar", label: "Cobrar", descripcion: "Facturas de venta, clientes y recibos",
     tabs: [
+      // 16/10/2026: un renglón por cliente (cuánto debe, vencido, próximo vencimiento, último cobro).
+      { id: "cobrar_clientes", label: "Por cliente" },
       { id: "facturacion", label: "Facturas de venta" },
       { id: "recibos", label: "Recibos" },
       { id: "cc_clientes", label: "CC Clientes", mas: true },
@@ -43,6 +46,8 @@ export const FINANZAS_GRUPOS: FinanzasGrupoDef[] = [
   {
     id: "pagar", label: "Pagar", descripcion: "Cheques, facturas de compra, órdenes de pago y gastos",
     tabs: [
+      // 16/10/2026: línea de tiempo por semana (cheques, facturas de compra, gastos fijos y cuotas aparte).
+      { id: "pagar_semana", label: "Por semana" },
       { id: "echeqs", label: "Cheques" },
       { id: "facturas_compra", label: "Facturas de compra" },
       { id: "ordenes_pago", label: "Órdenes de pago" },

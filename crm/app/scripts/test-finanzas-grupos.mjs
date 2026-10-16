@@ -5,8 +5,10 @@ import { FINANZAS_GRUPOS, grupoDeTab, operacionVencimientos, pestanaInicial } fr
 // Los 4 grupos, en orden (desde el 16/10/2026: Hoy, Cobrar, Pagar, Bancos; Cheques va en Pagar).
 assert.deepEqual(FINANZAS_GRUPOS.map((g) => g.id), ["hoy", "cobrar", "pagar", "bancos"]);
 
-// A la vista quedan 11 pestañas; el resto va en "Más".
-assert.equal(FINANZAS_GRUPOS.flatMap((g) => g.tabs.filter((t) => !t.mas)).length, 11);
+// A la vista quedan 13 pestañas (16/10: + "Por cliente" y "Por semana"); el resto va en "Más".
+assert.equal(FINANZAS_GRUPOS.flatMap((g) => g.tabs.filter((t) => !t.mas)).length, 13);
+assert.equal(grupoDeTab("cobrar_clientes"), "cobrar");
+assert.equal(grupoDeTab("pagar_semana"), "pagar");
 assert.equal(grupoDeTab("para_confirmar"), "hoy");
 assert.equal(grupoDeTab("correo"), "hoy");
 assert.equal(grupoDeTab("lineas_credito"), "pagar");

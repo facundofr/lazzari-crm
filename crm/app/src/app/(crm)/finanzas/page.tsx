@@ -35,6 +35,8 @@ import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factur
 import { useCargaMasiva, EVENTO_FACTURAS_COMPRA } from "@/components/carga-masiva-global";
 import PlanPagos from "@/components/plan-pagos";
 import CuentasFinancieras from "@/components/cuentas-financieras";
+import { CajaProyectadaPanel, ClientesACobrarPanel, PagarPorSemanaPanel, PrestamosPanel, useDolarDivisa, usePrestamos, usePagosGastosFijos } from "@/components/finanzas/caja-proyectada";
+import { gastosFijosEnVentana, type MovCaja } from "@/lib/caja-proyectada";
 import CoberturaFijos from "@/components/cobertura-fijos";
 import ExtractoBbva from "@/components/extracto-bbva";
 import FinanzasParaConfirmar from "@/components/finanzas-para-confirmar";
@@ -619,6 +621,8 @@ export default function FinanzasPage() {
   const avisosCorreo = useAvisosCorreo(sociedadActiva?.id);
   const [filterExtracto, setFilterExtracto] = useState<"todos" | "matcheado" | "pendiente">("todos");
   const [loading, setLoading] = useState(true);
+  /** Terminó de leer todo (incluye lo secundario: cheques, facturas de compra, gastos): la caja proyectada recién ahí es completa. */
+  const [datosCompletos, setDatosCompletos] = useState(false);
   const [loadingTimedOut, setLoadingTimedOut] = useState(false);
   // B8: si una consulta falla se avisa (nunca se muestran datos inventados).
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -1515,6 +1519,7 @@ export default function FinanzasPage() {
         setLoadError(`No se pudieron cargar los datos de Finanzas (${err instanceof Error ? err.message : (err as any)?.message || String(err)}). Los números de esta pantalla pueden estar incompletos.`);
       } finally {
         setLoading(false);
+        setDatosCompletos(true);
       }
   }, [sociedadActiva]);
   fetchDataRef.current = () => { void fetchData(); };
@@ -3957,6 +3962,48 @@ export default function FinanzasPage() {
     };
   }, [deudasCompra]);
 
+  // Caja de 4 semanas, Cobrar por cliente y Pagar por semana (16/10/2026): lo que entra y sale, en pesos.
+  const tcDivisa = useDolarDivisa();
+  const { prestamos, faltaTabla: faltaTablaPrestamos } = usePrestamos(sociedadActiva?.id);
+  const idsGastosFijos = useMemo(() => gastosFijos.map((g) => g.id), [gastosFijos]);
+  const pagosFijosTodas = usePagosGastosFijos(idsGastosFijos);
+  const flujoCaja = useMemo(() => {
+    const hoyStr = todayAR();
+    const aPesos = (monto: number, moneda: string | null | undefined) => (moneda === "USD" ? (tcDivisa ? Math.round(monto * tcDivisa * 100) / 100 : 0) : monto);
+    const sinDolar: string[] = [];
+    const entradas: MovCaja[] = [
+      ...deudasVenta.map((d) => ({ fecha: d.vencimiento.slice(0, 10), monto: aPesos(d.saldo, d.moneda), tipo: "factura_venta" as const, detalle: d.documento, quien: d.entidad_nombre, usd: d.moneda === "USD" ? d.saldo : null })),
+      ...echeqs.filter((e) => e.direccion === "recibido" && (e.estado === "en_cartera" || e.estado === "depositado"))
+        .map((e) => ({ fecha: String(e.fecha_pago).slice(0, 10), monto: aPesos(Number(e.monto), e.moneda), tipo: "cheque_cartera" as const, detalle: `Cheque ${e.numero}${e.estado === "depositado" ? " (depositado)" : ""}`, quien: e.origen_nombre })),
+    ];
+    const fijos = gastosFijosEnVentana({
+      hoy: hoyStr,
+      fijos: gastosFijos.map((g) => ({ id: g.id, descripcion: g.descripcion, monto: Number(g.monto), moneda: g.moneda, activo: g.activo, diaVencimiento: g.diaVencimiento, dolarReferencia: g.dolarReferencia, proveedorId: g.proveedorId })),
+      pagos: [...gastosManuales.map((m) => ({ gasto_fijo_id: m.gasto_fijo_id, fecha: m.fecha })), ...pagosFijosTodas],
+      facturasCompra: facturasCompra.filter((f) => f.estado !== "anulada").map((f) => ({ proveedor_id: f.proveedor_id || null, fecha: String(f.fecha).slice(0, 10) })),
+      dolar: tcDivisa,
+    });
+    sinDolar.push(...fijos.sinDolar);
+    const salidas: MovCaja[] = [
+      ...echeqs.filter((e) => e.direccion === "emitido" && (e.estado === "pendiente" || e.estado === "entregado"))
+        .map((e) => ({ fecha: String(e.fecha_pago).slice(0, 10), monto: aPesos(Number(e.monto), e.moneda), tipo: "cheque_emitido" as const, detalle: `Cheque ${e.numero}`, quien: e.destino_nombre })),
+      ...deudasCompra.map((d) => ({ fecha: d.vencimiento.slice(0, 10), monto: aPesos(d.saldo, d.moneda), tipo: "factura_compra" as const, detalle: d.documento, quien: d.entidad_nombre, usd: d.moneda === "USD" ? d.saldo : null })),
+      ...fijos.salidas,
+    ];
+    if (!tcDivisa && [...deudasVenta, ...deudasCompra].some((d) => d.moneda === "USD")) sinDolar.push("facturas en US$ (falta la cotización)");
+    return { hoy: hoyStr, entradas, salidas, sinDolar };
+  }, [deudasVenta, deudasCompra, echeqs, gastosFijos, gastosManuales, pagosFijosTodas, facturasCompra, tcDivisa]);
+  const ultimosCobros = useMemo(() => {
+    const m = new Map<string, { fecha: string; monto: number }>();
+    for (const mv of movimientos) {
+      if (mv.anulado || !mv.cliente_id || !["transferencia", "cobro", "efectivo", "cheque_recibido"].includes(String(mv.tipo))) continue;
+      const prev = m.get(mv.cliente_id);
+      if (!prev || mv.fecha > prev.fecha) m.set(mv.cliente_id, { fecha: mv.fecha, monto: Number(mv.monto) });
+      else if (mv.fecha === prev.fecha) prev.monto += Number(mv.monto);
+    }
+    return m;
+  }, [movimientos]);
+
   // Filtros de retenciones
   const [retFilterDesde, setRetFilterDesde] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`; });
   const [retFilterHasta, setRetFilterHasta] = useState(() => new Date().toISOString().slice(0, 10));
@@ -4114,6 +4161,10 @@ export default function FinanzasPage() {
             onIr={(t) => { if (esFinanzasTab(t)) setTab(t, t === "vencimientos" ? "pagar" : undefined); }}
             pagosSemana={pagosSemana}
             avisos={avisosCorreo}
+            caja={(t) => (
+              <CajaProyectadaPanel hoy={flujoCaja.hoy} saldoInicial={t.ARS.disponible} entradas={flujoCaja.entradas} salidas={flujoCaja.salidas}
+                sinDolar={flujoCaja.sinDolar} tc={tcDivisa} prestamos={prestamos} listo={datosCompletos} onIr={(x) => { if (esFinanzasTab(x)) setTab(x); }} />
+            )}
             cobertura={<CoberturaFijos sociedadId={sociedadActiva?.id} compacto />}
             resumen={(t) => (
               <ResumenEconomico
@@ -4145,6 +4196,12 @@ export default function FinanzasPage() {
           />
         )}
         {tab === "cheques_tercero" && <ChequesTercero />}
+        {tab === "cobrar_clientes" && (
+          <ClientesACobrarPanel listo={datosCompletos} hoy={flujoCaja.hoy} deudas={deudasVenta} ultimosCobros={ultimosCobros} tc={tcDivisa} onIr={(x) => { if (esFinanzasTab(x)) setTab(x); }} />
+        )}
+        {tab === "pagar_semana" && (
+          <PagarPorSemanaPanel listo={datosCompletos} hoy={flujoCaja.hoy} salidas={flujoCaja.salidas} prestamos={prestamos} faltaTablaPrestamos={faltaTablaPrestamos} onIr={(x) => { if (esFinanzasTab(x)) setTab(x, x === "vencimientos" ? "pagar" : undefined); }} />
+        )}
 
         {/* ── Movimientos ── */}
         {tab === "movimientos" && (
@@ -5628,6 +5685,7 @@ export default function FinanzasPage() {
         {/* ── Lineas de credito ── */}
         {tab === "lineas_credito" && (
           <>
+            <PrestamosPanel hoy={flujoCaja.hoy} prestamos={prestamos} faltaTabla={faltaTablaPrestamos} />
             <Card>
               <CardHeader><CardTitle>Uso global de credito</CardTitle><span className="text-sm text-zinc-500">{totalLineasARS > 0 ? Math.round((totalUtilizadoCreditoARS / totalLineasARS) * 100) : 0}% utilizado</span></CardHeader>
               <div className="h-4 rounded-full bg-zinc-100 dark:bg-zinc-700"><div className="h-4 rounded-full bg-gradient-to-r from-orange-500 to-red-500" style={{ width: `${totalLineasARS > 0 ? (totalUtilizadoCreditoARS / totalLineasARS) * 100 : 0}%` }} /></div>
