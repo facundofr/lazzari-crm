@@ -17,6 +17,7 @@ import { CondicionPagoEditor } from "@/components/condicion-pago-editor";
 import { textoCondicionPago, vencimientoFactura, type PlanPago } from "@/lib/condicion-pago";
 import { equivalenciaSugerida, costoPorUnidadPR, avisoCambioCostoPR } from "@/lib/reemplazo-oc";
 import { controlIva, emparejarPorPrecio, elegirOC } from "@/lib/factura-vs-oc";
+import { detectarDesgloseTalles, textoTalles, type Desglose } from "@/lib/factura-desglose-talles";
 import { esRenglonEnvio } from "@/lib/envio-detectar";
 import { repartirEnvio, repartoPorPR } from "@/lib/envio-reparto";
 import { convertirCostoPR } from "@/lib/dolar-presupuesto";
@@ -108,6 +109,8 @@ type Comparacion = {
   aprendido: boolean;
   parecido?: string;
   porPrecio?: boolean;
+  /** La factura trae abierto por talle lo que en la OC es un solo renglón. */
+  desglose?: boolean;
 };
 // ── Component ────────────────────────────────────────────
 export default function CargarFacturaOC({
@@ -502,8 +505,17 @@ export default function CargarFacturaOC({
 
   // Mismas reglas que la conciliación por línea (lib/purchase-matching): código tolerante y, si no aparece,
   // el renglón más parecido por nombre + cantidad + precio (queda en amarillo con el motivo).
+  // Factura abierta por talle (39×3, 40×8…) contra un renglón de la OC sin talle: se atan todos juntos.
+  const desgloses = useMemo((): Desglose[] => detectarDesgloseTalles(
+    items.filter((it) => !manualItemMatches[it.tempId] && inspectPurchaseLineMatch(ocItemsComparables, it).status !== "matched")
+      .map((it) => ({ key: it.tempId, descripcion: it.descripcion, cantidad: Number(it.cantidad) || 0, precio: costoUnitario(it) })),
+    ocItemsComparables.map((o) => ({ id: o.id, descripcion: o.descripcion, cantidad: Number(o.cantidad) || 0, precio: Number(o.precio_unitario) || 0 })),
+  ), [items, manualItemMatches, ocItemsComparables]);
+
   const itemComparisons = useMemo((): Comparacion[] => {
     const usadosParecido = new Set<string>();
+    const desglosePorItem = new Map<string, string>();
+    for (const d of desgloses) for (const k of d.keys) desglosePorItem.set(k, d.ocId);
     const base = items.map((item): Comparacion => {
     const manualTarget = manualItemMatches[item.tempId];
     if (manualTarget === "__extra__") return { item, status: "unmatched" as const, matched: null, manual: true, aprendido: false };
@@ -515,6 +527,8 @@ export default function CargarFacturaOC({
     if (inspection.status === "matched" && inspection.candidates.length === 1) {
       return { item, status: "matched" as const, matched: selectedOCItems.find((candidate) => candidate.id === inspection.candidates[0].id) || null, manual: false, aprendido: false };
     }
+    const desglose = desglosePorItem.get(item.tempId);
+    if (desglose) return { item, status: "matched" as const, matched: selectedOCItems.find((c) => c.id === desglose) || null, manual: false, aprendido: false, desglose: true };
     // Código parecido: sin ceros adelante, guiones ni el talle pegado ("01234-42" = "1234" talle 42).
     if (item.codigo && inspection.status === "unmatched") {
       const vt = parseVariant(item.descripcion).talle;
@@ -564,7 +578,7 @@ export default function CargarFacturaOC({
       const matched = id ? selectedOCItems.find((o) => o.id === id) || null : null;
       return matched ? { ...c, status: "matched" as const, matched, porPrecio: true } : c;
     });
-  }, [items, selectedOCItems, ocItemsComparables, manualItemMatches, equivalenciasProv]);
+  }, [items, selectedOCItems, ocItemsComparables, manualItemMatches, equivalenciasProv, desgloses]);
 
   // Vínculos efectivos para guardar: los automáticos (incluidos los aprendidos) + los manuales.
   const asignacionesEfectivas = useMemo(() => {
@@ -2223,6 +2237,19 @@ export default function CargarFacturaOC({
                     {aiMatching && <span className="inline-flex items-center gap-1 text-violet-700 dark:text-violet-300"><Loader2 size={11} className="animate-spin" /> La IA está comparando…</span>}
                     <button type="button" onClick={() => setVerDetalle((v) => !v)} className="font-medium text-orange-600 hover:underline">{verDetalle ? "ocultar detalle" : "ver detalle"}</button>
                   </div>
+                  {desgloses.map((d) => {
+                    const o = selectedOCItems.find((x) => x.id === d.ocId);
+                    if (!o || !d.keys.every((k) => itemComparisons.some((c) => c.item.tempId === k && c.desglose))) return null;
+                    return (
+                      <div key={`desglose-${d.ocId}`} className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-200">
+                        <Sparkles size={13} className="shrink-0" />
+                        <span className="min-w-0 flex-1">
+                          <b>{o.descripcion}</b>: {d.coincide ? <>la cantidad coincide (<b>{d.total}</b>)</> : <>vienen <b>{d.total}</b> de {o.cantidad}</>} — la factura lo trae abierto por talle: {textoTalles(d)}. Quedan todos juntos en ese renglón de {o.ocNumero}.
+                        </span>
+                        <button type="button" onClick={() => setManualItemMatches((cur) => { const n = { ...cur }; for (const k of d.keys) n[k] = "__extra__"; return n; })} className="font-medium text-emerald-700 hover:underline dark:text-emerald-300" title="No es el mismo artículo: quedan como renglones fuera de la OC">no es lo mismo</button>
+                      </div>
+                    );
+                  })}
                   {diferencias.mas.map((d) => (
                     <div key={`mas-${d.oc.id}`} className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-200">
                       <AlertTriangle size={13} className="shrink-0" />
@@ -2273,7 +2300,7 @@ export default function CargarFacturaOC({
                       <b>{d.oc.descripcion}</b>: precio OC {formatCurrency(Number(d.oc.precio_unitario), moneda)} → factura {formatCurrency(d.costo, moneda)} · se actualiza el costo
                     </div>
                   ))}
-                  {diferencias.menos.map((d) => (
+                  {diferencias.menos.filter((d) => !desgloses.some((x) => x.ocId === d.oc.id)).map((d) => (
                     <div key={`menos-${d.oc.id}`} className="rounded-lg border border-zinc-200 px-2.5 py-1 text-xs text-zinc-600 dark:border-zinc-700 dark:text-zinc-300 truncate">
                       <b>{d.oc.descripcion}</b>: vienen {d.cantidad} de {d.oc.cantidad} · el resto queda pendiente en la OC
                     </div>
@@ -2298,7 +2325,7 @@ export default function CargarFacturaOC({
                       const statusText = comparison.manual
                         ? (assignedId === "__extra__" ? "Marcado fuera de OC" : "Asignación manual")
                         : comparison.status === "matched"
-                          ? (comparison.aprendido ? "Coincidencia aprendida de cargas anteriores" : comparison.porPrecio ? "Emparejado por precio (el proveedor lo llama distinto)" : "Coincidencia automática")
+                          ? (comparison.desglose ? "Mismo artículo abierto por talle" : comparison.aprendido ? "Coincidencia aprendida de cargas anteriores" : comparison.porPrecio ? "Emparejado por precio (el proveedor lo llama distinto)" : "Coincidencia automática")
                           : comparison.status === "ambiguous"
                             ? "Hay varias coincidencias posibles"
                             : "No encontrado en las OC";

@@ -4,12 +4,14 @@
  * Compras nueva (piloto automático, parte 1). Solo la ven los usuarios con la casilla "Prueba: Compras nueva".
  * Los vendedores venden: al aprobar un PR las OC se arman solas por proveedor y caen acá.
  * - Para pedir: un clic "Mail" o "WhatsApp" (y "Mandar todo por mail"). Sugerencia de juntar pedidos chicos en un proveedor.
- * - Esperando: lo que ya se pidió, con los días que pasaron.
+ * - Esperando: lo que ya se pidió, con los días que pasaron. "Foto del remito del proveedor": la IA lee qué llegó,
+ *   lo carga como recibido en la OC (solo si está segura; si no, lo deja listo para confirmar), guarda la foto,
+ *   avisa al vendedor y pregunta por lo que falta. Con Deshacer. No mueve stock.
  * - Preguntas: renglones sin proveedor, con proveedores sugeridos (lista de costos, compras anteriores e IA).
  * - "Decile a la IA": centralizar, sin stock, cambiar de proveedor → muestra el antes/después y se confirma.
  * Nunca toca el PR (ni su precio ni su total): solo mueve renglones entre OC sin mandar. Todo es sugerencia: nada frena.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Header } from "@/components/layout/header";
 import { useToast } from "@/components/ui/toast";
 import { Autocompletar } from "@/components/ui/autocompletar";
@@ -25,12 +27,15 @@ import {
   sugerirProveedores, sugerirCentralizar, proveedoresSinStock, costoAlDia, diasDesde, normalizarTexto,
   DIAS_AVISO_ESPERANDO, MARGEN_MINIMO_COMPRAS, type FilaCatalogo, type CompraAnterior, type ProveedorSugerido,
 } from "@/lib/compras-armado";
-import { AlertTriangle, Check, Loader2, Mail, MessageCircle, MoreHorizontal, PackageX, RefreshCw, Send, Sparkles, Undo2 } from "lucide-react";
+import { armarRecepcion, estadoPorRecibido, ocDelRemito, seguroParaCargar, type Recepcion } from "@/lib/compras-recepcion";
+import { prepararArchivo } from "@/lib/preparar-foto";
+import { coincideTodas, palabrasBusqueda } from "@/lib/buscar-texto";
+import { AlertTriangle, Camera, Check, ExternalLink, Loader2, Mail, MessageCircle, MoreHorizontal, PackageX, RefreshCw, Search, Send, Sparkles, Undo2, X } from "lucide-react";
 
 const db = supabase as any;
 
 type Proveedor = { id: string; razon_social: string; nombre_fantasia: string | null; rubro: string | null; marcas: string | null };
-type PR = { id: string; numero: string; cliente_id: string | null; moneda: string | null; tipo_cambio: number | null; tipo_cambio_divisas: number | null; descuento_general_porcentaje: number | null } | null;
+type PR = { id: string; numero: string; cliente_id: string | null; moneda: string | null; tipo_cambio: number | null; tipo_cambio_divisas: number | null; descuento_general_porcentaje: number | null; vendedor_id: string | null; created_by: string | null } | null;
 type OC = {
   id: string; numero: string; fecha: string; fecha_entrega_estimada: string | null; estado: string; moneda: string;
   subtotal: number; iva: number; total: number; observaciones: string | null; pedido: boolean;
@@ -47,10 +52,22 @@ type PRItem = { id: string; precio_venta: number; descuento_porcentaje: number |
 type FilaLista = FilaCatalogo & { costo: number; moneda: string };
 type Contacto = { email: string; whatsapp: string };
 type Movimiento = { item_ids: string[]; proveedor_id: string | null; motivo: string };
+type Deshacer = { id: number; texto: string; fn: () => Promise<void> };
+type RemitoOC = { id: string; orden_id: string; numero_remito: string | null; foto_url: string | null; created_at: string };
+type LeidoRemito = {
+  proveedor: string | null; proveedor_cuit: string | null; numero_remito: string | null; fecha: string | null; oc_numero: string | null; oc_id: string | null;
+  renglones: { item_id: string | null; oc_id: string | null; descripcion: string; codigo: string | null; cantidad: number }[];
+  anotaciones: string | null; segura: boolean; resumen: string;
+};
+/** Una foto de remito de proveedor: lo leído, la OC elegida, las cantidades (editables) y si ya se cargó. */
+type FotoRemito = {
+  key: string; nombre: string; url: string | null; leyendo: boolean; error?: string; leido?: LeidoRemito;
+  oc_id: string | null; cant: Record<string, number>; cargado?: Recepcion; respondida?: boolean;
+};
 
 const SEL_OC = "id, numero, fecha, fecha_entrega_estimada, estado, moneda, subtotal, iva, total, observaciones, pedido, pedido_at, pedido_via, pedido_por, saldo_cerrado, proveedor_id, presupuesto_origen_id, created_at, "
   + "proveedores(razon_social, nombre_fantasia, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), "
-  + "presupuesto_origen:presupuesto_origen_id(id, numero, cliente_id, moneda, tipo_cambio, tipo_cambio_divisas, descuento_general_porcentaje)";
+  + "presupuesto_origen:presupuesto_origen_id(id, numero, cliente_id, moneda, tipo_cambio, tipo_cambio_divisas, descuento_general_porcentaje, vendedor_id, created_by)";
 
 const esStockPropio = (o: OC) => !o.proveedor_id && /stock propio/i.test(o.observaciones || "");
 const mon = (m: string | null | undefined) => (String(m || "ARS").toUpperCase().startsWith("USD") ? "USD" : "ARS") as "ARS" | "USD";
@@ -76,6 +93,9 @@ export default function ComprasNuevaPage() {
   const sociedadId = sociedadActiva?.id;
 
   const [tab, setTab] = useState<"pedir" | "esperando" | "preguntas">("pedir");
+  // Buscador (OC, PR, cliente, proveedor, artículo o código) y filtro rápido de Esperando.
+  const [busca, setBusca] = useState("");
+  const [filtroEsp, setFiltroEsp] = useState<"todas" | "tarde" | "parcial">("todas");
   const [ocs, setOcs] = useState<OC[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [prItems, setPrItems] = useState<Record<string, PRItem>>({});
@@ -98,6 +118,14 @@ export default function ComprasNuevaPage() {
   // Reclamo de lo que falta (sin precios): OC abierta y texto editable.
   const [reclamo, setReclamo] = useState<{ id: string; texto: string } | null>(null);
   const [eligiendo, setEligiendo] = useState<string | null>(null);
+  // Foto del remito del proveedor (Esperando).
+  const [fotos, setFotos] = useState<FotoRemito[]>([]);
+  const [remitosOC, setRemitosOC] = useState<Record<string, RemitoOC[]>>({});
+  const [faltaTablaRemitos, setFaltaTablaRemitos] = useState(false);
+  const [deshacer, setDeshacer] = useState<Deshacer[]>([]);
+  const contador = useRef(0);
+  const inputFoto = useRef<HTMLInputElement>(null);
+  const fotoPara = useRef<string | null>(null);
 
   const cargar = useCallback(async () => {
     if (!sociedadId) return;
@@ -146,6 +174,17 @@ export default function ComprasNuevaPage() {
       setHistorial(hist.map((h: any) => ({ codigo: h.codigo, descripcion: h.descripcion, proveedor_id: h.ordenes_compra?.proveedor_id || null, fecha: h.ordenes_compra?.fecha || null })));
       const vistos = new Set<string>();
       setLista([...l1, ...l2].filter((f) => { const k = `${f.proveedor}|${f.codigo}|${f.codigo_interno}`; if (vistos.has(k)) return false; vistos.add(k); return true; }));
+      // Remitos del proveedor ya cargados (foto). Si la tabla todavía no existe, se avisa y la foto no queda atada.
+      try {
+        const rems = await enTandas<RemitoOC>(vivas.map((o) => o.id), (t) => db.from("oc_remitos").select("id, orden_id, numero_remito, foto_url, created_at").eq("sociedad_id", sociedadId).eq("anulado", false).in("orden_id", t).order("created_at"));
+        const porOC: Record<string, RemitoOC[]> = {};
+        for (const r of rems) (porOC[r.orden_id] ||= []).push(r);
+        setRemitosOC(porOC);
+        setFaltaTablaRemitos(false);
+      } catch {
+        setRemitosOC({});
+        setFaltaTablaRemitos(true);
+      }
     } catch (e: any) {
       setError(e?.message || "No se pudieron traer las compras");
     } finally {
@@ -172,11 +211,24 @@ export default function ComprasNuevaPage() {
   const ocsSinProveedor = useMemo(() => ocs.filter((o) => !o.proveedor_id && (itemsDe[o.id] || []).length), [ocs, itemsDe]);
   const preguntas = useMemo(() => ocsSinProveedor.flatMap((o) => (itemsDe[o.id] || []).map((it) => ({ oc: o, it }))), [ocsSinProveedor, itemsDe]);
 
+  // Lo que se ve en pantalla según el buscador (las acciones de "todo" siguen usando las listas completas).
+  const palabras = useMemo(() => palabrasBusqueda(busca), [busca]);
+  const coincideOC = useCallback((o: OC) => !palabras.length || coincideTodas(normalizarTexto([
+    o.numero, o.presupuesto_origen?.numero, clientes[o.presupuesto_origen?.cliente_id || ""], o.proveedores?.razon_social, o.proveedores?.nombre_fantasia,
+    ...(itemsDe[o.id] || []).map((i) => `${i.codigo || ""} ${i.descripcion || ""}`),
+  ].filter(Boolean).join(" ")), palabras), [palabras, clientes, itemsDe]);
+  const atrasada = useCallback((o: OC) => (diasDesde(o.pedido_at || o.created_at) ?? 0) >= DIAS_AVISO_ESPERANDO, []);
+  const paraPedirVer = useMemo(() => paraPedir.filter(coincideOC), [paraPedir, coincideOC]);
+  const esperandoBusca = useMemo(() => esperando.filter(coincideOC), [esperando, coincideOC]);
+  const esperandoVer = useMemo(() => esperandoBusca.filter((o) => filtroEsp === "todas" || (filtroEsp === "tarde" ? atrasada(o) : o.estado === "recibida_parcial")), [esperandoBusca, filtroEsp, atrasada]);
+  const ocsSinProveedorVer = useMemo(() => ocsSinProveedor.filter(coincideOC), [ocsSinProveedor, coincideOC]);
+  const preguntasVer = useMemo(() => ocsSinProveedorVer.reduce((n, o) => n + (itemsDe[o.id] || []).length, 0), [ocsSinProveedorVer, itemsDe]);
+
   const grupos = useMemo(() => {
     const g = new Map<string, OC[]>();
-    for (const o of paraPedir) g.set(o.proveedor_id as string, [...(g.get(o.proveedor_id as string) || []), o]);
+    for (const o of paraPedirVer) g.set(o.proveedor_id as string, [...(g.get(o.proveedor_id as string) || []), o]);
     return [...g.entries()].sort((a, b) => nombreProv(a[1][0].proveedores).localeCompare(nombreProv(b[1][0].proveedores)));
-  }, [paraPedir]);
+  }, [paraPedirVer]);
 
   const centralizar = useMemo(() => {
     // El destino tiene que vender TODOS los renglones que se le pasan (en su lista o porque ya se los compramos).
@@ -459,11 +511,292 @@ export default function ComprasNuevaPage() {
     await cargar();
   }
 
+  // ── Foto del remito del proveedor ──────────────────────────────
+  const anotarDeshacer = useCallback((texto: string, fn: () => Promise<void>) => {
+    contador.current += 1;
+    const id = contador.current;
+    setDeshacer((prev) => [{ id, texto, fn }, ...prev].slice(0, 6));
+  }, []);
+  async function hacerDeshacer(d: Deshacer) {
+    setOcupado(`undo-${d.id}`);
+    try { await d.fn(); toast.info(`Deshecho: ${d.texto}`); setDeshacer((prev) => prev.filter((x) => x.id !== d.id)); }
+    catch (e: any) { toast.error(`No se pudo deshacer: ${e?.message || "error"}`); }
+    finally { setOcupado(null); await cargar(); }
+  }
+
+  /** Avisa al vendedor del PR (campanita), si no es el mismo que la carga. Devuelve si se mandó el aviso. */
+  async function avisarVendedor(o: OC, texto: string, titulo = "Llegó mercadería"): Promise<boolean> {
+    const pr = o.presupuesto_origen;
+    const destino = pr?.vendedor_id || pr?.created_by || null;
+    if (!pr || !destino || destino === profile?.id) return false;
+    const { error } = await db.from("alertas").insert({
+      tipo: "seguimiento", title: `${titulo}: ${pr.numero}`, description: texto,
+      entity_id: pr.id, entity_type: "presupuesto", module: "compras_nueva", user_id: destino, sociedad_id: sociedadId || null,
+    });
+    return !error;
+  }
+
+  /**
+   * Carga como recibido en la OC lo que vino en el remito (con las cantidades de la base al momento, nunca más de lo pedido),
+   * actualiza el estado de la OC, guarda el remito con la foto y avisa al vendedor. No mueve stock. Con Deshacer.
+   */
+  async function cargarRecibido(o: OC, cant: Record<string, number>, foto: { url: string | null; leido?: LeidoRemito }): Promise<Recepcion | null> {
+    if (!sociedadId) return null;
+    const { data: frescos, error: e0 } = await db.from("orden_compra_items").select("id, descripcion, codigo, cantidad, cantidad_recibida").eq("orden_id", o.id);
+    if (e0) { toast.error(`${o.numero}: no se pudo leer la OC (${e0.message})`); return null; }
+    const rec = armarRecepcion(frescos || [], Object.entries(cant).map(([item_id, cantidad]) => ({ item_id, cantidad })));
+    if (!rec.cargas.length) { toast.warning(`${o.numero}: no hay nada para cargar (ya estaba recibido o las cantidades están en 0)`); return null; }
+    // El estado de antes se lee antes de cargar: la base lo cambia sola al tocar lo recibido.
+    const { data: actual } = await db.from("ordenes_compra").select("estado").eq("id", o.id).eq("sociedad_id", sociedadId).single();
+    const estadoAntes: string = actual?.estado || o.estado;
+    const hechas: Recepcion["cargas"] = [];
+    for (const c of rec.cargas) {
+      const { error: e } = await db.from("orden_compra_items").update({ cantidad_recibida: c.despues }).eq("id", c.item_id).eq("orden_id", o.id);
+      if (e) {
+        for (const h of hechas) await db.from("orden_compra_items").update({ cantidad_recibida: h.antes }).eq("id", h.item_id).eq("orden_id", o.id);
+        toast.error(`${o.numero}: no se pudo cargar lo recibido (${e.message}); no quedó nada cargado`);
+        return null;
+      }
+      hechas.push(c);
+    }
+    if (rec.estado) {
+      const { error: e } = await db.from("ordenes_compra").update({ estado: rec.estado }).eq("id", o.id).eq("sociedad_id", sociedadId);
+      if (e) toast.warning(`${o.numero}: se cargó lo recibido pero no cambió el estado (${e.message})`);
+    }
+    let registroId: string | null = null;
+    if (!faltaTablaRemitos) {
+      const { data: reg, error: e } = await db.from("oc_remitos").insert({
+        sociedad_id: sociedadId, orden_id: o.id, proveedor_id: o.proveedor_id, numero_remito: foto.leido?.numero_remito || null,
+        fecha_remito: foto.leido?.fecha || null, foto_url: foto.url, leido_ia: foto.leido || null, cargado: hechas,
+        estado_antes: estadoAntes, estado_despues: rec.estado || estadoAntes, nota: foto.leido?.anotaciones || null, created_by: profile?.id || null,
+      }).select("id").single();
+      if (e) toast.warning(`${o.numero}: lo recibido quedó cargado, pero la foto no quedó atada a la OC (${e.message})`);
+      else registroId = reg.id;
+    } else if (foto.url) {
+      toast.warning("Falta correr la migración oc_remitos: lo recibido quedó cargado, pero la foto no quedó atada a la OC");
+    }
+    const completo = rec.estado === "recibida";
+    const avisado = await avisarVendedor(o, `${profile?.full_name || "Compras"} cargó el remito${foto.leido?.numero_remito ? ` ${foto.leido.numero_remito}` : ""} de ${nombreProv(o.proveedores)} (${o.numero}): ${completo ? "llegó todo" : `llegó una parte, faltan ${rec.faltan.length} renglón(es)`}.`).catch(() => false);
+    anotarDeshacer(`recibido ${o.numero}`, () => deshacerRecibido(o, hechas, estadoAntes, registroId, avisado));
+    return rec;
+  }
+
+  async function deshacerRecibido(o: OC, cargas: Recepcion["cargas"], estadoAntes: string, registroId: string | null, avisado: boolean) {
+    const { data: frescos, error: e0 } = await db.from("orden_compra_items").select("id, cantidad, cantidad_recibida").eq("orden_id", o.id);
+    if (e0) throw e0;
+    const despues = ((frescos || []) as { id: string; cantidad: number; cantidad_recibida: number | null }[]).map((it) => {
+      const c = cargas.find((x) => x.item_id === it.id);
+      return c ? { ...it, cantidad_recibida: Math.max(0, Number(it.cantidad_recibida || 0) - c.cantidad) } : it;
+    });
+    for (const c of cargas) {
+      const it = despues.find((x) => x.id === c.item_id);
+      if (!it) continue;
+      const { error } = await db.from("orden_compra_items").update({ cantidad_recibida: it.cantidad_recibida }).eq("id", it.id).eq("orden_id", o.id);
+      if (error) throw error;
+    }
+    const { error: e1 } = await db.from("ordenes_compra").update({ estado: estadoPorRecibido(despues, estadoAntes) }).eq("id", o.id).eq("sociedad_id", sociedadId);
+    if (e1) throw e1;
+    if (registroId) await db.from("oc_remitos").update({ anulado: true }).eq("id", registroId).eq("sociedad_id", sociedadId);
+    // El aviso de "Llegó mercadería" no se puede borrar (es del vendedor): se le manda la corrección.
+    if (avisado) await avisarVendedor(o, `${profile?.full_name || "Compras"} deshizo la carga del remito de ${nombreProv(o.proveedores)} (${o.numero}): no cuenta como llegado.`, "Corrección, no llegó").catch(() => false);
+    setFotos((prev) => prev.map((f) => (f.oc_id === o.id && f.cargado ? { ...f, cargado: undefined, respondida: false } : f)));
+  }
+
+  function elegirFoto(ocId: string | null) {
+    fotoPara.current = ocId;
+    inputFoto.current?.click();
+  }
+
+  async function leerRemitos(files: FileList | null) {
+    if (!files?.length || !sociedadId) return;
+    const para = fotoPara.current;
+    fotoPara.current = null;
+    setTab("esperando");
+    const candidatos = para ? esperando.filter((o) => o.id === para) : esperando;
+    if (!candidatos.length) { toast.warning("No hay pedidos esperando para cruzar el remito"); return; }
+    for (const file of Array.from(files).slice(0, 10)) {
+      const key = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      setFotos((prev) => [{ key, nombre: file.name, url: null, leyendo: true, oc_id: para, cant: {} }, ...prev]);
+      try {
+        const prep = await prepararArchivo(file);
+        const ruta = `remitos-proveedor/${sociedadId}/${key}.${prep.ext}`;
+        const { error: eS } = await supabase.storage.from("comprobantes").upload(ruta, prep.blob, { contentType: prep.mediaType, upsert: false });
+        const url = eS ? null : supabase.storage.from("comprobantes").getPublicUrl(ruta).data.publicUrl;
+        const res = await fetch("/api/compras/leer-remito", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            base64: prep.base64, mediaType: prep.mediaType,
+            ocs: candidatos.map((o) => ({
+              id: o.id, numero: o.numero, proveedor: nombreProv(o.proveedores), cuit: o.proveedores?.cuit || null, fecha: (o.pedido_at || o.fecha || "").slice(0, 10),
+              items: (itemsDe[o.id] || []).map((it) => ({ id: it.id, codigo: it.codigo, descripcion: it.descripcion, cantidad: Number(it.cantidad), recibida: Number(it.cantidad_recibida || 0) })),
+            })),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "La IA no pudo leer el remito");
+        const leido = data as LeidoRemito;
+        const ocId = para || ocDelRemito(leido, candidatos.map((o) => ({ id: o.id, numero: o.numero, proveedor: nombreProv(o.proveedores), proveedor_cuit: o.proveedores?.cuit })));
+        const o = ocId ? candidatos.find((x) => x.id === ocId) || null : null;
+        const its = o ? itemsDe[o.id] || [] : [];
+        const cant: Record<string, number> = {};
+        for (const r of leido.renglones) if (r.item_id && its.some((i) => i.id === r.item_id)) cant[r.item_id] = (cant[r.item_id] || 0) + Number(r.cantidad || 0);
+        let cargado: Recepcion | undefined;
+        if (o) {
+          const rec = armarRecepcion(its, leido.renglones.map((r) => ({ item_id: r.item_id && its.some((i) => i.id === r.item_id) ? r.item_id : null, descripcion: r.descripcion, cantidad: r.cantidad })));
+          // Segura (OC reconocida por la IA y todo atado sin pasarse): se carga sola, con Deshacer.
+          if (seguroParaCargar(rec, leido.segura && leido.oc_id === o.id)) cargado = (await cargarRecibido(o, cant, { url, leido })) || undefined;
+        }
+        setFotos((prev) => prev.map((f) => (f.key === key ? {
+          ...f, url, leyendo: false, leido, oc_id: ocId, cant, cargado,
+          error: eS ? `La foto no se pudo guardar (${eS.message}); lo leído sirve igual` : undefined,
+        } : f)));
+      } catch (e: any) {
+        setFotos((prev) => prev.map((f) => (f.key === key ? { ...f, leyendo: false, error: e?.message || "No se pudo leer" } : f)));
+      }
+    }
+    await cargar();
+  }
+
+  async function confirmarFoto(f: FotoRemito) {
+    const o = ocs.find((x) => x.id === f.oc_id);
+    if (!o) { toast.warning("Elegí a qué OC corresponde el remito"); return; }
+    setOcupado(`foto-${f.key}`);
+    try {
+      const rec = await cargarRecibido(o, f.cant, { url: f.url, leido: f.leido });
+      if (rec) {
+        setFotos((prev) => prev.map((x) => (x.key === f.key ? { ...x, cargado: rec } : x)));
+        toast.success(`${o.numero}: ${rec.estado === "recibida" ? "llegó todo" : "cargado lo que llegó"}`);
+      }
+    } finally { setOcupado(null); await cargar(); }
+  }
+
   // ── Pantalla ───────────────────────────────────────────────────
   const btn = "inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium disabled:opacity-40";
   const itemPorId = (id: string) => items.find((i) => i.id === id);
   const ocDeItem = (id: string) => { const it = itemPorId(id); return it ? ocs.find((o) => o.id === it.orden_id) : undefined; };
   const prCliente = (o: OC) => [o.presupuesto_origen?.numero, clientes[o.presupuesto_origen?.cliente_id || ""]].filter(Boolean).join(" · ");
+  const pendientesDe = (o: OC) => (itemsDe[o.id] || []).filter((i) => Number(i.cantidad_recibida || 0) < Number(i.cantidad));
+  /** Abre el mensaje para reclamar solo lo que falta (sin precios). `id` dice dónde se muestra (la OC o la tarjeta de la foto). */
+  const abrirReclamo = (o: OC, id: string) => {
+    const its = itemsDe[o.id] || [];
+    const pend = pendientesDe(o);
+    setReclamo(reclamo?.id === id ? null : { id, texto: textoReclamoOC(o, pend.map((i) => ({ codigo: i.codigo, descripcion: i.descripcion, falta: Number(i.cantidad) - Number(i.cantidad_recibida || 0), unidad: i.unidad })), pend.length < its.length) });
+  };
+  const cajaReclamo = (o: OC, id: string) => reclamo?.id === id && (
+    <div className="mt-2 space-y-1.5 rounded-lg border border-sky-200 bg-sky-50/50 p-2 dark:border-sky-900 dark:bg-sky-950/20">
+      <textarea value={reclamo.texto} onChange={(e) => setReclamo({ id, texto: e.target.value })} rows={Math.min(14, 8 + pendientesDe(o).length * 2)} className="w-full rounded border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-900" />
+      <div className="flex flex-wrap items-center gap-2">
+        <button onClick={() => { const link = linkWhatsAppOC(contactos[o.proveedor_id || ""]?.whatsapp, reclamo.texto); if (!link) { toast.error("Este proveedor no tiene WhatsApp cargado: copiá el texto"); return; } window.open(link, "_blank"); }} className={`${btn} bg-emerald-600 text-white`}><MessageCircle className="h-3.5 w-3.5" /> WhatsApp</button>
+        <button onClick={() => { const para = contactos[o.proveedor_id || ""]?.email || ""; window.open(`mailto:${para}?subject=${encodeURIComponent(`Seguimiento ${o.numero}`)}&body=${encodeURIComponent(reclamo.texto.replace(/\*/g, ""))}`, "_self"); }} className={`${btn} bg-sky-600 text-white`}><Mail className="h-3.5 w-3.5" /> Mail (se abre tu correo)</button>
+        <button onClick={async () => { try { await navigator.clipboard.writeText(reclamo.texto); toast.success("Copiado, sin precios"); } catch { toast.error("No se pudo copiar"); } }} className={`${btn} border border-zinc-300 dark:border-zinc-600`}>Copiar</button>
+        <span className="text-[10px] text-zinc-400">Solo lo que falta, sin precios.</span>
+      </div>
+    </div>
+  );
+
+  /** Tarjeta de una foto de remito: lo que leyó la IA, cantidades para confirmar o lo que se cargó y la pregunta por lo que falta. */
+  const tarjetaFoto = (f: FotoRemito) => {
+    const o = f.oc_id ? ocs.find((x) => x.id === f.oc_id) : undefined;
+    const its = o ? itemsDe[o.id] || [] : [];
+    const l = f.leido;
+    const sinAtar = l ? l.renglones.filter((r) => !r.item_id || !its.some((i) => i.id === r.item_id)) : [];
+    const setCant = (id: string, v: number) => setFotos((prev) => prev.map((x) => (x.key === f.key ? { ...x, cant: { ...x.cant, [id]: Math.max(0, v) } } : x)));
+    const faltan = f.cargado ? f.cargado.faltan.map((x) => ({ ...x, it: itemPorId(x.item_id) })) : [];
+    return (
+      <div key={f.key} className={`rounded-lg border p-2 text-sm ${f.cargado ? "border-emerald-200 bg-emerald-50/50 dark:border-emerald-900 dark:bg-emerald-950/20" : f.error && !l ? "border-red-200 bg-red-50/50 dark:border-red-900 dark:bg-red-950/20" : "border-violet-200 bg-violet-50/40 dark:border-violet-900 dark:bg-violet-950/20"}`}>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <Camera className="h-4 w-4 text-zinc-400" />
+          <span className="text-xs text-zinc-500">{f.nombre}</span>
+          {f.url && <a href={f.url} target="_blank" rel="noreferrer" className="flex items-center gap-0.5 text-xs text-sky-600 hover:underline"><ExternalLink className="h-3 w-3" /> ver foto</a>}
+          {l && <span className="text-xs">{[l.proveedor, l.numero_remito ? `remito ${l.numero_remito}` : null, l.fecha ? formatDate(l.fecha) : null].filter(Boolean).join(" · ")}</span>}
+          {f.leyendo && <span className="flex items-center gap-1 text-xs text-violet-600"><Loader2 className="h-3.5 w-3.5 animate-spin" /> La IA está leyendo el remito…</span>}
+          {!f.leyendo && <button onClick={() => setFotos((prev) => prev.filter((x) => x.key !== f.key))} className="ml-auto text-xs text-zinc-400 hover:text-zinc-700" title="Sacar esta tarjeta (no deshace nada)">cerrar</button>}
+        </div>
+        {f.error && <p className="mt-1 text-xs text-red-600">{f.error}</p>}
+        {l?.resumen && <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400"><Sparkles className="mr-1 inline h-3 w-3 text-violet-500" />{l.resumen}</p>}
+        {l?.anotaciones && <p className="mt-0.5 text-xs text-amber-700">Anotado: {l.anotaciones}</p>}
+
+        {/* Ya cargado: qué quedó y qué falta */}
+        {f.cargado && (
+          <div className="mt-1 space-y-1">
+            <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
+              <Check className="mr-0.5 inline h-3.5 w-3.5" />
+              {o?.numero || "OC"}: cargado {f.cargado.cargas.length} renglón(es) como recibido. {f.cargado.estado === "recibida" ? "Llegó todo." : `Faltan ${f.cargado.faltan.length} renglón(es).`} (Deshacer arriba)
+            </p>
+            {f.cargado.de_mas.length > 0 && <p className="text-xs text-amber-700">Vino de más: {f.cargado.de_mas.map((d) => `${d.cantidad} ${itemPorId(d.item_id)?.descripcion || ""}`).join(", ")} (se cargó hasta lo pedido)</p>}
+            {o && faltan.length > 0 && !f.respondida && (
+              <div className="rounded border border-amber-200 bg-amber-50/60 p-1.5 dark:border-amber-900 dark:bg-amber-950/20">
+                <p className="text-xs font-medium text-amber-800 dark:text-amber-300">¿Lo que falta sigue llegando?</p>
+                <ul className="my-1 space-y-0.5">
+                  {faltan.map((x) => (
+                    <li key={x.item_id} className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
+                      <span className="w-12 text-right">{x.cantidad}</span>
+                      <span className="min-w-0 flex-1 truncate">{x.it?.descripcion || "renglón"}</span>
+                      {x.it && Number(x.it.cantidad_recibida || 0) === 0 && (
+                        <button onClick={() => void sinStock(o, x.it!)} disabled={ocupado === x.item_id} className="flex items-center gap-0.5 text-zinc-400 hover:text-red-600" title="No viene más: pasa a Preguntas para elegir otro proveedor"><PackageX className="h-3.5 w-3.5" /> no viene</button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                <div className="flex flex-wrap gap-2">
+                  <button onClick={() => setFotos((prev) => prev.map((x) => (x.key === f.key ? { ...x, respondida: true } : x)))} className={`${btn} border border-zinc-300 bg-white dark:border-zinc-600 dark:bg-zinc-900`}>Sigue llegando</button>
+                  <button onClick={() => abrirReclamo(o, `foto:${f.key}`)} className={`${btn} border border-sky-300 text-sky-700 dark:border-sky-800 dark:text-sky-300`}><Send className="h-3.5 w-3.5" /> Reclamar lo que falta</button>
+                </div>
+                {cajaReclamo(o, `foto:${f.key}`)}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Para confirmar: la IA dudó o no encontró la OC */}
+        {l && !f.cargado && !f.leyendo && (
+          <div className="mt-1 space-y-1">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-zinc-500">{o ? "OC:" : "¿De qué OC es?"}</span>
+              <select value={f.oc_id || ""} onChange={(e) => setFotos((prev) => prev.map((x) => (x.key === f.key ? { ...x, oc_id: e.target.value || null, cant: {} } : x)))}
+                className="rounded border border-zinc-300 bg-white px-1 py-0.5 text-xs dark:border-zinc-600 dark:bg-zinc-900">
+                <option value="">Elegí la OC…</option>
+                {esperando.map((x) => <option key={x.id} value={x.id}>{x.numero} · {nombreProv(x.proveedores)}{x.presupuesto_origen?.numero ? ` · ${x.presupuesto_origen.numero}` : ""}</option>)}
+              </select>
+              {o && <button onClick={() => setFotos((prev) => prev.map((x) => (x.key === f.key ? { ...x, cant: Object.fromEntries(pendientesDe(o).map((i) => [i.id, Number(i.cantidad) - Number(i.cantidad_recibida || 0)])) } : x)))} className={`${btn} border border-zinc-300 dark:border-zinc-600`}>Llegó todo lo que falta</button>}
+            </div>
+            {o && (
+              <table className="w-full text-xs">
+                <thead><tr className="text-zinc-400"><th className="text-left font-normal">Renglón de la OC</th><th className="w-16 text-right font-normal">Pedido</th><th className="w-16 text-right font-normal">Ya llegó</th><th className="w-24 text-right font-normal">Llega ahora</th></tr></thead>
+                <tbody>
+                  {its.map((it) => {
+                    const pend = Number(it.cantidad) - Number(it.cantidad_recibida || 0);
+                    const v = f.cant[it.id] || 0;
+                    return (
+                      <tr key={it.id} className={v > 0 ? "font-medium" : "text-zinc-500"}>
+                        <td className="truncate py-0.5">{it.codigo ? <span className="text-zinc-400">{it.codigo} · </span> : null}{it.descripcion}</td>
+                        <td className="text-right">{Number(it.cantidad)}</td>
+                        <td className="text-right">{Number(it.cantidad_recibida || 0)}</td>
+                        <td className="text-right">
+                          {pend > 0
+                            ? <input type="number" min={0} value={v || ""} placeholder="0" onChange={(e) => setCant(it.id, Number(e.target.value) || 0)} className={`w-16 rounded border px-1 py-0.5 text-right dark:bg-zinc-900 ${v > pend ? "border-amber-400" : "border-zinc-300 dark:border-zinc-600"}`} title={v > pend ? `Faltaban ${pend}: se carga hasta lo pedido` : undefined} />
+                            : <span className="text-emerald-600">completo</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+            {sinAtar.length > 0 && <p className="text-xs text-amber-700">En el remito pero no en {o ? o.numero : "la OC"}: {sinAtar.map((r) => `${r.cantidad} ${r.descripcion}`).join(", ")}</p>}
+            {o && (
+              <div className="flex flex-wrap items-center gap-2">
+                <button onClick={() => void confirmarFoto(f)} disabled={ocupado === `foto-${f.key}` || !Object.values(f.cant).some((v) => v > 0)} className={`${btn} bg-emerald-600 text-white`}>
+                  {ocupado === `foto-${f.key}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Cargar lo recibido
+                </button>
+                <span className="text-[10px] text-zinc-400">Queda en la OC con la foto y le avisa al vendedor. No mueve stock. Con Deshacer.</span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div>
@@ -504,7 +837,7 @@ export default function ComprasNuevaPage() {
 
         {/* Pestañas */}
         <div className="flex flex-wrap items-center gap-1 border-b border-zinc-200 dark:border-zinc-700">
-          {([["pedir", "Para pedir", paraPedir.length], ["esperando", "Esperando", esperando.length], ["preguntas", "Preguntas", preguntas.length]] as const).map(([k, t, n]) => (
+          {([["pedir", "Para pedir", paraPedirVer.length], ["esperando", "Esperando", esperandoBusca.length], ["preguntas", "Preguntas", preguntasVer]] as const).map(([k, t, n]) => (
             <button key={k} onClick={() => setTab(k)} className={`-mb-px border-b-2 px-3 py-1.5 text-sm font-medium ${tab === k ? "border-orange-500 text-orange-600" : "border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"}`}>
               {t} <span className={`ml-1 rounded-full px-1.5 text-xs ${k === "preguntas" && n ? "bg-amber-100 text-amber-700" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"}`}>{n}</span>
             </button>
@@ -513,6 +846,11 @@ export default function ComprasNuevaPage() {
             {tab === "pedir" && paraPedir.length > 0 && (
               <button onClick={() => void mandarTodo()} disabled={ocupado === "todo"} className={`${btn} bg-orange-500 text-white hover:bg-orange-600`}>
                 {ocupado === "todo" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />} Mandar todo por mail
+              </button>
+            )}
+            {tab === "esperando" && esperando.length > 0 && (
+              <button onClick={() => elegirFoto(null)} className={`${btn} bg-violet-600 text-white hover:bg-violet-700`} title="Foto o PDF del remito que vino con la mercadería (varias a la vez): la IA lee qué llegó y lo carga en la OC">
+                <Camera className="h-3.5 w-3.5" /> Foto del remito
               </button>
             )}
             {tab === "preguntas" && preguntas.length > 0 && (
@@ -524,20 +862,36 @@ export default function ComprasNuevaPage() {
           </div>
         </div>
 
+        {/* Buscador y filtros */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative w-full max-w-sm">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
+            <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar OC, PR, cliente, proveedor o artículo…"
+              className="w-full rounded-md border border-zinc-300 bg-white py-1 pl-7 pr-7 text-sm dark:border-zinc-600 dark:bg-zinc-900" />
+            {busca && <button onClick={() => setBusca("")} className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-zinc-400 hover:text-zinc-700" title="Borrar búsqueda"><X className="h-3.5 w-3.5" /></button>}
+          </div>
+          {tab === "esperando" && ([["todas", "Todas", esperandoBusca.length], ["tarde", "Atrasadas", esperandoBusca.filter(atrasada).length], ["parcial", "Llegó una parte", esperandoBusca.filter((o) => o.estado === "recibida_parcial").length]] as const).map(([k, t, n]) => (
+            <button key={k} onClick={() => setFiltroEsp(k)} className={`${btn} border ${filtroEsp === k ? "border-orange-400 bg-orange-50 text-orange-700 dark:border-orange-700 dark:bg-orange-950/30 dark:text-orange-300" : "border-zinc-300 text-zinc-600 dark:border-zinc-600 dark:text-zinc-400"}`}>
+              {t} <span className="text-zinc-400">{n}</span>
+            </button>
+          ))}
+          {palabras.length > 0 && <span className="text-xs text-zinc-500">Las pestañas muestran lo que coincide con la búsqueda.</span>}
+        </div>
+
         {error && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400">{error}</p>}
         {cargando && !ocs.length && <p className="flex items-center gap-2 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Trayendo las compras…</p>}
 
         {/* PARA PEDIR */}
         {tab === "pedir" && !cargando && (
           <div className="space-y-2">
-            {centralizar.map((s) => (
+            {!palabras.length && centralizar.map((s) => (
               <div key={`${s.pr_id}|${s.moneda}`} className="flex flex-wrap items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs text-sky-800 dark:border-sky-900 dark:bg-sky-950/30 dark:text-sky-300">
                 <Sparkles className="h-3.5 w-3.5" />
                 <span className="min-w-0 flex-1">{s.pr_numero || "PR"}: {s.proveedores_a_mover.join(", ")} es poco ({formatCurrency(s.monto_a_mover, s.moneda)}). ¿Lo pedís todo a <b>{s.destino_nombre}</b> y te ahorrás un envío?</span>
                 <button onClick={() => void aplicarCentralizar(s)} className={`${btn} bg-sky-600 text-white`}>Juntar en {s.destino_nombre}</button>
               </div>
             ))}
-            {!grupos.length && <p className="py-6 text-center text-sm text-zinc-500">No hay nada para pedir. 🎉</p>}
+            {!grupos.length && <p className="py-6 text-center text-sm text-zinc-500">{palabras.length ? "Nada para pedir coincide con la búsqueda." : "No hay nada para pedir. 🎉"}</p>}
             {grupos.map(([provId, lst]) => {
               const c = contactos[provId];
               return (
@@ -597,15 +951,32 @@ export default function ComprasNuevaPage() {
           </div>
         )}
 
+        {deshacer.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800/50">
+            <span className="text-zinc-500">Últimos cambios:</span>
+            {deshacer.map((d) => (
+              <button key={d.id} onClick={() => void hacerDeshacer(d)} disabled={ocupado === `undo-${d.id}`} className={`${btn} border border-zinc-300 bg-white dark:border-zinc-600 dark:bg-zinc-900`} title="Deshacer este cambio">
+                <Undo2 className="h-3 w-3" /> {d.texto}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* FOTOS DEL REMITO DEL PROVEEDOR */}
+        {tab === "esperando" && faltaTablaRemitos && !cargando && (
+          <p className="rounded-lg bg-amber-50 px-3 py-1.5 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">Falta correr la migración <b>oc_remitos</b>: la foto del remito se lee y carga lo recibido, pero no queda atada a la OC.</p>
+        )}
+        {tab === "esperando" && fotos.length > 0 && <div className="space-y-2">{fotos.map(tarjetaFoto)}</div>}
+
         {/* ESPERANDO */}
         {tab === "esperando" && !cargando && (
           <div className="rounded-lg border border-zinc-200 dark:border-zinc-700">
-            {!esperando.length && <p className="py-6 text-center text-sm text-zinc-500">No hay pedidos esperando.</p>}
-            {esperando.map((o) => {
+            {!esperandoVer.length && <p className="py-6 text-center text-sm text-zinc-500">{esperando.length ? "Ningún pedido esperando coincide con el filtro." : "No hay pedidos esperando."}</p>}
+            {esperandoVer.map((o) => {
               const its = itemsDe[o.id] || [];
               const pend = its.filter((i) => Number(i.cantidad_recibida || 0) < Number(i.cantidad));
               const dias = diasDesde(o.pedido_at || o.created_at) ?? 0;
-              const tarde = dias >= DIAS_AVISO_ESPERANDO;
+              const tarde = atrasada(o);
               return (
                 <details key={o.id} className={`border-b border-zinc-100 px-3 py-1.5 last:border-0 dark:border-zinc-800 ${tarde ? "bg-amber-50/60 dark:bg-amber-950/10" : ""}`}>
                   <summary className="flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 text-sm">
@@ -617,24 +988,20 @@ export default function ComprasNuevaPage() {
                       {o.pedido_via ? ` por ${VIA[o.pedido_via] || o.pedido_via}` : ""}{o.pedido_por && nombres[o.pedido_por] ? ` (${nombres[o.pedido_por]})` : ""}
                     </span>
                     {o.estado === "recibida_parcial" && <span className="text-xs text-sky-600">llegó una parte</span>}
+                    {(remitosOC[o.id] || []).map((r) => r.foto_url && (
+                      <a key={r.id} href={r.foto_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="flex items-center gap-0.5 text-xs text-sky-600 hover:underline" title={`Remito del proveedor cargado el ${formatDate(r.created_at)}`}>
+                        <Camera className="h-3 w-3" /> {r.numero_remito || "remito"}
+                      </a>
+                    ))}
                     <span className="ml-auto text-xs text-zinc-500">{pend.length} de {its.length} sin llegar · {formatCurrency(Number(o.total), mon(o.moneda))}</span>
                   </summary>
                   <div className="mt-1 flex flex-wrap gap-2">
                     <button onClick={() => setEnviarIds([o.id])} className={`${btn} border border-zinc-300 dark:border-zinc-600`}><Send className="h-3.5 w-3.5" /> Reenviar / reclamar</button>
-                    {pend.length > 0 && <button onClick={() => setReclamo(reclamo?.id === o.id ? null : { id: o.id, texto: textoReclamoOC(o, pend.map((i) => ({ codigo: i.codigo, descripcion: i.descripcion, falta: Number(i.cantidad) - Number(i.cantidad_recibida || 0), unidad: i.unidad })), pend.length < its.length) })} className={`${btn} border border-sky-300 text-sky-700 dark:border-sky-800 dark:text-sky-300`} title="Mensaje con solo lo que falta llegar, sin precios"><Send className="h-3.5 w-3.5" /> Reclamar lo que falta ({pend.length})</button>}
+                    <button onClick={() => elegirFoto(o.id)} className={`${btn} border border-violet-300 text-violet-700 dark:border-violet-800 dark:text-violet-300`} title="La IA lee qué llegó y lo carga en esta OC"><Camera className="h-3.5 w-3.5" /> Foto del remito</button>
+                    {pend.length > 0 && <button onClick={() => abrirReclamo(o, o.id)} className={`${btn} border border-sky-300 text-sky-700 dark:border-sky-800 dark:text-sky-300`} title="Mensaje con solo lo que falta llegar, sin precios"><Send className="h-3.5 w-3.5" /> Reclamar lo que falta ({pend.length})</button>}
                     <button onClick={() => void deshacerPedido(o)} className={`${btn} border border-zinc-300 dark:border-zinc-600`} title="No se mandó: vuelve a Para pedir"><Undo2 className="h-3.5 w-3.5" /> Deshacer pedido</button>
                   </div>
-                  {reclamo?.id === o.id && (
-                    <div className="mt-2 space-y-1.5 rounded-lg border border-sky-200 bg-sky-50/50 p-2 dark:border-sky-900 dark:bg-sky-950/20">
-                      <textarea value={reclamo.texto} onChange={(e) => setReclamo({ id: o.id, texto: e.target.value })} rows={Math.min(14, 8 + pend.length * 2)} className="w-full rounded border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-900" />
-                      <div className="flex flex-wrap items-center gap-2">
-                        <button onClick={() => { const link = linkWhatsAppOC(contactos[o.proveedor_id || ""]?.whatsapp, reclamo.texto); if (!link) { toast.error("Este proveedor no tiene WhatsApp cargado: copiá el texto"); return; } window.open(link, "_blank"); }} className={`${btn} bg-emerald-600 text-white`}><MessageCircle className="h-3.5 w-3.5" /> WhatsApp</button>
-                        <button onClick={() => { const para = contactos[o.proveedor_id || ""]?.email || ""; window.open(`mailto:${para}?subject=${encodeURIComponent(`Seguimiento ${o.numero}`)}&body=${encodeURIComponent(reclamo.texto.replace(/\*/g, ""))}`, "_self"); }} className={`${btn} bg-sky-600 text-white`}><Mail className="h-3.5 w-3.5" /> Mail (se abre tu correo)</button>
-                        <button onClick={async () => { try { await navigator.clipboard.writeText(reclamo.texto); toast.success("Copiado, sin precios"); } catch { toast.error("No se pudo copiar"); } }} className={`${btn} border border-zinc-300 dark:border-zinc-600`}>Copiar</button>
-                        <span className="text-[10px] text-zinc-400">Solo lo que falta, sin precios.</span>
-                      </div>
-                    </div>
-                  )}
+                  {reclamo?.id === o.id && cajaReclamo(o, o.id)}
                   <ul className="mt-1 space-y-0.5">
                     {its.map((it) => (
                       <li key={it.id} className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
@@ -655,8 +1022,8 @@ export default function ComprasNuevaPage() {
         {/* PREGUNTAS */}
         {tab === "preguntas" && !cargando && (
           <div className="rounded-lg border border-zinc-200 dark:border-zinc-700">
-            {!preguntas.length && <p className="py-6 text-center text-sm text-zinc-500">No hay preguntas. Todo tiene proveedor.</p>}
-            {ocsSinProveedor.map((oc) => {
+            {!preguntasVer && <p className="py-6 text-center text-sm text-zinc-500">{preguntas.length ? "Ninguna pregunta coincide con la búsqueda." : "No hay preguntas. Todo tiene proveedor."}</p>}
+            {ocsSinProveedorVer.map((oc) => {
               const its = itemsDe[oc.id] || [];
               // Proveedores sugeridos para varios renglones del pedido: un clic y va todo junto.
               const cuenta = new Map<string, number>();
@@ -708,6 +1075,7 @@ export default function ComprasNuevaPage() {
         )}
       </div>
 
+      <input ref={inputFoto} type="file" accept="image/*,application/pdf" multiple className="hidden" onChange={(e) => { void leerRemitos(e.target.files); e.target.value = ""; }} />
       {enviarIds && <EnviarOCProveedor ocIds={enviarIds} titulo="Pedido al proveedor" onClose={() => { setEnviarIds(null); void cargar(); }} />}
     </div>
   );
