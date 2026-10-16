@@ -428,7 +428,8 @@ function convertCosto(costoBase: number, costoMoneda: string, prMoneda: string, 
 }
 
 export default function PresupuestosPage() {
-  const { profile, sociedadActiva } = useUser();
+  const { profile, sociedadActiva, sociedades, setSociedadActiva } = useUser();
+  const fetchPRSeq = useRef(0);
   const [showCatalogo, setShowCatalogo] = useState(false);
   const [descGeneral, setDescGeneral] = useState(0);
   const [catalogoFila, setCatalogoFila] = useState<number | null>(null); // fila desde la que se abrió la lista (lupa)
@@ -983,6 +984,10 @@ export default function PresupuestosPage() {
   const [filterValues, setFilterValues] = useState<FilterValues>({ fecha: { from: "", to: "" }, moneda: "", monto: {} });
 
   const fetchPresupuestos = useCallback(async () => {
+    // Sin sociedad todavía no se pide nada: si no, viene la lista de las dos sociedades.
+    if (!sociedadActiva?.id) return;
+    // Si llega tarde la respuesta de un pedido anterior (otra sociedad), no pisa la lista.
+    const seq = ++fetchPRSeq.current;
     try {
       // First try with items + vendedor profile
       let q = (supabase as any)
@@ -1013,6 +1018,7 @@ export default function PresupuestosPage() {
       }
 
       const { data, error } = res;
+      if (seq !== fetchPRSeq.current) return;
       if (!error && data) {
         setPresupuestos((data as unknown as SupabasePresupuesto[]).map(mapToPresupuesto));
       } else if (error) {
@@ -2366,6 +2372,12 @@ export default function PresupuestosPage() {
         .eq("id", pr.id)
         .single();
       if (error || !fullPR) { toast.error("Error al cargar presupuesto"); return; }
+      // PR de la otra sociedad: se pasa a esa sociedad para que carguen su cliente, sus listas y se guarde bien.
+      if (fullPR.sociedad_id && sociedadActiva?.id && fullPR.sociedad_id !== sociedadActiva.id) {
+        const otra = sociedades.find((s) => s.id === fullPR.sociedad_id);
+        if (otra) { setSociedadActiva(otra); toast.info(`${fullPR.numero} es de ${otra.nombre}: cambié a ${otra.nombre}.`); }
+        else toast.warning(`${fullPR.numero} es de otra sociedad: puede que no cargue el cliente.`);
+      }
 
       const prMoneda = fullPR.moneda || "USD";
       setDescGeneral(Number(fullPR.descuento_general_porcentaje) || 0);

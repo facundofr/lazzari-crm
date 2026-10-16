@@ -12,7 +12,7 @@ import { AlertTriangle, FileUp, Loader2, Paperclip, Send, Sparkles, Undo2, X } f
 import { supabase } from "@/lib/supabase/client";
 import { convertirAMonedaPR, type CatalogoItemParaPR } from "@/components/presupuestos/catalogo-picker";
 import { leerExcel, leerBase64, separarTalle } from "@/components/presupuestos/cotizacion-express";
-import { buscarCandidatos, normalizar, tokens, esCodigo, type CatalogoCandidato as Cand } from "@/lib/catalogo-busqueda";
+import { buscarCandidatos, precargarCatalogo, normalizar, tokens, esCodigo, type CatalogoCandidato as Cand } from "@/lib/catalogo-busqueda";
 import { claveArticulo } from "@/lib/presupuesto-ayudas";
 import { proponerPrecio, semaforoLinea, margenSobreCosto, redondear2, MARGEN_MINIMO_IA, type Confianza, type Semaforo } from "@/lib/presupuesto-ia";
 
@@ -113,6 +113,8 @@ export default function AsistentePR({ open, onClose, prMoneda, tc, tcDivisas, cl
   useEffect(() => { finRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [msgs, progreso]);
   useEffect(() => { if (open) { setMsgs([]); setLineas([]); lineasRef.current = []; setDeshacer([]); setTexto(textoInicial || ""); setArchivo(null); setImagen(null); setLeido(null); setError(""); setProgreso(""); } }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // La lista de costos se baja apenas se abre el asistente: así la búsqueda de renglones es instantánea.
+  useEffect(() => { if (open) precargarCatalogo(); }, [open]);
   const prefsTc = { tc, tcDivisas };
 
   // ── cálculo de cada renglón ──
@@ -125,7 +127,7 @@ export default function AsistentePR({ open, onClose, prMoneda, tc, tcDivisas, cl
     let precio = 0, origen = "sin precio", nota = "";
     if (l.precioFijo !== null) { precio = l.precioFijo; origen = l.fuente?.tipo === "pr" ? `PR ${l.fuente.numero}` : "fijado"; }
     else if (l.markupFijo !== null && costo && costo > 0) { precio = redondear2(costo * (1 + l.markupFijo / 100)); origen = `markup ${l.markupFijo}%`; }
-    else if (prop) { precio = prop.precio; origen = prop.origen === "ultimo" ? "último precio" : prop.origen === "lista" ? "lista" : "sin precio"; nota = prop.nota; }
+    else if (prop) { precio = prop.precio; origen = prop.origen === "ultimo" ? "último precio" : prop.origen === "lista" ? "precio de lista" : "sin precio"; nota = prop.nota; }
     const margen = costo && costo > 0 && precio > 0 ? margenSobreCosto(precio, costo) : null;
     const bajo = margen !== null && margen < MARGEN_MINIMO_IA;
     const sem = semaforoLinea({ confianza: l.confianza, tieneArticulo: !!cand || l.precioFijo !== null, precio, cantidad: l.cantidad, bajoMinimo: bajo, sinCosto: !(costo && costo > 0), avisoExtra: !!cand && costo === null });
@@ -392,10 +394,10 @@ export default function AsistentePR({ open, onClose, prMoneda, tc, tcDivisas, cl
           <button onClick={onClose} disabled={trabajando}><X className="h-5 w-5 text-zinc-400" /></button>
         </div>
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(340px,2fr)_3fr]">
+        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto md:grid-cols-[minmax(340px,2fr)_3fr] md:overflow-visible">
           {/* CHAT */}
-          <div className="flex min-h-0 flex-col border-b border-zinc-200 md:border-b-0 md:border-r dark:border-zinc-700">
-            <div className="min-h-[200px] flex-1 space-y-2 overflow-y-auto p-3">
+          <div className="flex flex-col border-b border-zinc-200 md:min-h-0 md:border-b-0 md:border-r dark:border-zinc-700">
+            <div className="max-h-[45vh] min-h-[200px] flex-1 space-y-2 overflow-y-auto p-3 md:max-h-none">
               {!clienteId && <p className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">⚠️ Todavía no elegiste el cliente en el PR: sin cliente no puedo usar sus PR anteriores ni su último precio. Elegilo y volvé a abrir el asistente.</p>}
               {!msgs.length && (
                 <div className="space-y-2 text-sm text-zinc-500">
@@ -442,7 +444,7 @@ export default function AsistentePR({ open, onClose, prMoneda, tc, tcDivisas, cl
           </div>
 
           {/* BORRADOR */}
-          <div className="flex min-h-0 flex-col">
+          <div className="flex flex-col md:min-h-0">
             <div className="flex flex-wrap items-center gap-2 px-4 py-2 text-xs">
               <span className="font-semibold dark:text-white">Borrador</span>
               <span className="text-zinc-500">{incluidas.length} renglones · <b className="text-zinc-800 dark:text-zinc-100">{fmt(totalVenta, prMoneda)}</b> sin IVA{margenTotal !== null && <> · margen <b className={margenTotal < MARGEN_MINIMO_IA ? "text-red-600" : "text-zinc-800 dark:text-zinc-100"}>{margenTotal.toLocaleString("es-AR", { maximumFractionDigits: 1 })}%</b></>}</span>
@@ -475,6 +477,7 @@ export default function AsistentePR({ open, onClose, prMoneda, tc, tcDivisas, cl
                         <div className="truncate text-[11px] text-zinc-500" title={c.cand ? `${c.cand.proveedor} · ${c.cand.codigo_interno || c.cand.codigo} · ${c.cand.descripcion}${c.cand.marca ? ` · ${c.cand.marca}` : ""}` : ""}>
                           {c.cand ? <>→ <b className="font-medium text-zinc-700 dark:text-zinc-300">{c.cand.proveedor}</b> · {c.cand.descripcion}{c.cand.marca ? ` · ${c.cand.marca}` : ""}</> : <span className="text-red-600">→ sin artículo en la lista</span>}
                         </div>
+                        {c.sem !== "verde" && l.nota && <div className="truncate text-[11px] text-amber-700 dark:text-amber-400" title={l.nota}>⚠ {l.nota}</div>}
                       </td>
                       <td className="px-1.5 py-1"><input type="number" min={0} step="any" value={l.cantidad} onChange={e => setLineas(ls => ls.map(x => (x.id === l.id ? { ...x, cantidad: Number(e.target.value) || 0 } : x)))} className="w-14 rounded border border-zinc-200 px-1 py-0.5 text-right dark:border-zinc-700 dark:bg-zinc-800" /></td>
                       <td className="whitespace-nowrap px-1.5 py-1 text-right">{c.costo !== null && c.cand ? fmt(c.costo, prMoneda) : "—"}</td>
