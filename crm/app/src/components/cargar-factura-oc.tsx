@@ -1155,7 +1155,7 @@ export default function CargarFacturaOC({
           const original = { ...line };
           const costo = Number(item.precio_unitario) * (1 - Number(item.descuento_porcentaje || 0) / 100);
           const equivalencia = Number(String(eqTxt).replace(",", ".")) || equivalenciaSugerida(item.cantidad, Number(original.cantidad));
-          Object.assign(line, { codigo: item.codigo || null, descripcion: item.descripcion, cantidad: Number(item.cantidad), precio_unitario: costo, iva_porcentaje: Number(item.iva_porcentaje ?? 21), unidad: item.unidad || line.unidad });
+          Object.assign(line, { codigo: item.codigo || line.codigo || "", descripcion: item.descripcion, cantidad: Number(item.cantidad), precio_unitario: costo, iva_porcentaje: Number(item.iva_porcentaje ?? 21), unidad: item.unidad || line.unidad });
           reemplazosAplicados.push({ oc, line, original, item, equivalencia, costo });
         }
       }
