@@ -17,11 +17,14 @@ import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
 import { useToast } from "@/components/ui/toast";
 import { Autocompletar } from "@/components/ui/autocompletar";
+import { DataTable } from "@/components/ui/data-table";
+import { Badge } from "@/components/ui/badge";
+import { traerTodo } from "@/lib/paginar";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { renglonesParaEntregar } from "@/lib/remitos-armado";
-import { valorSugerido, excesos, agruparPorSucursal, ocAnteriorDistinta, numeroCAI, nombrePDFRemito, type RenglonVentana } from "@/lib/remitos-crear";
+import { valorSugerido, excesos, agruparPorSucursal, ocAnteriorDistinta, numeroCAI, nombrePDFRemito, descripcionCorta, type RenglonVentana } from "@/lib/remitos-crear";
 import { buscarCandidatos, type CatalogoCandidato } from "@/lib/catalogo-busqueda";
 import { abrirRemitoPDF, remitoPDFBase64 } from "@/lib/remito-pdf";
 import { AlertTriangle, Download, FileText, Loader2, Mail, Plus, Sparkles, Trash2, Truck, X } from "lucide-react";
@@ -38,6 +41,14 @@ type PRCab = { id: string; numero: string; cliente_id: string; cliente: string; 
 type Sucursal = { id: string; nombre: string; direccion: string | null; localidad: string | null };
 type RemitoEdit = { id: string; numero: string; presupuesto_id: string | null; tipo_remito: string | null; cai_numero: string | null; punto_venta_cai: number | null; nro_comprobante_cai: number | null; cae: string | null };
 type Hecho = { id: string; numero: string; cai: string | null };
+/** Renglón de la lista de PR para elegir (como la lista de Presupuestos). */
+type PRFila = {
+  id: string; numero: string; fecha: string; cliente: string; sucursal: string; oc: string | null; detalle: string; detalleTodo: string;
+  subtotal: number | null; moneda: string | null; vendedor: string; estado: string; pedido: number; falta: number;
+};
+const ESTADO_PR: Record<string, { label: string; variant: "success" | "info" | "purple" }> = {
+  aprobado: { label: "Aprobado", variant: "success" }, facturar: { label: "Facturar", variant: "info" }, facturado: { label: "Facturado", variant: "purple" },
+};
 
 export interface RemitoVentanaProps {
   open: boolean;
@@ -99,7 +110,9 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState("");
   const [modo, setModo] = useState<"pr" | "libre">("pr");
-  const [prsBuscables, setPrsBuscables] = useState<{ id: string; numero: string; cliente: string; oc: string | null; estado: string }[]>([]);
+  const [prsBuscables, setPrsBuscables] = useState<PRFila[]>([]);
+  const [buscaPR, setBuscaPR] = useState("");
+  const [soloPendientes, setSoloPendientes] = useState(true);
   const [clientes, setClientes] = useState<{ id: string; razon_social: string; cuit: string | null }[]>([]);
 
   const [pr, setPr] = useState<PRCab | null>(null);
@@ -145,12 +158,47 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
   }, [open, prId, remitoId, sociedadId]);
 
   async function cargarListas() {
-    const [{ data: prs }, { data: cls }] = await Promise.all([
-      db.from("presupuestos").select("id, numero, estado, oc_cliente, clientes(razon_social)").eq("sociedad_id", sociedadId).in("estado", ESTADOS_PR_REMITO).order("created_at", { ascending: false }).limit(1000),
+    const [prs, { data: cls }] = await Promise.all([
+      traerTodo<any>(() => db.from("presupuestos").select("id, numero, fecha, created_at, estado, oc_cliente, subtotal, moneda, sucursal_id, vendedor_id, created_by, clientes(razon_social)").eq("sociedad_id", sociedadId).in("estado", ESTADOS_PR_REMITO).order("created_at", { ascending: false })),
       db.from("clientes").select("id, razon_social, cuit, activo").eq("sociedad_id", sociedadId).order("razon_social"),
     ]);
-    setPrsBuscables((prs || []).map((p: any) => ({ id: p.id, numero: p.numero, cliente: p.clientes?.razon_social || "", oc: p.oc_cliente, estado: p.estado })));
     setClientes((cls || []).filter((c: any) => c.activo !== false).map((c: any) => ({ id: c.id, razon_social: c.razon_social, cuit: c.cuit })));
+    // Renglones, remitos ya hechos, sucursales y vendedores de esos PR (para mostrar el detalle y lo que falta entregar).
+    const ids = prs.map((p: any) => p.id);
+    const items: any[] = [], rems: any[] = [], ris: any[] = [];
+    for (let i = 0; i < ids.length; i += 150) {
+      const t = ids.slice(i, i + 150);
+      const [its, rs] = await Promise.all([
+        traerTodo<any>(() => db.from("presupuesto_items").select("id, presupuesto_id, descripcion, cantidad, orden").in("presupuesto_id", t).order("id")),
+        traerTodo<any>(() => db.from("remitos").select("id, presupuesto_id").in("presupuesto_id", t).order("id")),
+      ]);
+      items.push(...its); rems.push(...rs);
+    }
+    const remIds = rems.map((r) => r.id);
+    for (let i = 0; i < remIds.length; i += 150) ris.push(...await traerTodo<any>(() => db.from("remito_items").select("remito_id, presupuesto_item_id, descripcion, orden, cantidad").in("remito_id", remIds.slice(i, i + 150)).order("id")));
+    const sucIds = [...new Set(prs.map((p: any) => p.sucursal_id).filter(Boolean))] as string[];
+    const vendIds = [...new Set(prs.map((p: any) => p.vendedor_id || p.created_by).filter(Boolean))] as string[];
+    const [{ data: sucs }, { data: vends }] = await Promise.all([
+      sucIds.length ? db.from("cliente_sucursales").select("id, nombre").in("id", sucIds) : Promise.resolve({ data: [] }),
+      vendIds.length ? db.from("profiles").select("id, full_name").in("id", vendIds) : Promise.resolve({ data: [] }),
+    ]);
+    const sucNom: Record<string, string> = Object.fromEntries((sucs || []).map((x: any) => [x.id, x.nombre]));
+    const vendNom: Record<string, string> = Object.fromEntries((vends || []).map((x: any) => [x.id, (x.full_name || "").split(" ")[0]]));
+    const remPR: Record<string, string> = Object.fromEntries(rems.map((r) => [r.id, r.presupuesto_id]));
+    const itemsPR: Record<string, any[]> = {}, risPR: Record<string, any[]> = {};
+    for (const it of items) (itemsPR[it.presupuesto_id] ||= []).push(it);
+    for (const ri of ris) { const pid = remPR[ri.remito_id]; if (pid) (risPR[pid] ||= []).push(ri); }
+    setPrsBuscables(prs.map((p: any) => {
+      const its = (itemsPR[p.id] || []).sort((x, y) => (x.orden ?? 0) - (y.orden ?? 0));
+      const ent = renglonesParaEntregar(its, risPR[p.id] || [], [], []);
+      const d = descripcionCorta(its);
+      return {
+        id: p.id, numero: p.numero, fecha: p.fecha || (p.created_at || "").slice(0, 10), cliente: p.clientes?.razon_social || "", sucursal: sucNom[p.sucursal_id] || "",
+        oc: p.oc_cliente, detalle: d.corta, detalleTodo: d.todas, subtotal: p.subtotal != null ? Number(p.subtotal) : null, moneda: p.moneda,
+        vendedor: vendNom[p.vendedor_id || p.created_by] || "", estado: p.estado,
+        pedido: ent.reduce((t, r) => t + r.pedido, 0), falta: ent.reduce((t, r) => t + r.pendiente, 0),
+      };
+    }));
   }
 
   async function cargarSucursales(cid: string) {
@@ -238,7 +286,6 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
     setClienteId(cid); setClienteNombre(c?.razon_social || "");
     const sucs = await cargarSucursales(cid);
     setSucursal(sucs[0]?.id || "");
-    if (!renglones.length) agregarRenglon();
   }
 
   function agregarRenglon() {
@@ -248,6 +295,25 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
 
   function cantidadesRapidas(modoCant: "falta" | "llego") {
     setRenglones((prev) => prev.map((r) => (r.pendiente == null ? r : { ...r, cantidad: modoCant === "falta" ? r.pendiente : Math.min(r.pendiente, r.disponible ?? 0) })));
+  }
+
+  // Lista de PR para elegir: buscador libre (número, cliente, OC, artículo, sucursal, vendedor) y "solo con algo por entregar".
+  const prsFiltrados = useMemo(() => {
+    const norm = (t: string) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    const palabras = norm(buscaPR.trim()).split(/\s+/).filter(Boolean);
+    return prsBuscables.filter((p) => {
+      if (soloPendientes && !(p.falta > 0)) return false;
+      if (!palabras.length) return true;
+      const texto = norm(`${p.numero} ${p.cliente} ${p.oc || ""} ${p.detalleTodo} ${p.sucursal} ${p.vendedor}`);
+      return palabras.every((w) => texto.includes(w));
+    });
+  }, [prsBuscables, buscaPR, soloPendientes]);
+
+  function cambiarModo(m: "pr" | "libre") {
+    setModo(m); setPr(null); setClienteId(""); setClienteNombre(""); setSucursales([]); setSucursal(""); setRepartir(false);
+    setOc(""); setOcInicial(""); setOcAnterior(null); setOcDonde(null); setTipo("cai"); setObservaciones(""); setValor("0"); setMoneda("ARS"); setError("");
+    setRenglones([]);
+    if (m === "libre") agregarRenglon();
   }
 
   // ── Cuentas (lib/remitos-crear) ──────────────────────────────────
@@ -397,37 +463,57 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
                 <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">⚠️ Este remito ya tiene número {original?.cae ? "de ARCA" : "de CAI"}. Podés cambiarlo, pero si ya lo imprimiste o lo mandaste, el papel va a quedar distinto al sistema. El número no cambia.</p>
               )}
 
-              {/* Desde Remitos: elegir PR o remito independiente */}
-              {desdeRemitos && !pr && modo === "pr" && !clienteId && (
-                <div className="space-y-2">
-                  <div className="flex gap-2">
-                    <span className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-medium text-white">Desde un PR</span>
-                    <button onClick={() => setModo("libre")} className="rounded-md bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300">Remito independiente</button>
-                  </div>
-                  <Autocompletar className="w-full" mostrarSinEscribir placeholder="Buscá el PR por número, cliente u OC…"
-                    opciones={prsBuscables.map((p) => ({ valor: p.id, texto: `${p.numero} · ${p.cliente}`, detalle: p.oc ? `OC ${p.oc}` : undefined }))}
-                    onElegir={(id) => { setCargando(true); cargarPR(id, null).catch((e) => setError(e?.message || "No se pudo cargar el PR")).finally(() => setCargando(false)); }} />
+              {/* Desde Remitos: desde un PR (lista como la de Presupuestos) o remito independiente (la misma ventana sin PR) */}
+              {desdeRemitos && (
+                <div className="flex gap-2">
+                  {(["pr", "libre"] as const).map((m) => (
+                    <button key={m} onClick={() => modo !== m && cambiarModo(m)} className={`rounded-md px-3 py-1.5 text-xs font-medium ${modo === m ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                      {m === "pr" ? "Desde un PR" : "Remito independiente"}
+                    </button>
+                  ))}
                 </div>
               )}
-              {desdeRemitos && !pr && modo === "libre" && !clienteId && (
+              {desdeRemitos && modo === "pr" && !pr && !cargando && (
                 <div className="space-y-2">
-                  <div className="flex gap-2">
-                    <button onClick={() => setModo("pr")} className="rounded-md bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300">Desde un PR</button>
-                    <span className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-medium text-white">Remito independiente</span>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <input value={buscaPR} onChange={(e) => setBuscaPR(e.target.value)} autoFocus placeholder="Buscar lo que quieras: N° de PR, cliente, OC, artículo, sucursal, vendedor…" className={`${inputCls} min-w-[240px] flex-1`} />
+                    <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-300"><input type="checkbox" checked={soloPendientes} onChange={(e) => setSoloPendientes(e.target.checked)} /> Solo con algo por entregar</label>
+                    <span className="text-xs text-zinc-400">{prsFiltrados.length} PR</span>
                   </div>
-                  <Autocompletar className="w-full" placeholder="Cliente…" opciones={clientes.map((c) => ({ valor: c.id, texto: c.razon_social, detalle: c.cuit || undefined }))} onElegir={elegirCliente} />
+                  <div className="overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-700">
+                    <DataTable<PRFila>
+                      columns={[
+                        { key: "fecha", label: "Fecha", sortable: true, render: (p) => <span className="whitespace-nowrap text-zinc-500">{formatDate(p.fecha)}</span> },
+                        { key: "numero", label: "N°", sortable: true, render: (p) => <span className="whitespace-nowrap font-mono text-xs font-bold">{p.numero}</span> },
+                        { key: "detalle", label: "Detalle", sortable: true, render: (p) => <span className="line-clamp-1 max-w-[220px] text-xs text-zinc-600 dark:text-zinc-300" title={p.detalleTodo}>{p.detalle || "—"}</span> },
+                        { key: "cliente", label: "Cliente", sortable: true, render: (p) => <div className="leading-tight"><span className="text-xs font-medium">{p.cliente}</span>{p.sucursal && <span className="block text-[10px] text-zinc-400">{p.sucursal}</span>}</div> },
+                        { key: "oc", label: "N° OC", sortable: true, sortValue: (p) => p.oc || "", render: (p) => p.oc ? <span className="font-mono text-xs">{p.oc}</span> : <span className="text-zinc-400">—</span> },
+                        { key: "subtotal", label: "Subtotal s/IVA", className: "text-right", sortable: true, render: (p) => <span className="whitespace-nowrap text-xs">{p.subtotal != null ? formatCurrency(p.subtotal, esUSD(p.moneda) ? "USD" : "ARS") : "—"}</span> },
+                        { key: "vendedor", label: "Vend", sortable: true, render: (p) => <span className="text-xs">{p.vendedor}</span> },
+                        { key: "estado", label: "Estado", sortable: true, render: (p) => { const e = ESTADO_PR[p.estado]; return <Badge variant={e?.variant || "default"}>{e?.label || p.estado}</Badge>; } },
+                        { key: "falta", label: "Falta entregar", className: "text-right", sortable: true, render: (p) => p.falta <= 0 ? <span className="text-xs text-emerald-600">Todo remitido</span> : <span className={`whitespace-nowrap text-xs font-medium ${p.falta < p.pedido ? "text-amber-600" : "text-zinc-700 dark:text-zinc-200"}`}>{p.falta < p.pedido ? `${p.falta} de ${p.pedido}` : `${p.falta} (todo)`}</span> },
+                      ]}
+                      data={prsFiltrados}
+                      onRowClick={(p) => { setCargando(true); cargarPR(p.id, null).catch((e) => setError(e?.message || "No se pudo cargar el PR")).finally(() => setCargando(false)); }}
+                      emptyMessage={soloPendientes ? "No hay PR con algo por entregar (destildá el filtro para ver todos)" : "No hay PR"}
+                    />
+                  </div>
                 </div>
               )}
 
-              {(pr || clienteId) && (
+              {(pr || (modo === "libre" && !cargando)) && (
                 <>
                   {/* Cabecera */}
                   <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-4">
                     <label className="col-span-2 flex flex-col gap-0.5 text-[11px] text-zinc-500">Cliente
-                      <span className="flex items-center gap-1 text-sm font-medium text-zinc-900 dark:text-white">
-                        {clienteNombre}{pr && <span className="text-xs text-zinc-400">· {pr.numero}</span>}
-                        {desdeRemitos && <button onClick={() => { setPr(null); setClienteId(""); setRenglones([]); setError(""); }} className="ml-1 text-[11px] text-orange-600 hover:underline">cambiar</button>}
-                      </span>
+                      {!pr && !clienteId ? (
+                        <Autocompletar className="w-full" placeholder="Elegí el cliente…" opciones={clientes.map((c) => ({ valor: c.id, texto: c.razon_social, detalle: c.cuit || undefined }))} onElegir={elegirCliente} />
+                      ) : (
+                        <span className="flex items-center gap-1 text-sm font-medium text-zinc-900 dark:text-white">
+                          {clienteNombre}{pr && <span className="text-xs text-zinc-400">· {pr.numero}</span>}
+                          {desdeRemitos && <button onClick={() => (pr ? cambiarModo("pr") : (setClienteId(""), setClienteNombre(""), setSucursales([]), setSucursal("")))} className="ml-1 text-[11px] text-orange-600 hover:underline">{pr ? "elegir otro PR" : "cambiar"}</button>}
+                        </span>
+                      )}
                     </label>
                     <label className="flex flex-col gap-0.5 text-[11px] text-zinc-500">Fecha
                       <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className={inputCls} />
