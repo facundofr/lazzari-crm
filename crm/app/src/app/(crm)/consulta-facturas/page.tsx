@@ -20,6 +20,7 @@ import { estadoVisibleFactura } from "@/lib/estado-factura-venta";
 import { emisorDeSociedad } from "@/lib/emisor-sociedad";
 import { cargarOPsDeFacturas, abrirOrdenPagoPDF, type OPResumen } from "@/lib/orden-pago-pdf";
 import { Download, FileText, Mail, Paperclip, Search, X } from "lucide-react";
+import { destinatariosCortos } from "@/lib/envio-factura-texto";
 
 type Moneda = "ARS" | "USD";
 
@@ -241,7 +242,12 @@ export default function ConsultaFacturasPage() {
     { key: "pr", label: "PR / OC", render: (f) => <span className="text-xs text-zinc-500">{[f.presupuestos?.numero, f.oc_cliente ? `OC ${f.oc_cliente}` : null].filter(Boolean).join(" · ") || "—"}</span> },
     { key: "total", label: "Total", sortable: true, sortValue: (f) => Number(f.total), className: "text-right", render: (f) => <span className="tabular-nums">{formatCurrency(Number(f.total), f.moneda as Moneda)}</span> },
     { key: "estado", label: "Estado", render: (f) => { if (f.tipo.startsWith("NC") && f.estado !== "anulada") return <Badge variant="purple">Nota de crédito</Badge>; const e = ESTADO_VENTA[estadoVisibleFactura(f, f.fecha_vencimiento, hoy)] || { label: f.estado, variant: "default" as const }; return <Badge variant={e.variant}>{e.label}</Badge>; } },
-    { key: "mail", label: "Enviada", render: (f) => f.email_enviado_at ? <span className="text-xs text-emerald-600" title={f.email_enviado_a || ""}>✓ {formatDate(f.email_enviado_at)}</span> : <span className="text-xs text-zinc-400">—</span> },
+    { key: "mail", label: "Enviada", render: (f) => f.email_enviado_at ? (
+      <span className="block max-w-[220px]" title={`Enviada el ${formatDate(f.email_enviado_at)}${f.email_enviado_a ? ` a ${f.email_enviado_a}` : ""}`}>
+        <span className="text-xs text-emerald-600">✓ {formatDate(f.email_enviado_at)}</span>
+        {destinatariosCortos(f.email_enviado_a) && <span className="block truncate text-[10px] text-zinc-400">{destinatariosCortos(f.email_enviado_a)}</span>}
+      </span>
+    ) : <span className="text-xs text-zinc-400">—</span> },
   ];
 
   const colCompras: Column<FacturaCompra>[] = [

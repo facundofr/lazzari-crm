@@ -9,6 +9,7 @@ import { DataTable } from "@/components/ui/data-table";
 
 import { StatCard } from "@/components/ui/stat-card";
 import { formatCurrency, formatDate, formatDateTime, todayAR } from "@/lib/utils";
+import { textoEnvioCorto } from "@/lib/envio-factura-texto";
 import { generateFacturaPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64, documentFilename } from "@/lib/pdf-templates";
 import { Autocompletar } from "@/components/ui/autocompletar";
 import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/cobro-masivo-liquidacion";
@@ -1204,6 +1205,15 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     return lines.filter(Boolean).join("\n");
   }
 
+  /** A quién salió de verdad según Resend ("a, b"), o null si no vino. */
+  const destinatariosReales = (data: any): string | null => {
+    const to = Array.isArray(data?.to) ? data.to : data?.to ? [data.to] : [];
+    const txt = to.map((e: string) => String(e).trim()).filter(Boolean).join(", ");
+    return txt || null;
+  };
+  const mismosMails = (a?: string | null, b?: string | null) =>
+    (a || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean).sort().join(",") === (b || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean).sort().join(",");
+
   async function handleEmailFactura(f: FacturaRow) {
     const comp = formatComprobante(f.tipo, f.punto_venta, f.numero);
     const socName = sociedadActiva?.razonSocial || sociedadActiva?.nombre || "Lazzari";
@@ -1359,9 +1369,14 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         try {
           const res = await fetch(`/api/email/status?resend_id=${f.email_resend_id}`);
           const data = await res.json();
-          if (data.status && data.status !== f.email_estado) {
-            await (supabase as any).from("facturas").update({ email_estado: data.status }).eq("id", f.id);
-            setFacturas(prev => prev.map(x => x.id === f.id ? { ...x, email_estado: data.status } : x));
+          // Estado de entrega y, si no coincide, a quién salió de verdad.
+          const real = destinatariosReales(data);
+          const cambios: Record<string, unknown> = {};
+          if (data.status && data.status !== f.email_estado) cambios.email_estado = data.status;
+          if (real && !mismosMails(real, f.email_enviado_a)) cambios.email_enviado_a = real;
+          if (Object.keys(cambios).length) {
+            await (supabase as any).from("facturas").update(cambios).eq("id", f.id);
+            setFacturas(prev => prev.map(x => x.id === f.id ? { ...x, ...cambios } : x));
             updated++;
           }
         } catch { failed++; }
@@ -1499,6 +1514,11 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
               { key: "clientes", label: "Cliente", sortable: true, sortKey: "_clienteNombre", render: (r) => (
                 <div>
                   <span className="font-medium">{r.clientes?.razon_social || "\u2014"}</span>
+                  {r.email_enviado_at && (
+                    <p className="max-w-[260px] truncate text-[10px] text-zinc-400" title={`Enviada el ${formatDateTime(r.email_enviado_at)}${r.email_enviado_a ? ` a ${r.email_enviado_a}` : ""}`}>
+                      ✉ {textoEnvioCorto(r.email_enviado_at, r.email_enviado_a)}
+                    </p>
+                  )}
                   {clienteAlcanzoLimite(r.clientes) && (
                     <p className="mt-0.5 flex items-center gap-1 text-[10px] font-medium text-amber-600 dark:text-amber-400" title="Aviso informativo; no bloquea la emisión">
                       <AlertTriangle className="h-3 w-3" /> Límite de crédito alcanzado
@@ -1561,12 +1581,17 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                     try {
                       const res = await fetch(`/api/email/status?resend_id=${r.email_resend_id}`);
                       const data = await res.json();
-                      if (data.status && data.status !== r.email_estado) {
-                        await (supabase as any).from("facturas").update({ email_estado: data.status }).eq("id", r.id);
-                        setFacturas(prev => prev.map(f => f.id === r.id ? { ...f, email_estado: data.status } : f));
+                      const real = destinatariosReales(data);
+                      const cambios: Record<string, unknown> = {};
+                      if (data.status && data.status !== r.email_estado) cambios.email_estado = data.status;
+                      if (real && !mismosMails(real, r.email_enviado_a)) cambios.email_enviado_a = real;
+                      if (Object.keys(cambios).length) {
+                        await (supabase as any).from("facturas").update(cambios).eq("id", r.id);
+                        setFacturas(prev => prev.map(f => f.id === r.id ? { ...f, ...cambios } : f));
                       }
                       const statusLabels: Record<string, string> = { sent: "Enviado", delivered: "Entregado", bounced: "Rebotado", complained: "Spam", delivery_delayed: "Demorado" };
-                      alert(`Estado: ${statusLabels[data.status] || data.status}`);
+                      alert(`Estado: ${statusLabels[data.status] || data.status}${real ? `
+Salió a: ${real}` : ""}`);
                     } catch { /* ignore */ }
                   }}
                   className="flex justify-center cursor-pointer"
