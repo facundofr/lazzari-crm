@@ -1,6 +1,6 @@
 // Prueba rápida: npx tsx scripts/test-finanzas-propuestas.ts
 import assert from "node:assert/strict";
-import { armarBandeja, textoParaRegla, cuitEnTexto, lineasParaIA, resumenBandeja, type DatosBandeja, type FacturaBandeja } from "../src/lib/finanzas-propuestas";
+import { armarBandeja, textoParaRegla, cuitEnTexto, lineasParaIA, resumenBandeja, gastosFijosParaDebito, type DatosBandeja, type FacturaBandeja } from "../src/lib/finanzas-propuestas";
 
 const CTA = "cta-cc";
 const fac = (id: string, pv: number, numero: number, saldo: number, cliente: string, extra: Partial<FacturaBandeja> = {}): FacturaBandeja => ({
@@ -139,4 +139,26 @@ assert.equal(textoParaRegla("PAGO A PROVEEDORES OP.2600904"), null);
 assert.equal(textoParaRegla("SEGURO INTEGRAL COMERCIO 123"), "SEGURO INTEGRAL COMERCIO");
 assert.equal(cuitEnTexto("CTE 007875 285 30707784292 X"), "30707784292");
 
+
+// 16/10/2026: débitos automáticos de gastos fijos y pagos a proveedores con factura de ARCA.
+{
+
+  const fijos = gastosFijosParaDebito([
+    { id: "a1", descripcion: "ARBA plan de pagos web AA544RB 780101", categoria: "Débitos automáticos", notas: "DPR PLANPORWEB AUT07801" },
+    { id: "a3", descripcion: "ARBA plan de pagos web AA544RB 780301", categoria: "Débitos automáticos", notas: "DPR PLANPORWEB AUT07801" },
+    { id: "luz", descripcion: "Luz — Cooperativa Eléctrica (suministro 03A002300320444)", categoria: "Débitos automáticos", notas: "cuenta 113354000002" },
+  ]);
+  assert.deepEqual(fijos.find((g) => g.id === "a1")?.referencias, ["780101"], "la referencia compartida (AUT07801) no sirve");
+  const items = armarBandeja({ ...base, gastosFijosDebito: fijos, facturasCompra: [], lineas: [
+    { id: "deb", fecha: "2026-10-13", concepto: "DEBITO DIRECTO · DPR PLANPORWEB AA544RB 780301 AUT07801 P 0303", importe: -12864.7, cuenta_id: CTA },
+    { id: "san", fecha: "2026-09-24", concepto: "TRANSFERENCIA · 30718092511 FACTURA", importe: -345468.43, cuenta_id: CTA,
+      factura_arca: { tipo: "FA", punto_venta: 7, numero: 24296, fecha: "2026-09-24", total: 345468.43, emisor: "SANITARIOS SAN MARTIN S.A.", cuit: "30718092511", unica: true } },
+  ] });
+  const deb = items.find((i) => i.linea_id === "deb")!;
+  assert.equal(deb.gastoFijo?.id, "a3", "débito automático → su gasto fijo");
+  const san = items.find((i) => i.linea_id === "san")!;
+  assert.equal(san.tipo, "pago_proveedor");
+  assert.equal(san.pagoProveedor?.factura.numero, 24296);
+  assert.equal(san.confianza, "alta");
+}
 console.log("finanzas-propuestas: OK", items.length, "renglones");

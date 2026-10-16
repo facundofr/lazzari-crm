@@ -14,7 +14,7 @@ import {
 import { cruzarPago, mismoCliente, etiquetaFactura, type FacturaAbierta, type PagoExtraido } from "./agente-mail";
 
 export type Confianza = "alta" | "media" | "baja";
-export type TipoItem = "cruce" | "cobro_nuevo" | "pago_gasto" | "a_cargar" | "sin_resolver";
+export type TipoItem = "cruce" | "cobro_nuevo" | "pago_gasto" | "pago_proveedor" | "a_cargar" | "sin_resolver";
 
 export interface FacturaBandeja extends FacturaAbierta { fecha: string }
 export interface Tercero { id: string; razon_social: string | null; cuit: string | null }
@@ -52,6 +52,10 @@ export interface ItemBandeja {
   cruce?: { clasificacion: ClasificacionLinea; subtipo?: string | null; movimiento_id?: string | null; cheque_id?: string | null; contra_cuenta_id?: string | null; nota?: string | null };
   cobro?: CobroArmado;
   gasto?: { id: string; descripcion: string };
+  /** Débito automático de un gasto fijo (luz, Flow, ARBA…): al confirmar se carga el gasto del mes y se paga con la línea. */
+  gastoFijo?: { id: string; descripcion: string; categoria: string };
+  /** Pago a un proveedor de una factura de ARCA que no está cargada en Compras: al confirmar se carga el pago y se cruza. */
+  pagoProveedor?: { proveedor_id: string | null; proveedor_nombre: string; factura: NonNullable<LineaCruce["factura_arca"]> };
   /** Clasificación que se puede recordar como regla al confirmar. */
   regla?: { texto: string; clasificacion: ClasificacionLinea; subtipo?: string | null; contra_cuenta_id?: string | null };
 }
@@ -207,6 +211,23 @@ export interface DatosBandeja {
   gastos: GastoSinPago[];
   ia: Map<string, SugerenciaIA>;
   descartadas: Set<string>;
+  /** Gastos fijos que se pagan por débito automático, con las referencias que aparecen en el banco (n° de cliente, factura, plan…). */
+  gastosFijosDebito?: { id: string; descripcion: string; categoria: string; referencias: string[] }[];
+  /** Facturas de compra cargadas (para no proponer pagar por ARCA una que ya está en Compras). */
+  facturasCompra?: { proveedor_id: string | null; punto_venta: number; numero: number; estado: string }[];
+}
+
+/** Referencias de un gasto fijo para reconocer su débito automático: tiras de 6+ caracteres con dígitos. */
+export function referenciasGastoFijo(texto: string): string[] {
+  return [...new Set((String(texto || "").toUpperCase().match(/[A-Z0-9]*\d[A-Z0-9]*/g) || []).filter((t) => t.length >= 6 && /\d{4}/.test(t)))];
+}
+
+/** Gastos fijos de débito automático con sus referencias propias (las que comparten dos gastos no sirven para distinguirlos). */
+export function gastosFijosParaDebito(fijos: { id: string; descripcion: string; categoria: string; notas?: string | null }[]) {
+  const conRefs = fijos.map((g) => ({ id: g.id, descripcion: g.descripcion, categoria: g.categoria, referencias: referenciasGastoFijo(`${g.descripcion} ${g.notas || ""}`) }));
+  const cuenta = new Map<string, number>();
+  for (const g of conRefs) for (const r of g.referencias) cuenta.set(r, (cuenta.get(r) || 0) + 1);
+  return conRefs.map((g) => ({ ...g, referencias: g.referencias.filter((r) => cuenta.get(r) === 1) })).filter((g) => g.referencias.length);
 }
 
 export function armarBandeja(d: DatosBandeja): ItemBandeja[] {
@@ -385,6 +406,44 @@ export function armarBandeja(d: DatosBandeja): ItemBandeja[] {
           gasto: { id: gasto.id, descripcion: gasto.descripcion },
         });
         continue;
+      }
+      // 6b) Débito automático de un gasto fijo: el concepto (con lo que dice el resumen del banco) trae su referencia.
+      const texto = String(l.concepto || "").toUpperCase();
+      const fijo = (d.gastosFijosDebito || []).find((g) => g.referencias.some((r) => texto.includes(r)));
+      if (fijo && !yaMarcada) {
+        out.push({
+          ...base(l), tipo: "pago_gasto", confianza: "alta", origen: "gastos",
+          titulo: `Débito automático: ${fijo.descripcion}`,
+          detalle: [`La referencia del banco coincide con el gasto fijo (${fijo.categoria}): se carga el gasto del mes y queda pagado`],
+          avisos: [], gastoFijo: fijo,
+        });
+        continue;
+      }
+      // 7a) Factura de ARCA que paga esta transferencia (mismo CUIT e importe): si no está en Compras, se carga el pago y se cruza.
+      const fa = l.factura_arca;
+      if (fa && !yaMarcada) {
+        const provA = provPorCuit.get(fa.cuit);
+        const enCompras = (d.facturasCompra || []).find((f) => f.proveedor_id && f.proveedor_id === provA?.id && f.punto_venta === fa.punto_venta && f.numero === fa.numero);
+        const nro = `${fa.tipo} ${String(fa.punto_venta).padStart(5, "0")}-${String(fa.numero).padStart(8, "0")}`;
+        if (!enCompras) {
+          out.push({
+            ...base(l), tipo: "pago_proveedor", confianza: fa.unica ? "alta" : "media", origen: "facturas",
+            titulo: `Pago a ${provA?.razon_social || fa.emisor} → ${nro}`,
+            detalle: [`Factura de ARCA del ${fa.fecha.split("-").reverse().join("/")} por ${fmt(fa.total)}: mismo CUIT e importe exacto${provA ? "" : " (el proveedor no está en el CRM)"}`],
+            avisos: fa.unica ? [] : ["Hay varias facturas del mismo importe (abono mensual): se toma la más reciente antes del pago."],
+            pagoProveedor: { proveedor_id: provA?.id || null, proveedor_nombre: provA?.razon_social || fa.emisor, factura: fa },
+          });
+          continue;
+        }
+        if (enCompras.estado !== "pagada") {
+          out.push({
+            ...base(l), tipo: "a_cargar", confianza: "alta", origen: "facturas",
+            titulo: `Pago a ${provA?.razon_social || fa.emisor} → ${nro} (falta la orden de pago)`,
+            detalle: ["La factura ya está cargada en Compras: armá la orden de pago y se cruza sola"],
+            avisos: [], cruce: { clasificacion: "pago", nota: `Proveedor: ${provA?.razon_social || fa.emisor} — ${nro}` },
+          });
+          continue;
+        }
       }
       // 7) Transferencia a un proveedor por CUIT: queda "a cargar" con el proveedor anotado (la OP se arma en Órdenes de pago).
       const prov = cuit ? provPorCuit.get(cuit) : undefined;

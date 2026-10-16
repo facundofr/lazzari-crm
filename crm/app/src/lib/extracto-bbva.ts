@@ -380,6 +380,8 @@ export interface LineaCruce {
   cuenta_id: string | null;
   /** Si ya la marcó como cobro/pago a cargar, se sigue buscando su movimiento. */
   clasificacion?: string | null;
+  /** Factura de ARCA que paga esta salida (leída de "Mis comprobantes recibidos"; ver lib/arca-recibidos). */
+  factura_arca?: { tipo: string; punto_venta: number; numero: number; fecha: string; total: number; emisor: string; cuit: string; unica: boolean } | null;
 }
 
 export interface MovCruce extends MovimientoClasificable {

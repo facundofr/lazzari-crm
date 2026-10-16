@@ -19,12 +19,17 @@ import {
 } from "@/lib/finanzas-propuestas";
 import { CLASIFICACION_LABEL, type ClasificacionLinea, type MovCruce, type ChequeCruce, type ReglaCruce } from "@/lib/extracto-bbva";
 import { notaLiteral, notaCobro, armarCobroSistemaAnterior, pesos, RETENCION_LABEL, type RetencionNota } from "@/lib/finanzas-notas";
+import { leerResumenBbva, cruzarResumen, textoContraparte, type Contraparte } from "@/lib/resumen-bbva";
+import { leerArcaRecibidos, facturaDelPago, numeroFactura } from "@/lib/arca-recibidos";
+import { gastosFijosParaDebito, cuitEnTexto } from "@/lib/finanzas-propuestas";
 import { leerArchivoExtracto, guardarArchivoExtracto, type CuentaRow, type ArchivoPreview } from "@/components/extracto-bbva";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, History, Loader2, Sparkles, Upload, X } from "lucide-react";
 
 interface LineaRow {
   id: string; cuenta_id: string; fecha: string; descripcion: string; monto: number; tipo: "credito" | "debito";
   estado: string; clave: string | null; clasificacion: ClasificacionLinea | null; cheque_id: string | null; match_movimiento_id: string | null;
+  /** A quién fue / de quién vino (resumen PDF del BBVA o ARCA). Falta si no se corrió la migración 20261016180000. */
+  contraparte?: Contraparte | null;
 }
 interface MovRow extends MovCruce { orden_pago_id?: string | null }
 interface RegistroRow { id: number; created_at: string; accion: string; tipo: string | null; origen: string | null; confianza: string | null; resumen: string | null; usuario_id: string | null; resultado: any }
@@ -49,6 +54,8 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
   const [datos, setDatos] = useState<{
     movimientos: MovRow[]; cheques: ChequeCruce[]; reglas: ReglaCruce[]; facturas: FacturaBandeja[]; clientes: Tercero[]; proveedores: Tercero[];
     pagosMail: PagoMail[]; gastos: GastoSinPago[]; gastosFijos: { descripcion: string; monto: number; moneda: string; cuit: string | null }[];
+    gastosFijosDebito: { id: string; descripcion: string; categoria: string; referencias: string[] }[];
+    facturasCompra: { proveedor_id: string | null; punto_venta: number; numero: number; estado: string }[];
   } | null>(null);
   const [ia, setIa] = useState<Map<string, SugerenciaIA>>(new Map());
   const [descartadas, setDescartadas] = useState<Set<string>>(new Set());
@@ -86,8 +93,12 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
 
       const [ls, movs, chs, rg, cli, prov, fs, ap, mails, gm, gf, props, reg] = await Promise.all([
         ids.length ? traerTodo<LineaRow>(() => db.from("extracto_movimientos")
-          .select("id, cuenta_id, fecha, descripcion, monto, tipo, estado, clave, clasificacion, cheque_id, match_movimiento_id")
-          .in("cuenta_id", ids).order("fecha").order("id")) : Promise.resolve([]),
+          .select("id, cuenta_id, fecha, descripcion, monto, tipo, estado, clave, clasificacion, cheque_id, match_movimiento_id, contraparte")
+          .in("cuenta_id", ids).order("fecha").order("id"))
+          // Sin la migración 20261016180000 (columna contraparte) sigue igual que antes.
+          .catch(() => traerTodo<LineaRow>(() => db.from("extracto_movimientos")
+            .select("id, cuenta_id, fecha, descripcion, monto, tipo, estado, clave, clasificacion, cheque_id, match_movimiento_id")
+            .in("cuenta_id", ids).order("fecha").order("id"))) : Promise.resolve([]),
         traerTodo<MovRow>(() => db.from("movimientos")
           .select("id, fecha, monto, moneda, tipo, cliente_id, proveedor_id, anulado, descripcion, nota_credito_compra_id, ajuste_sentido, orden_pago_id")
           .eq("sociedad_id", sociedadId).gte("fecha", desdeMovs).order("fecha").order("id")),
@@ -100,7 +111,7 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
         traerTodo<{ factura_id: string; monto: number }>(() => db.from("cobro_aplicaciones").select("factura_id, monto, facturas!inner(sociedad_id)").eq("facturas.sociedad_id", sociedadId).order("id")).catch(() => []),
         db.from("agente_mail_procesados").select("id, fecha_mail, asunto, datos").eq("sociedad_id", sociedadId).eq("categoria", "pago_retencion").gte("fecha_mail", desdeMovs).limit(500),
         db.from("gastos_manuales").select("id, fecha, descripcion, monto, moneda, proveedores(cuit)").eq("sociedad_id", sociedadId).gte("fecha", desdeMovs).limit(1000),
-        db.from("gastos_fijos").select("descripcion, monto, moneda, activo, proveedores(cuit)").eq("sociedad_id", sociedadId).eq("activo", true),
+        db.from("gastos_fijos").select("id, descripcion, categoria, notas, monto, moneda, activo, proveedores(cuit)").eq("sociedad_id", sociedadId).eq("activo", true),
         db.from("finanzas_propuestas").select("linea_id, origen, datos, confianza, estado").eq("sociedad_id", sociedadId),
         db.from("finanzas_registro").select("id, created_at, accion, tipo, origen, confianza, resumen, usuario_id, resultado").eq("sociedad_id", sociedadId).order("created_at", { ascending: false }).limit(300),
       ]);
@@ -109,6 +120,10 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
         if (/finanzas_propuestas|finanzas_registro|does not exist|schema cache/i.test(msg)) setFaltaMigracion(true);
         else throw props.error || reg.error;
       } else setFaltaMigracion(false);
+
+      // Facturas de compra recientes (para no proponer pagar por ARCA una que ya está en Compras).
+      const fcs = await traerTodo<{ proveedor_id: string | null; numero_factura: string | null; estado: string }>(() => db.from("facturas_compra")
+        .select("id, proveedor_id, numero_factura, estado").eq("sociedad_id", sociedadId).gte("fecha", "2026-06-01").order("id")).catch(() => []);
 
       // Parte en transferencia de los pagos de OP mixtos (como en Extractos).
       const idsOp = [...new Set(movs.map((m) => m.orden_pago_id).filter(Boolean) as string[])];
@@ -153,6 +168,11 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
           id: g.id, fecha: String(g.fecha).slice(0, 10), descripcion: g.descripcion, monto: Number(g.monto), moneda: g.moneda || "ARS", proveedor_cuit: g.proveedores?.cuit ?? null,
         })),
         gastosFijos: ((gf.data || []) as any[]).map((g) => ({ descripcion: g.descripcion, monto: Number(g.monto), moneda: g.moneda || "ARS", cuit: g.proveedores?.cuit ?? null })),
+        gastosFijosDebito: gastosFijosParaDebito(((gf.data || []) as any[]).map((g) => ({ id: g.id, descripcion: g.descripcion, categoria: g.categoria || "", notas: g.notas }))),
+        facturasCompra: fcs.map((f) => {
+          const m = String(f.numero_factura || "").match(/(\d+)\D+(\d+)\s*$/);
+          return { proveedor_id: f.proveedor_id, punto_venta: m ? Number(m[1]) : 0, numero: m ? Number(m[2]) : 0, estado: f.estado };
+        }),
       });
       const mapaIa = new Map<string, SugerenciaIA>();
       const desc = new Set<string>();
@@ -185,11 +205,16 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
     const yaCruzados = new Set(lineas.map((l) => l.match_movimiento_id).filter(Boolean) as string[]);
     const usados = new Set(lineas.filter((l) => l.cheque_id && l.clasificacion).map((l) => `${l.clasificacion}:${l.cheque_id}`));
     return armarBandeja({
-      lineas: pendientes.map((l) => ({ id: l.id, fecha: String(l.fecha).slice(0, 10), concepto: l.descripcion, importe: importeDe(l), cuenta_id: l.cuenta_id, clasificacion: l.clasificacion })),
+      // El concepto suma lo que dice el resumen del banco (nombre y CUIT de la otra parte): así lo reconocen proveedor, cliente y reglas.
+      lineas: pendientes.map((l) => {
+        const extra = textoContraparte(l.contraparte);
+        return { id: l.id, fecha: String(l.fecha).slice(0, 10), concepto: extra ? `${l.descripcion} · ${extra}` : l.descripcion, importe: importeDe(l), cuenta_id: l.cuenta_id, clasificacion: l.clasificacion, factura_arca: l.contraparte?.factura ?? null };
+      }),
       movimientos: datos.movimientos.filter((m) => !m.anulado && !yaCruzados.has(m.id)),
       cheques: datos.cheques, cuentas, reglas: datos.reglas, chequesUsados: usados,
       facturas: datos.facturas, clientes: datos.clientes, proveedores: datos.proveedores,
       pagosMail: datos.pagosMail, gastos: datos.gastos, ia, descartadas,
+      gastosFijosDebito: datos.gastosFijosDebito, facturasCompra: datos.facturasCompra,
     });
   }, [datos, lineas, pendientes, cuentas, ia, descartadas]);
 
@@ -364,6 +389,35 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
       await anotar(item, "confirmada", { movimientos: ids, movimiento_cruzado: movId, facturas: c.facturas.map((f) => f.numero), nota });
       return true;
     }
+    if (item.gastoFijo) {
+      // Débito automático: se carga el gasto del mes (atado al gasto fijo) y se paga con la línea del banco.
+      const g = item.gastoFijo;
+      const mes = new Date(`${item.fecha}T12:00:00Z`).toLocaleDateString("es-AR", { month: "long", year: "numeric", timeZone: "UTC" });
+      const { data: gm, error: e1 } = await (supabase as any).from("gastos_manuales").insert({
+        sociedad_id: sociedadId, fecha: item.fecha, descripcion: `${g.descripcion} — ${mes}`, categoria: g.categoria || "Débitos automáticos", monto: Math.abs(item.importe), moneda: "ARS",
+        notas: "Débito automático del banco (Para confirmar).", tipo_gasto: "Gasto fijo", medio_pago: "transferencia", tipo_recurrencia: "mensual", gasto_fijo_id: g.id, created_by: profile?.id,
+      }).select("id").single();
+      if (e1) throw e1;
+      const { data, error: e2 } = await (supabase as any).rpc("pagar_gasto_desde_extracto", { p_sociedad_id: sociedadId, p_linea_id: item.linea_id, p_gasto_id: gm.id });
+      if (e2) throw e2;
+      if (data?.movimiento_id) await aplicarCruces([{ linea_id: item.linea_id, clasificacion: "pago", movimiento_id: data.movimiento_id, nota: `Débito automático: ${g.descripcion} — ${mes}: ${pesos(item.importe)}.` }]);
+      await anotar(item, "confirmada", { gasto_id: gm.id, gasto_fijo_id: g.id, movimiento_id: data?.movimiento_id });
+      return true;
+    }
+    if (item.pagoProveedor) {
+      // Pago de una factura de ARCA que no está en Compras: queda el pago al proveedor con la factura en la descripción.
+      const pp = item.pagoProveedor;
+      const nro = numeroFactura(pp.factura);
+      const desc = `Pago — ${pp.proveedor_nombre} — ${nro} del ${formatDate(pp.factura.fecha)} (factura de ARCA, no cargada en Compras)`;
+      const { data: mv, error: e1 } = await (supabase as any).from("movimientos").insert({
+        tipo: "pago", proveedor_id: pp.proveedor_id, descripcion: desc, monto: Math.abs(item.importe), moneda: "ARS", fecha: item.fecha,
+        conciliado: false, sociedad_id: sociedadId, created_by: profile?.id, cuenta_id: item.cuenta_id,
+      }).select("id").single();
+      if (e1) throw e1;
+      await aplicarCruces([{ linea_id: item.linea_id, clasificacion: "pago", movimiento_id: mv.id, nota: `Pago por transferencia: ${pesos(item.importe)} — ${pp.proveedor_nombre} (CUIT ${pp.factura.cuit}) — ${nro} del ${formatDate(pp.factura.fecha)} por ${pesos(pp.factura.total)} (ARCA).` }]);
+      await anotar(item, "confirmada", { movimiento_id: mv.id, factura_arca: pp.factura });
+      return true;
+    }
     if (item.gasto) {
       const { data, error: e } = await (supabase as any).rpc("pagar_gasto_desde_extracto", { p_sociedad_id: sociedadId, p_linea_id: item.linea_id, p_gasto_id: item.gasto.id });
       if (e) throw e;
@@ -384,7 +438,7 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
   }
 
   async function confirmar(lista: ItemBandeja[], preguntar: boolean) {
-    const validos = lista.filter((i) => i.cobro || i.gasto || i.cruce);
+    const validos = lista.filter((i) => i.cobro || i.gasto || i.gastoFijo || i.pagoProveedor || i.cruce);
     if (!validos.length) return;
     if (preguntar) {
       const cobros = validos.filter((i) => i.cobro).length, gastos = validos.filter((i) => i.gasto).length;
@@ -396,8 +450,8 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
     let ok = 0;
     const errores: string[] = [];
     // Los cruces simples van juntos (más rápido); cobros y gastos de a uno.
-    const simples = validos.filter((i) => i.cruce && !i.cobro && !i.gasto);
-    const resto = validos.filter((i) => i.cobro || i.gasto);
+    const simples = validos.filter((i) => i.cruce && !i.cobro && !i.gasto && !i.gastoFijo && !i.pagoProveedor);
+    const resto = validos.filter((i) => i.cobro || i.gasto || i.gastoFijo || i.pagoProveedor);
     try {
       if (simples.length) {
         await aplicarCruces(simples.map((i) => ({ linea_id: i.linea_id, ...i.cruce, nota: notaDe(i) })));
@@ -523,12 +577,81 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
     setAviso(null);
     const out: ArchivoPreview[] = [];
     const errores: string[] = [];
+    const avisos: string[] = [];
     for (const f of lista) {
-      try { out.push(await leerArchivoExtracto(f, cuentas, clavesPorCuenta)); } catch (e) { errores.push(`${f.name}: ${errorTexto(e)}`); }
+      try {
+        if (/\.pdf$/i.test(f.name)) avisos.push(await subirResumenPdf(f));
+        else if (/\.csv$/i.test(f.name)) avisos.push(await subirArcaRecibidos(f));
+        else out.push(await leerArchivoExtracto(f, cuentas, clavesPorCuenta));
+      } catch (e) { errores.push(`${f.name}: ${errorTexto(e)}`); }
     }
     setArchivos(out);
     setOcupado(null);
-    if (errores.length) setAviso(`⚠️ ${errores.join("\n")}`);
+    if (avisos.length || errores.length) setAviso([...avisos, ...errores.map((e) => `⚠️ ${e}`)].join("\n"));
+    if (avisos.length) await cargar();
+  }
+
+  /** Líneas sin cerrar con la cuenta en dígitos, para cruzar con el resumen o con ARCA. */
+  const lineasParaDetalle = () => {
+    const digitos = new Map(cuentas.map((c) => [c.id, String(c.numero || "").replace(/\D/g, "")]));
+    return lineas.filter((l) => l.estado === "pendiente").map((l) => ({ id: l.id, fecha: String(l.fecha).slice(0, 10), importe: importeDe(l), cuentaDigitos: digitos.get(l.cuenta_id) || "" }));
+  };
+
+  async function guardarContrapartes(items: { linea_id: string; contraparte: Contraparte }[]) {
+    for (let i = 0; i < items.length; i += 200) {
+      const { error: e } = await (supabase as any).rpc("guardar_contrapartes_extracto", { p_sociedad_id: sociedadId, p_items: items.slice(i, i + 200) });
+      if (e) {
+        if (/guardar_contrapartes_extracto|contraparte|schema cache/i.test(String(e.message || ""))) throw new Error("Falta correr la migración 20261016180000_extracto_contraparte.sql en Supabase.");
+        throw e;
+      }
+    }
+  }
+
+  /** Resumen PDF del BBVA: nombre y CUIT de cada transferencia, cobro y débito automático. */
+  async function subirResumenPdf(f: File): Promise<string> {
+    const pdfjs: any = await import("pdfjs-dist");
+    if (!pdfjs.GlobalWorkerOptions.workerSrc) pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(await f.arrayBuffer()) }).promise;
+    let texto = "";
+    for (let i = 1; i <= doc.numPages; i++) {
+      const tc = await (await doc.getPage(i)).getTextContent();
+      texto += (tc.items as any[]).map((it) => ("str" in it ? it.str + (it.hasEOL ? "\n" : " ") : "")).join("") + "\n";
+    }
+    const r = leerResumenBbva(texto);
+    if (!r.items.length) return `${f.name}: no encontré las secciones de transferencias ni débitos (¿es el resumen mensual del BBVA?).`;
+    const cruces = cruzarResumen(r.items, lineasParaDetalle());
+    await guardarContrapartes(cruces);
+    await anotar(null, "resumen_cargado", { archivo: f.name, renglones: r.items.length, identificadas: cruces.length, hasta: r.hasta },
+      `Resumen BBVA ${f.name} (al ${formatDate(r.hasta || "")}): ${r.items.length} renglones, ${cruces.length} líneas del banco identificadas`);
+    return `✔ Resumen ${f.name}: ${r.items.length} transferencias y débitos leídos; ${cruces.length} líneas sin cerrar ahora tienen nombre y CUIT.`;
+  }
+
+  /** ARCA "Mis comprobantes recibidos": qué factura paga cada transferencia a un proveedor. */
+  async function subirArcaRecibidos(f: File): Promise<string> {
+    const buf = await f.arrayBuffer();
+    let txt = new TextDecoder("utf-8").decode(buf);
+    if (txt.includes("\uFFFD")) txt = new TextDecoder("latin1").decode(buf);
+    const facturas = leerArcaRecibidos(txt);
+    if (!facturas.length) return `${f.name}: no parece el CSV de ARCA "Mis comprobantes recibidos".`;
+    const usadas = new Set<string>();
+    const porId = new Map(lineas.map((l) => [l.id, l]));
+    const items: { linea_id: string; contraparte: Contraparte }[] = [];
+    for (const x of lineasParaDetalle().filter((l) => l.importe < 0).sort((a, b) => a.fecha.localeCompare(b.fecha))) {
+      const l = porId.get(x.id)!;
+      const cuit = l.contraparte?.cuit || cuitEnTexto(l.descripcion);
+      if (!cuit) continue;
+      const m = facturaDelPago(cuit, x.importe, x.fecha, facturas, usadas);
+      if (!m) continue;
+      items.push({ linea_id: x.id, contraparte: { fuente: l.contraparte?.fuente || "arca", factura: { tipo: m.factura.tipo, punto_venta: m.factura.punto_venta, numero: m.factura.numero, fecha: m.factura.fecha, total: m.factura.total, emisor: m.factura.emisor, cuit: m.factura.cuit, unica: m.unica } } });
+    }
+    await guardarContrapartes(items);
+    // Facturas de proveedores del CRM que no están cargadas en Compras (aviso, no traba).
+    const provPorCuit = new Map((datos?.proveedores || []).map((p) => [String(p.cuit || "").replace(/\D/g, ""), p.id]));
+    const enCompras = new Set((datos?.facturasCompra || []).map((c) => `${c.proveedor_id}|${c.punto_venta}|${c.numero}`));
+    const faltan = facturas.filter((x) => !x.esNC && provPorCuit.has(x.cuit) && !enCompras.has(`${provPorCuit.get(x.cuit)}|${x.punto_venta}|${x.numero}`));
+    await anotar(null, "arca_cargado", { archivo: f.name, facturas: facturas.length, pagos_identificados: items.length, sin_cargar: faltan.length },
+      `ARCA recibidos ${f.name}: ${facturas.length} facturas, ${items.length} pagos identificados, ${faltan.length} facturas de proveedores sin cargar en Compras`);
+    return `✔ ARCA ${f.name}: ${facturas.length} facturas leídas; ${items.length} transferencias a proveedores tienen su factura.${faltan.length ? ` ${faltan.length} facturas de proveedores del CRM no están cargadas en Compras (ej. ${faltan.slice(0, 3).map((x) => `${x.emisor} ${numeroFactura(x)}`).join(", ")}).` : ""}`;
   }
 
   async function guardarArchivos() {
@@ -557,7 +680,7 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
 
   const renglon = (i: ItemBandeja) => {
     const abiertoCorregir = corrigiendo === i.linea_id;
-    const puedeConfirmar = Boolean(i.cobro || i.gasto || i.cruce) && !faltaMigracion;
+    const puedeConfirmar = Boolean(i.cobro || i.gasto || i.gastoFijo || i.pagoProveedor || i.cruce) && !faltaMigracion;
     return (
       <div key={i.linea_id} className="py-2">
         <div className="flex flex-wrap items-start gap-2 text-sm">
@@ -661,10 +784,10 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
         className={`rounded-xl border-2 border-dashed p-3 text-sm transition ${arrastrando ? "border-orange-400 bg-orange-50 dark:bg-orange-950/30" : "border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900"}`}
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-zinc-600 dark:text-zinc-300"><b>Arrastrá acá el Excel del BBVA</b> (cualquiera de los dos que baja el banco). Se verifican los saldos al centavo y el sistema arma todo solo.</p>
+          <p className="text-zinc-600 dark:text-zinc-300"><b>Arrastrá acá el Excel del BBVA</b> (se verifican los saldos al centavo), el <b>resumen mensual en PDF</b> (pone nombre y CUIT a cada transferencia y débito automático) y el <b>CSV de ARCA</b> "Mis comprobantes recibidos" (qué factura paga cada transferencia a un proveedor).</p>
           <label className="flex cursor-pointer items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-600">
             {ocupado === "subir" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} Subir extracto
-            <input type="file" accept=".xls,.xlsx" multiple className="hidden" onChange={(e) => { void subir(e.target.files); e.target.value = ""; }} />
+            <input type="file" accept=".xls,.xlsx,.pdf,.csv" multiple className="hidden" onChange={(e) => { void subir(e.target.files); e.target.value = ""; }} />
           </label>
         </div>
         {archivos.length > 0 && (
