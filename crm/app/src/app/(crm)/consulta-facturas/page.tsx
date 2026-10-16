@@ -210,9 +210,23 @@ export default function ConsultaFacturasPage() {
       const { data: contactos } = await (supabase as any).from("contactos").select("nombre, email").eq("entity_type", "cliente").eq("entity_id", f.cliente_id);
       for (const c of contactos || []) if (c.email && !sugeridos.some((s) => s.email === c.email)) sugeridos.push({ email: c.email, label: c.nombre || "Contacto" });
     } catch { /* sin contactos */ }
+    // El solicitante del PR va primero y marcado en "Para".
+    let solicitante = "";
+    if (f.presupuesto_id) {
+      try {
+        const { data: pr } = await (supabase as any).from("presupuestos").select("contacto:contacto_id(nombre, email)").eq("id", f.presupuesto_id).maybeSingle();
+        solicitante = String(pr?.contacto?.email || "").trim();
+        if (solicitante) {
+          const label = `⭐ Solicitante: ${pr.contacto.nombre || solicitante}`;
+          const ya = sugeridos.find((s) => s.email.toLowerCase() === solicitante.toLowerCase());
+          if (ya) ya.label = label; else sugeridos.unshift({ email: solicitante, label });
+        }
+      } catch { /* sin PR */ }
+    }
+    const base = f.clientes?.email_facturacion?.split(",")[0]?.trim() || f.clientes?.email || "";
     setMail({
       open: true,
-      to: f.clientes?.email_facturacion?.split(",")[0]?.trim() || f.clientes?.email || "",
+      to: [base, solicitante].filter((e, i, a) => e && a.findIndex((x) => x.toLowerCase() === e.toLowerCase()) === i).join(", "),
       subject: applyTemplateVars(template.asunto, vars),
       body: applyTemplateVars(template.cuerpo, vars),
       filename: documentFilename(f.tipo, f.punto_venta, f.numero, f.clientes?.razon_social),
@@ -389,10 +403,10 @@ export default function ConsultaFacturasPage() {
           if (!html) throw new Error("No se pudo generar el PDF");
           return htmlToPdfBase64(html);
         }}
-        onSuccess={async (emailId) => {
+        onSuccess={async (emailId, enviadoA) => {
           if (!venta) return;
           // Marca de envío con función de la base (los vendedores no pueden cambiar facturas).
-          const { error: e } = await (supabase as any).rpc("marcar_factura_enviada", { p_factura_id: venta.id, p_to: mail.to || null, p_resend_id: emailId || null });
+          const { error: e } = await (supabase as any).rpc("marcar_factura_enviada", { p_factura_id: venta.id, p_to: (enviadoA?.length ? enviadoA.join(", ") : mail.to) || null, p_resend_id: emailId || null });
           if (e) console.error("No se pudo guardar la marca de envío:", e);
           toast.success("Factura enviada");
           setMail((m) => ({ ...m, open: false }));

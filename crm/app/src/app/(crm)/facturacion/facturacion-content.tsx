@@ -1218,6 +1218,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     };
     // Fetch client emails + contactos
     const suggested: { email: string; label?: string }[] = [];
+    let solicitanteEmail = "";
     try {
       if (f.clientes?.email_facturacion) {
         // email_facturacion can be comma-separated
@@ -1232,8 +1233,16 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       // If factura comes from a presupuesto, find the solicitante
       let solicitanteContactoId: string | null = null;
       if (f.presupuesto_id) {
-        const { data: prData } = await (supabase as any).from("presupuestos").select("contacto_id, created_by_profile:created_by(full_name, email)").eq("id", f.presupuesto_id).single();
+        const { data: prData } = await (supabase as any).from("presupuestos").select("contacto_id, contacto:contacto_id(nombre, email), created_by_profile:created_by(full_name, email)").eq("id", f.presupuesto_id).single();
         if (prData?.contacto_id) solicitanteContactoId = prData.contacto_id;
+        // El solicitante del PR va primero y marcado (aunque haya otra ficha con el mismo mail).
+        const solEmail = String(prData?.contacto?.email || "").trim();
+        if (solEmail) {
+          solicitanteEmail = solEmail;
+          const label = `⭐ Solicitante: ${prData.contacto.nombre || solEmail}`;
+          const ya = suggested.find(s => s.email.toLowerCase() === solEmail.toLowerCase());
+          if (ya) ya.label = label; else suggested.unshift({ email: solEmail, label });
+        }
         if (prData?.created_by_profile?.email && !suggested.some(s => s.email === prData.created_by_profile.email)) {
           suggested.push({ email: prData.created_by_profile.email, label: `Creador PR: ${prData.created_by_profile.full_name || ""}` });
         }
@@ -1248,8 +1257,9 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       }
     } catch { /* ignore */ }
 
-    // Priority: email_facturacion > email > empty
-    const defaultTo = f.clientes?.email_facturacion?.split(",")[0]?.trim() || f.clientes?.email || "";
+    // Para: mail de facturación (o el del cliente) + el solicitante del PR.
+    const base = f.clientes?.email_facturacion?.split(",")[0]?.trim() || f.clientes?.email || "";
+    const defaultTo = [base, solicitanteEmail].filter((e, i, a) => e && a.findIndex(x => x.toLowerCase() === e.toLowerCase()) === i).join(", ");
     setEmailModal({
       open: true,
       facturaId: f.id,
@@ -2594,10 +2604,12 @@ ${nota}` : nota }).eq("id", p.prId).eq("sociedad_id", sociedadActiva?.id);
         defaultSubject={emailModal.subject}
         defaultBody={emailModal.body}
         pdfFilename={emailModal.filename}
-        onSuccess={async (emailId) => {
+        onSuccess={async (emailId, enviadoA) => {
           const sentAt = new Date().toISOString();
           const facturaId = emailModal.facturaId;
-          const updateData: Record<string, unknown> = { email_enviado_at: sentAt, email_enviado_a: emailModal.to || null, email_estado: "sent" };
+          // A quién salió de verdad (lo que quedó en "Para"), no el mail sugerido al abrir.
+          const sentTo = enviadoA?.length ? enviadoA.join(", ") : emailModal.to || null;
+          const updateData: Record<string, unknown> = { email_enviado_at: sentAt, email_enviado_a: sentTo, email_estado: "sent" };
           if (emailId) updateData.email_resend_id = emailId;
           const { error } = await (supabase as any)
             .from("facturas")
@@ -2607,7 +2619,6 @@ ${nota}` : nota }).eq("id", p.prId).eq("sociedad_id", sociedadActiva?.id);
             alert(`El email se envió, pero no se pudo guardar la marca de envío: ${error.message}`);
             return;
           }
-          const sentTo = emailModal.to || null;
           setFacturas((prev) => prev.map((factura) =>
             factura.id === facturaId ? { ...factura, email_enviado_at: sentAt, email_enviado_a: sentTo, email_resend_id: emailId || null, email_estado: "sent" as const } : factura
           ));
