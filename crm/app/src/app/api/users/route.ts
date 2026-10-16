@@ -22,7 +22,7 @@ export async function PATCH(request: NextRequest) {
   try {
     const context = await getAdminContext();
     if (context.error) return context.error;
-    const { id, full_name, role, prueba_compras_nueva, prueba_presupuestos_nuevo } = await request.json();
+    const { id, full_name, role, prueba_compras_nueva, prueba_presupuestos_nuevo, prueba_remitos_nueva } = await request.json();
     if (!id) return Response.json({ error: "Falta el usuario" }, { status: 400 });
     if (role && !VALID_ROLES.includes(role)) return Response.json({ error: "Rol inválido" }, { status: 400 });
     if (role === "super_admin" && context.profile!.role !== "super_admin") {
@@ -41,6 +41,7 @@ export async function PATCH(request: NextRequest) {
     if (role) changes.role = role;
     if (typeof prueba_compras_nueva === "boolean") changes.prueba_compras_nueva = prueba_compras_nueva;
     if (typeof prueba_presupuestos_nuevo === "boolean") changes.prueba_presupuestos_nuevo = prueba_presupuestos_nuevo;
+    if (typeof prueba_remitos_nueva === "boolean") changes.prueba_remitos_nueva = prueba_remitos_nueva;
     if (!Object.keys(changes).length) return Response.json({ error: "No hay cambios" }, { status: 400 });
 
     const { error } = await context.admin!.from("profiles").update(changes).eq("id", id);

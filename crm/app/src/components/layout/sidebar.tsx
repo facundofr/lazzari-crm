@@ -64,6 +64,7 @@ const navigation: { grupo: string; items: { name: string; href: string; icon: ty
     { name: "Personalización", href: "/personalizacion", icon: Scissors, module: "ordenes_compra" },
   ] },
   { grupo: "Entregar", items: [
+    { name: "Remitos nueva", href: "/remitos-nueva", icon: Receipt, module: "remitos_nueva" },
     { name: "Remitos", href: "/remitos", icon: Receipt, module: "remitos" },
     { name: "Stock", href: "/stock", icon: Package, module: "stock" },
     { name: "Transportes", href: "/transportes", icon: Truck, module: "remitos" },
@@ -177,7 +178,7 @@ export function Sidebar() {
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-3 py-2">
         {navigation.map((g) => {
-          const visibles = g.items.filter((item) => item.module === "compras_nueva" ? !!profile?.prueba_compras_nueva : item.module === "presupuestos_nuevo" ? !!profile?.prueba_presupuestos_nuevo : hasModuleAccess(role, item.module));
+          const visibles = g.items.filter((item) => item.module === "compras_nueva" ? !!profile?.prueba_compras_nueva : item.module === "remitos_nueva" ? !!profile?.prueba_remitos_nueva : item.module === "presupuestos_nuevo" ? !!profile?.prueba_presupuestos_nuevo : hasModuleAccess(role, item.module));
           if (!visibles.length) return null;
           const showLabel = !collapsed || mobileSidebarOpen;
           return (

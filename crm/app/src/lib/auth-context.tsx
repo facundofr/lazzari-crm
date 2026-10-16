@@ -15,6 +15,8 @@ interface Profile {
   prueba_compras_nueva?: boolean;
   /** Prueba "Presupuestos nuevo": ve la pantalla donde la IA arma el PR desde el pedido del cliente. */
   prueba_presupuestos_nuevo?: boolean;
+  /** Prueba "Remitos nueva": ve la pantalla donde los remitos se arman solos. */
+  prueba_remitos_nueva?: boolean;
 }
 
 interface UserContextValue {
@@ -137,7 +139,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
 
       const { data } = await supabase
         .from("profiles")
-        .select("id, full_name, email, role, avatar_url, active, prueba_compras_nueva, prueba_presupuestos_nuevo")
+        .select("id, full_name, email, role, avatar_url, active, prueba_compras_nueva, prueba_presupuestos_nuevo, prueba_remitos_nueva")
         .eq("id", user.id)
         .single();
 

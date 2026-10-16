@@ -170,7 +170,7 @@ export default function ConfiguracionPage() {
       try {
         const { data: profiles } = await supabase
           .from("profiles")
-          .select("id, full_name, email, role, active, created_at, prueba_compras_nueva, prueba_presupuestos_nuevo")
+          .select("id, full_name, email, role, active, created_at, prueba_compras_nueva, prueba_presupuestos_nuevo, prueba_remitos_nueva")
           .eq("active", true)
           .order("created_at", { ascending: false });
         if (profiles) {
@@ -183,6 +183,7 @@ export default function ConfiguracionPage() {
             createdAt: p.created_at ? new Date(p.created_at).toLocaleDateString("es-AR") : "—",
             pruebaComprasNueva: !!p.prueba_compras_nueva,
             pruebaPresupuestosNuevo: !!p.prueba_presupuestos_nuevo,
+            pruebaRemitosNueva: !!p.prueba_remitos_nueva,
           })));
         } else {
           setDbUsers(mockUsers);
@@ -224,7 +225,7 @@ export default function ConfiguracionPage() {
       // Refresh users list
       const { data: profiles } = await supabase
         .from("profiles")
-        .select("id, full_name, email, role, active, created_at, prueba_compras_nueva, prueba_presupuestos_nuevo")
+        .select("id, full_name, email, role, active, created_at, prueba_compras_nueva, prueba_presupuestos_nuevo, prueba_remitos_nueva")
         .eq("active", true)
         .order("created_at", { ascending: false });
       if (profiles) {
@@ -234,6 +235,7 @@ export default function ConfiguracionPage() {
           createdAt: p.created_at ? new Date(p.created_at).toLocaleDateString("es-AR") : "—",
           pruebaComprasNueva: !!p.prueba_compras_nueva,
             pruebaPresupuestosNuevo: !!p.prueba_presupuestos_nuevo,
+            pruebaRemitosNueva: !!p.prueba_remitos_nueva,
         })));
       }
       alert(json.invite_sent
@@ -246,7 +248,7 @@ export default function ConfiguracionPage() {
     }
   }
 
-  async function updateSystemUser(id: string, changes: { full_name?: string; role?: Role; prueba_compras_nueva?: boolean; prueba_presupuestos_nuevo?: boolean }) {
+  async function updateSystemUser(id: string, changes: { full_name?: string; role?: Role; prueba_compras_nueva?: boolean; prueba_presupuestos_nuevo?: boolean; prueba_remitos_nueva?: boolean }) {
     const response = await fetch("/api/users", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -808,6 +810,27 @@ export default function ConfiguracionPage() {
                           className="h-4 w-4 accent-orange-600"
                         />
                         {row.pruebaPresupuestosNuevo ? "Sí" : "No"}
+                      </label>
+                    ),
+                  },
+                  {
+                    key: "pruebaRemitosNueva", label: "Prueba: Remitos nueva", sortable: false,
+                    render: (row) => (
+                      <label className="inline-flex items-center gap-1.5 text-xs text-zinc-500" title="Ve la pantalla Remitos nueva (los remitos se arman solos con lo que falta entregar)">
+                        <input
+                          type="checkbox"
+                          checked={!!row.pruebaRemitosNueva}
+                          disabled={!canManageUsers}
+                          onChange={async (e) => {
+                            const valor = e.target.checked;
+                            try {
+                              await updateSystemUser(row.id, { prueba_remitos_nueva: valor });
+                              setDbUsers(prev => prev.map(u => u.id === row.id ? { ...u, pruebaRemitosNueva: valor } : u));
+                            } catch (updateError) { alert(updateError instanceof Error ? updateError.message : "No se pudo cambiar la casilla"); }
+                          }}
+                          className="h-4 w-4 accent-orange-600"
+                        />
+                        {row.pruebaRemitosNueva ? "Sí" : "No"}
                       </label>
                     ),
                   },
