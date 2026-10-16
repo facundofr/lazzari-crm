@@ -1314,7 +1314,7 @@ export default function FinanzasPage() {
         // Fetch custom gasto categories from configuracion
         try {
           if (sociedadActiva?.id) {
-            const { data: catCfg } = await (supabase as any).from("configuracion").select("value").eq("key", "gasto_categorias").eq("sociedad_id", sociedadActiva.id).single();
+            const { data: catCfg } = await (supabase as any).from("configuracion").select("value").eq("key", "gasto_categorias").eq("sociedad_id", sociedadActiva.id).maybeSingle();
             if (catCfg?.value) {
               const parsed = typeof catCfg.value === "string" ? JSON.parse(catCfg.value) : catCfg.value;
               if (Array.isArray(parsed) && parsed.length > 0) setGastoCategorias(parsed);

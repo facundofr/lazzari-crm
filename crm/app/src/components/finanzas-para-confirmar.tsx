@@ -18,6 +18,7 @@ import {
   type ItemBandeja, type FacturaBandeja, type Tercero, type PagoMail, type GastoSinPago, type SugerenciaIA, type Confianza,
 } from "@/lib/finanzas-propuestas";
 import { CLASIFICACION_LABEL, type ClasificacionLinea, type MovCruce, type ChequeCruce, type ReglaCruce } from "@/lib/extracto-bbva";
+import { notaLiteral, notaCobro, armarCobroSistemaAnterior, pesos, RETENCION_LABEL, type RetencionNota } from "@/lib/finanzas-notas";
 import { leerArchivoExtracto, guardarArchivoExtracto, type CuentaRow, type ArchivoPreview } from "@/components/extracto-bbva";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, History, Loader2, Sparkles, Upload, X } from "lucide-react";
 
@@ -65,6 +66,8 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
   const [corrigiendo, setCorrigiendo] = useState<string | null>(null);
   const [correccion, setCorreccion] = useState<{ clasificacion: ClasificacionLinea | ""; nota: string; recordar: boolean }>({ clasificacion: "", nota: "", recordar: true });
   const [arrastrando, setArrastrando] = useState(false);
+  /** Formulario "Cobro de factura del sistema anterior" (facturas que no están en el CRM) abierto en un renglón. */
+  const [anterior, setAnterior] = useState<{ linea_id: string; cliente: string; facturas: string; bruto: string; referencia: string; rets: { tipo: string; monto: string; certificado: string }[] } | null>(null);
 
   const cargar = useCallback(async () => {
     if (!sociedadId) return;
@@ -88,7 +91,7 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
         traerTodo<MovRow>(() => db.from("movimientos")
           .select("id, fecha, monto, moneda, tipo, cliente_id, proveedor_id, anulado, descripcion, nota_credito_compra_id, ajuste_sentido, orden_pago_id")
           .eq("sociedad_id", sociedadId).gte("fecha", desdeMovs).order("fecha").order("id")),
-        traerTodo<ChequeCruce>(() => db.from("echeqs").select("id, numero, monto, direccion, estado, fecha_pago, tipo_cheque").eq("sociedad_id", sociedadId).order("id")),
+        traerTodo<ChequeCruce>(() => db.from("echeqs").select("id, numero, monto, direccion, estado, fecha_pago, tipo_cheque, destino_nombre, origen_nombre").eq("sociedad_id", sociedadId).order("id")),
         db.from("extracto_reglas").select("texto, sentido, clasificacion, subtipo, contra_cuenta_id, nota").eq("sociedad_id", sociedadId).eq("activa", true),
         traerTodo<Tercero>(() => db.from("clientes").select("id, razon_social, cuit").eq("sociedad_id", sociedadId).order("id")),
         traerTodo<Tercero>(() => db.from("proveedores").select("id, razon_social, cuit").eq("sociedad_id", sociedadId).order("id")),
@@ -286,6 +289,21 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
     if (e) console.error("No se pudo anotar en el registro:", e);
   }
 
+  /** Nota literal del renglón (impuesto, retención, IVA, cheque, pago…) para el informe de fin de mes. */
+  function notaDe(i: ItemBandeja, clasificacion?: ClasificacionLinea, notaPersona?: string | null): string {
+    const c = i.cruce;
+    const ch = c?.cheque_id ? (datos?.cheques.find((x) => x.id === c.cheque_id) as (ChequeCruce & { destino_nombre?: string | null; origen_nombre?: string | null }) | undefined) : undefined;
+    return notaLiteral({
+      fecha: i.fecha, concepto: i.concepto, importe: i.importe,
+      clasificacion: clasificacion || c?.clasificacion || "otro",
+      subtipo: clasificacion ? null : c?.subtipo,
+      contraCuenta: c?.contra_cuenta_id ? cuentaNombre.get(c.contra_cuenta_id) || null : null,
+      cheque: ch ? { numero: ch.numero, destino_nombre: ch.destino_nombre, origen_nombre: ch.origen_nombre } : null,
+      movimiento: c?.movimiento_id ? datos?.movimientos.find((m) => m.id === c.movimiento_id)?.descripcion || null : null,
+      nota: notaPersona !== undefined ? notaPersona : c?.nota,
+    });
+  }
+
   async function aplicarCruces(cruces: Record<string, unknown>[]) {
     for (let i = 0; i < cruces.length; i += 150) {
       const { error: e } = await (supabase as any).rpc("aplicar_cruces_extracto", { p_sociedad_id: sociedadId, p_cruces: cruces.slice(i, i + 150) });
@@ -326,24 +344,37 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
       });
       if (e) throw e;
       const ids: string[] = data?.inserted_ids || data?.resultado?.inserted_ids || [];
-      let movId: string | null = ids[0] || null;
+      // La base inserta primero las retenciones y después la transferencia: se cruza el banco con la transferencia.
+      let movId: string | null = null;
+      if (ids.length) {
+        const { data: mv } = await (supabase as any).from("movimientos").select("id, tipo").in("id", ids);
+        movId = ((mv || []) as { id: string; tipo: string }[]).find((m) => m.tipo === "transferencia")?.id || null;
+      }
       if (!movId) {
         const { data: mv } = await (supabase as any).from("movimientos").select("id").eq("sociedad_id", sociedadId).eq("cliente_id", c.cliente_id)
           .eq("tipo", "transferencia").eq("fecha", item.fecha).eq("anulado", false).order("created_at", { ascending: false }).limit(5);
         movId = (mv || [])[0]?.id || null;
       }
-      if (movId) await aplicarCruces([{ linea_id: item.linea_id, clasificacion: "cobro", movimiento_id: movId }]);
-      await anotar(item, "confirmada", { movimientos: ids, movimiento_cruzado: movId, facturas: c.facturas.map((f) => f.numero) });
+      const nota = notaCobro({
+        cliente: c.cliente_nombre, facturas: c.facturas.map((f) => f.numero).join(" + "), neto: c.neto, tipoCambio: c.tipo_cambio,
+        retenciones: c.retenciones.map((r) => ({ tipo: r.tipo, monto: r.monto, certificado: (r.descripcion.match(/cert(?:ificado)?\.?:?\s*([\w-]+)/i) || [])[1] || null })),
+        referencia: c.referencia ? `Ref: ${c.referencia}` : null,
+      });
+      if (movId) await aplicarCruces([{ linea_id: item.linea_id, clasificacion: "cobro", movimiento_id: movId, nota }]);
+      await anotar(item, "confirmada", { movimientos: ids, movimiento_cruzado: movId, facturas: c.facturas.map((f) => f.numero), nota });
       return true;
     }
     if (item.gasto) {
       const { data, error: e } = await (supabase as any).rpc("pagar_gasto_desde_extracto", { p_sociedad_id: sociedadId, p_linea_id: item.linea_id, p_gasto_id: item.gasto.id });
       if (e) throw e;
+      if (data?.movimiento_id) {
+        await aplicarCruces([{ linea_id: item.linea_id, clasificacion: "pago", movimiento_id: data.movimiento_id, nota: `Pago del gasto "${item.gasto.descripcion}" por transferencia: ${pesos(item.importe)}.` }]);
+      }
       await anotar(item, "confirmada", { movimiento_id: data?.movimiento_id, gasto_id: item.gasto.id });
       return true;
     }
     if (item.cruce) {
-      await aplicarCruces([{ linea_id: item.linea_id, ...item.cruce }]);
+      await aplicarCruces([{ linea_id: item.linea_id, ...item.cruce, nota: notaDe(item) }]);
       if (item.regla) await aprenderRegla(item, item.regla.clasificacion, item.regla.subtipo || null, item.regla.texto);
       if (item.origen === "ia") await (supabase as any).from("finanzas_propuestas").update({ estado: "confirmada", resuelto_por: profile?.id, resuelto_at: new Date().toISOString() }).eq("linea_id", item.linea_id).eq("origen", "ia");
       await anotar(item, "confirmada", { cruce: item.cruce });
@@ -369,7 +400,7 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
     const resto = validos.filter((i) => i.cobro || i.gasto);
     try {
       if (simples.length) {
-        await aplicarCruces(simples.map((i) => ({ linea_id: i.linea_id, ...i.cruce })));
+        await aplicarCruces(simples.map((i) => ({ linea_id: i.linea_id, ...i.cruce, nota: notaDe(i) })));
         for (const i of simples) {
           if (i.regla) await aprenderRegla(i, i.regla.clasificacion, i.regla.subtipo || null, i.regla.texto);
         }
@@ -421,13 +452,54 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
     if (!c) { alert("Elegí qué es."); return; }
     setOcupado(item.linea_id);
     try {
-      await aplicarCruces([{ linea_id: item.linea_id, clasificacion: c, nota: correccion.nota.trim() || null }]);
+      await aplicarCruces([{ linea_id: item.linea_id, clasificacion: c, nota: notaDe(item, c, correccion.nota.trim() || null) }]);
       if (correccion.recordar) {
         const texto = (await import("@/lib/finanzas-propuestas")).textoParaRegla(item.concepto);
         await aprenderRegla(item, c, null, texto);
       }
       await anotar(item, "corregida", { clasificacion: c, nota: correccion.nota.trim() || null }, `${formatDate(item.fecha)} ${formatCurrency(item.importe)} · ${item.concepto} → corregido a ${CLASIFICACION_LABEL[c]}`);
       setCorrigiendo(null);
+      await cargar();
+    } catch (e) {
+      alert(`No se pudo guardar: ${errorTexto(e)}`);
+    } finally {
+      setOcupado(null);
+    }
+  }
+
+  // ─── Cobro de factura del sistema anterior ─────────────────────────────────
+  const numeroAR = (s: string) => Number(String(s || "").replace(/\./g, "").replace(",", ".")) || 0;
+  const clienteDeTexto = (t: string) => datos?.clientes.find((c) => `${c.razon_social}${c.cuit ? ` — ${c.cuit}` : ""}` === t.trim()) || null;
+  function armarAnterior(i: ItemBandeja) {
+    if (!anterior || anterior.linea_id !== i.linea_id) return null;
+    const cli = clienteDeTexto(anterior.cliente);
+    return armarCobroSistemaAnterior({
+      linea: { fecha: i.fecha, importe: i.importe },
+      cliente: { id: cli?.id || "", nombre: cli?.razon_social || "" },
+      facturas: anterior.facturas, bruto: numeroAR(anterior.bruto), referencia: anterior.referencia,
+      retenciones: anterior.rets.map((r): RetencionNota => ({ tipo: r.tipo, monto: numeroAR(r.monto), certificado: r.certificado.trim() || null })),
+    });
+  }
+
+  async function guardarAnterior(i: ItemBandeja) {
+    const a = armarAnterior(i);
+    const cli = anterior ? clienteDeTexto(anterior.cliente) : null;
+    if (!a || !cli) { alert("Elegí el cliente de la lista."); return; }
+    if (a.errores.length) { alert(a.errores.join("\n")); return; }
+    if (Math.abs(a.diferencia) >= 0.01 && !confirm(`No cierra por ${pesos(a.diferencia)}: bruto − retenciones no da lo que entró al banco.\n\n¿Guardarlo igual? (queda la diferencia anotada en la nota)`)) return;
+    setOcupado(i.linea_id);
+    try {
+      const filas = a.movimientos.map((m, k) => ({
+        tipo: m.tipo, cliente_id: cli.id, factura_id: null, descripcion: m.descripcion, monto: m.monto, moneda: "ARS", fecha: i.fecha,
+        conciliado: false, created_by: profile?.id, sociedad_id: sociedadId, cuenta_id: k === 0 ? i.cuenta_id : null,
+      }));
+      const { data: ins, error: e } = await (supabase as any).from("movimientos").insert(filas).select("id, tipo");
+      if (e) throw e;
+      const tr = ((ins || []) as { id: string; tipo: string }[]).find((m) => m.tipo === "transferencia");
+      if (!tr) throw new Error("No se pudo leer la transferencia recién cargada.");
+      await aplicarCruces([{ linea_id: i.linea_id, clasificacion: "cobro", movimiento_id: tr.id, nota: a.nota }]);
+      await anotar(i, "confirmada", { sistema_anterior: true, movimientos: (ins || []).map((m: any) => m.id), nota: a.nota }, `${formatDate(i.fecha)} ${formatCurrency(i.importe)} · cobro del sistema anterior → ${cli.razon_social} (${anterior?.facturas})`);
+      setAnterior(null);
       await cargar();
     } catch (e) {
       alert(`No se pudo guardar: ${errorTexto(e)}`);
@@ -513,6 +585,12 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
             }} className="rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800" title={i.cobro || i.gasto ? "Abre Extractos para resolverla a mano" : "Elegir otra clasificación"}>
               Corregir
             </button>
+            {i.importe > 0 && !i.cobro && !faltaMigracion && (
+              <button disabled={ocupado !== null} onClick={() => setAnterior(anterior?.linea_id === i.linea_id ? null : { linea_id: i.linea_id, cliente: "", facturas: "", bruto: "", referencia: "", rets: [{ tipo: "retencion_ganancias", monto: "", certificado: "" }, { tipo: "retencion_iibb", monto: "", certificado: "" }] })}
+                className="rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800" title="Cobro de facturas que no están en el CRM: cliente, retenciones con certificado y nota literal">
+                Sist. anterior
+              </button>
+            )}
             {!faltaMigracion && (
               <button disabled={ocupado !== null} onClick={() => void descartar(i)} title="Descartar la propuesta" className="rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 disabled:opacity-50 dark:hover:bg-zinc-800"><X className="h-3.5 w-3.5" /></button>
             )}
@@ -533,6 +611,42 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
             <button onClick={() => onIrATab?.("extractos")} className="text-orange-600 hover:underline">Cheques, cuentas o movimientos: en Extractos</button>
           </div>
         )}
+        {anterior?.linea_id === i.linea_id && (() => {
+          const a = armarAnterior(i);
+          const set = (p: Partial<NonNullable<typeof anterior>>) => setAnterior((x) => (x ? { ...x, ...p } : x));
+          const campo = "rounded-md border border-zinc-200 bg-white px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900";
+          return (
+            <div className="mt-2 space-y-1.5 rounded-lg bg-zinc-50 p-2 text-xs dark:bg-zinc-800/50">
+              <p className="font-medium text-zinc-700 dark:text-zinc-200">Cobro de factura del sistema anterior (no toca la cuenta corriente del CRM)</p>
+              <div className="flex flex-wrap gap-1.5">
+                <input list={`cli-${i.linea_id}`} value={anterior.cliente} onChange={(e) => set({ cliente: e.target.value })} placeholder="Cliente" className={`min-w-[14rem] flex-1 ${campo}`} />
+                <datalist id={`cli-${i.linea_id}`}>{(datos?.clientes || []).map((c) => <option key={c.id} value={`${c.razon_social}${c.cuit ? ` — ${c.cuit}` : ""}`} />)}</datalist>
+                <input value={anterior.facturas} onChange={(e) => set({ facturas: e.target.value })} placeholder="Facturas (ej. FA A 0009-00000382 + 0009-00000388)" className={`min-w-[14rem] flex-1 ${campo}`} />
+                <input value={anterior.bruto} onChange={(e) => set({ bruto: e.target.value })} placeholder="Bruto $" inputMode="decimal" className={`w-32 text-right ${campo}`} />
+                <input value={anterior.referencia} onChange={(e) => set({ referencia: e.target.value })} placeholder="OP / aviso / recibo" className={`w-44 ${campo}`} />
+              </div>
+              {anterior.rets.map((r, k) => (
+                <div key={k} className="flex flex-wrap items-center gap-1.5">
+                  <select value={r.tipo} onChange={(e) => set({ rets: anterior.rets.map((x, j) => (j === k ? { ...x, tipo: e.target.value } : x)) })} className={campo}>
+                    {["retencion_ganancias", "retencion_iibb", "retencion_iva", "retencion_suss"].map((t) => <option key={t} value={t}>{RETENCION_LABEL[t]}</option>)}
+                  </select>
+                  <input value={r.monto} onChange={(e) => set({ rets: anterior.rets.map((x, j) => (j === k ? { ...x, monto: e.target.value } : x)) })} placeholder="Importe $" inputMode="decimal" className={`w-28 text-right ${campo}`} />
+                  <input value={r.certificado} onChange={(e) => set({ rets: anterior.rets.map((x, j) => (j === k ? { ...x, certificado: e.target.value } : x)) })} placeholder="N° de certificado" className={`w-40 ${campo}`} />
+                  <button onClick={() => set({ rets: anterior.rets.filter((_, j) => j !== k) })} className="rounded p-1 text-zinc-400 hover:text-zinc-700"><X className="h-3.5 w-3.5" /></button>
+                </div>
+              ))}
+              <div className="flex flex-wrap items-center gap-2">
+                <button onClick={() => set({ rets: [...anterior.rets, { tipo: "retencion_iva", monto: "", certificado: "" }] })} className="text-orange-600 hover:underline">+ Retención</button>
+                {a && numeroAR(anterior.bruto) > 0 && (Math.abs(a.diferencia) < 0.01
+                  ? <span className="font-medium text-emerald-700 dark:text-emerald-300">✔ Cierra exacto: bruto − retenciones = {formatCurrency(i.importe)}</span>
+                  : <span className="font-medium text-amber-700 dark:text-amber-300">⚠️ No cierra por {pesos(a.diferencia)}</span>)}
+                <span className="flex-1" />
+                <button disabled={ocupado !== null} onClick={() => void guardarAnterior(i)} className="rounded-md bg-emerald-600 px-2 py-1 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">Guardar y cruzar</button>
+                <button onClick={() => setAnterior(null)} className="rounded-md border border-zinc-200 px-2 py-1 dark:border-zinc-700">Cancelar</button>
+              </div>
+            </div>
+          );
+        })()}
       </div>
     );
   };
