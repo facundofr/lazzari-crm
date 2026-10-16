@@ -126,6 +126,8 @@ export default function RemitosNuevaPage() {
   const [abierto, setAbierto] = useState<string | null>(null);
   // Ajustes antes de hacer el remito: cantidades por renglón y sucursal.
   const [ajuste, setAjuste] = useState<Record<string, { cant: Record<string, number>; sucursal: string }>>({});
+  // PR que salen como remito interno sin CAI (no gasta número de CAI).
+  const [sinCai, setSinCai] = useState<Record<string, boolean>>({});
   const [parcial, setParcial] = useState<{ remitoId: string; cant: Record<string, number>; nota: string } | null>(null);
   const [eligiendoTrans, setEligiendoTrans] = useState<string | null>(null);
   const [deshacer, setDeshacer] = useState<Deshacer[]>([]);
@@ -276,17 +278,17 @@ export default function RemitosNuevaPage() {
 
   // ── Acciones ───────────────────────────────────────────────────
   /** Crea el remito igual que "Remitar" de Presupuestos (Remito R con CAI si el PR no es manual). Devuelve el número o null. */
-  async function crearRemito(pr: PR, items: { presupuesto_item_id: string; descripcion: string; unidad: string; orden: number; cantidad: number }[], sucursalId: string | null, nota: string): Promise<string | null> {
+  async function crearRemito(pr: PR, items: { presupuesto_item_id: string; descripcion: string; unidad: string; orden: number; cantidad: number }[], sucursalId: string | null, nota: string, sinNumeroCai = false): Promise<string | null> {
     if (!sociedadId || !items.length) return null;
     let cai: { cai_numero: string; punto_venta: number; nro_comprobante: number } | null = null;
-    if (pr.modalidad_emision !== "manual") {
+    if (pr.modalidad_emision !== "manual" && !sinNumeroCai) {
       const { data: caiRows } = await db.rpc("next_cai_number", { p_sociedad_id: sociedadId, p_tipo: "remito_r" });
       if (caiRows && caiRows.length > 0) cai = caiRows[0];
     }
     const valor = Number(pr.total) || Number(pr.subtotal) || null;
     const insert: Record<string, unknown> = {
       numero: null, cliente_id: pr.cliente_id, fecha: todayAR(), estado: "pendiente", sociedad_id: sociedadId,
-      observaciones: `Generado desde presupuesto ${pr.numero} (Remitos nueva)${nota ? ` · ${nota}` : ""}`,
+      observaciones: `Generado desde presupuesto ${pr.numero} (Remitos nueva)${sinNumeroCai ? " · Interno sin CAI" : ""}${nota ? ` · ${nota}` : ""}`,
       presupuesto_id: pr.id, created_by: profile?.id || null, oc_cliente: pr.oc_cliente || null,
       valor_declarado: valor, tipo_remito: "interno", sucursal_id: sucursalId || pr.sucursal_id || null,
     };
@@ -331,10 +333,10 @@ export default function RemitosNuevaPage() {
     const suc = ajuste[pr.id]?.sucursal || pr.sucursal_id || null;
     const sucNombre = suc ? sucursales.find((s) => s.id === suc)?.nombre : null;
     const detalle = items.slice(0, 8).map((i) => `• ${cant(i.cantidad)} ${i.descripcion}`).join("\n") + (items.length > 8 ? `\n… y ${items.length - 8} más` : "");
-    if (!window.confirm(`¿Hacer el remito de ${pr.numero} para ${nombreCliente(pr.cliente_id)}${sucNombre ? ` (${sucNombre})` : ""}?\n\n${detalle}`)) return;
+    if (!window.confirm(`¿Hacer el remito${sinCai[pr.id] ? " interno (sin CAI)" : ""} de ${pr.numero} para ${nombreCliente(pr.cliente_id)}${sucNombre ? ` (${sucNombre})` : ""}?\n\n${detalle}`)) return;
     setOcupado(pr.id);
     try {
-      const nro = await crearRemito(pr, items, suc, ajuste[pr.id] ? "Cantidades ajustadas" : modo === "llego" ? "Lo que llegó" : "");
+      const nro = await crearRemito(pr, items, suc, ajuste[pr.id] ? "Cantidades ajustadas" : modo === "llego" ? "Lo que llegó" : "", !!sinCai[pr.id]);
       if (nro) {
         toast.success(`Remito ${nro} listo: imprimilo desde Remitos (queda "En camino")`);
         setAjuste((prev) => { const n = { ...prev }; delete n[pr.id]; return n; });
@@ -723,7 +725,7 @@ export default function RemitosNuevaPage() {
                     <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${ESTADO_COLOR[e.estado]}`}>{ESTADO_TEXTO[e.estado]}</span>
                     <span className="font-mono text-xs font-semibold">{p.numero}</span>
                     <span className="font-medium">{nombreCliente(p.cliente_id)}</span>
-                    <span className="min-w-0 flex-1 truncate text-xs text-zinc-500">
+                    <span className="w-full text-xs text-zinc-500 sm:w-auto sm:min-w-0 sm:flex-1 sm:truncate">
                       {falta.length} renglón(es) por entregar{yaRemitos ? ` · ya hay ${yaRemitos} remito(s)` : ""}{p.estado === "facturado" ? " · facturado" : ""}{p.oc_cliente ? ` · OC ${p.oc_cliente}` : ""}{vendedor ? ` · ${vendedor}` : ""} · {hace(dias)}
                     </span>
                     <div className="ml-auto flex shrink-0 items-center gap-1.5">
@@ -768,7 +770,15 @@ export default function RemitosNuevaPage() {
                           </li>
                         ))}
                       </ul>
-                      {aj && <button onClick={() => setAjuste((prev) => { const n = { ...prev }; delete n[p.id]; return n; })} className="text-xs text-zinc-400 hover:underline">volver a lo sugerido</button>}
+                      <div className="flex flex-wrap items-center gap-3">
+                        {p.modalidad_emision !== "manual" && (
+                          <label className="flex items-center gap-1.5 text-xs text-zinc-600" title="Remito interno: no usa un número de CAI (ej. entrega interna o prueba)">
+                            <input type="checkbox" checked={!!sinCai[p.id]} onChange={(ev) => setSinCai((prev) => ({ ...prev, [p.id]: ev.target.checked }))} className="h-3.5 w-3.5 accent-orange-600" />
+                            Sin CAI (remito interno)
+                          </label>
+                        )}
+                        {aj && <button onClick={() => setAjuste((prev) => { const n = { ...prev }; delete n[p.id]; return n; })} className="text-xs text-zinc-400 hover:underline">volver a lo sugerido</button>}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -797,7 +807,7 @@ export default function RemitosNuevaPage() {
                           {r && <span className="font-mono font-semibold">{r.numero}</span>}
                           {f.recibio && <span className="text-zinc-500">recibió {f.recibio}</span>}
                           {!f.firmado && <span className="text-amber-600">sin firma</span>}
-                          {f.aplicado ? <span className="font-medium text-emerald-600">✓ marcado entregado (Deshacer arriba)</span> : (
+                          {f.aplicado && r && r.estado !== "pendiente" ? <span className="font-medium text-emerald-600">✓ marcado entregado (Deshacer arriba)</span> : (
                             <span className="flex flex-wrap items-center gap-1.5">
                               {!r && (
                                 <span className="w-56"><Autocompletar chico opciones={enCamino.map((x) => ({ valor: x.id, texto: `${x.numero} · ${nombreCliente(x.cliente_id)}` }))} placeholder="¿De qué remito es?" onElegir={(v) => setFotos((prev) => prev.map((x) => (x.key === f.key ? { ...x, remito_id: v } : x)))} /></span>
