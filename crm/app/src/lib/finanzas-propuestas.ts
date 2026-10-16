@@ -61,6 +61,8 @@ export interface ItemBandeja {
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
+/** CUIT de Augusto Lazzari y de Grupo LA. */
+export const CUITS_PROPIOS = ["20379309128", "30719396042"];
 const cent = (n: number) => Math.round(n * 100);
 const soloDigitos = (s: string | null | undefined) => String(s || "").replace(/\D/g, "");
 const diasEntre = (a: string, b: string) => Math.round((Date.parse(`${b.slice(0, 10)}T12:00:00Z`) - Date.parse(`${a.slice(0, 10)}T12:00:00Z`)) / 86400000);
@@ -237,8 +239,10 @@ export function armarBandeja(d: DatosBandeja): ItemBandeja[] {
   const cuentaPorId = new Map(d.cuentas.map((c) => [c.id, c]));
   const movPorId = new Map(d.movimientos.map((m) => [m.id, m]));
   const abiertas = d.facturas.filter((f) => f.saldo >= 1 && f.estado !== "pagada");
-  const cliPorCuit = new Map(d.clientes.filter((c) => soloDigitos(c.cuit).length === 11).map((c) => [soloDigitos(c.cuit), c]));
-  const provPorCuit = new Map(d.proveedores.filter((p) => soloDigitos(p.cuit).length === 11).map((p) => [soloDigitos(p.cuit), p]));
+  // Los CUIT propios (Augusto y Grupo LA) nunca son proveedor ni cliente: son pases entre cuentas propias o plata personal.
+  const propio = (c: string | null | undefined) => CUITS_PROPIOS.includes(soloDigitos(c));
+  const cliPorCuit = new Map(d.clientes.filter((c) => soloDigitos(c.cuit).length === 11 && !propio(c.cuit)).map((c) => [soloDigitos(c.cuit), c]));
+  const provPorCuit = new Map(d.proveedores.filter((p) => soloDigitos(p.cuit).length === 11 && !propio(p.cuit)).map((p) => [soloDigitos(p.cuit), p]));
   const mailsUsados = new Set<string>();
   const facturasUsadas = new Set<string>();
   const gastosUsados = new Set<string>();

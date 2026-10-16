@@ -161,4 +161,10 @@ assert.equal(cuitEnTexto("CTE 007875 285 30707784292 X"), "30707784292");
   assert.equal(san.pagoProveedor?.factura.numero, 24296);
   assert.equal(san.confianza, "alta");
 }
+{
+  const items = armarBandeja({ ...base, proveedores: [...base.proveedores, { id: "yo", razon_social: "AUGUSTO LAZZARI", cuit: "20379309128" }], lineas: [
+    { id: "fondeo", fecha: "2026-10-09", concepto: "TRANSFERENCIA · 20379309128 VARIOS FONDEO", importe: -500000, cuenta_id: CTA },
+  ] });
+  assert.ok(!/AUGUSTO LAZZARI/.test(items.find((i) => i.linea_id === "fondeo")!.titulo), "el CUIT propio no es proveedor");
+}
 console.log("finanzas-propuestas: OK", items.length, "renglones");
