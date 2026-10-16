@@ -38,6 +38,7 @@ import { calculateOwnStockPurchaseOrder, groupOwnStockItemsByCurrency, normalize
 import { calculateNetPrice, parseQuantityRange, type PriceListRule } from "@/lib/price-list-rules";
 import { observacionesParaCliente } from "@/lib/observaciones-cliente";
 import { margenPR, MARGEN_MINIMO_PR } from "@/lib/presupuesto-margen";
+import { RemitoVentana } from "@/components/remito-ventana";
 import { parseCantidadAR, textoCantidadValido, numeroAEditable, formatCantidad, avisosRenglon, renglonesSinPrecio } from "@/lib/numero-ar";
 import { convertirCostoPR, leerDolaresGuardados, fechaDolarPresupuesto, dolarAtrasado, etiquetaDolar, esCostoUsd, esCostoDivisa, tcParaCosto, type DolaresGuardados } from "@/lib/dolar-presupuesto";
 
@@ -472,20 +473,8 @@ export default function PresupuestosPage() {
   // "parcial" = tiene remito pero faltan cantidades, "total" = todo remitido
   const [remitidoStatus, setRemitidoStatus] = useState<Record<string, "parcial" | "total">>({});
 
-  // Remitar modal state
-  interface RemitarItem {
-    presupuesto_item_id: string;
-    descripcion: string;
-    cantidad_total: number;
-    cantidad_remitida: number;
-    cantidad_pendiente: number;
-    cantidad_a_remitar: number;
-    unidad: string;
-    orden: number;
-  }
-  const [remitarModal, setRemitarModal] = useState<{ pr: Presupuesto; items: RemitarItem[] } | null>(null);
-  const [remitarLoading, setRemitarLoading] = useState(false);
-  const [remitarTipo, setRemitarTipo] = useState<"interno" | "muestra">("interno");
+  // Remitar: ventana única de remitos (components/remito-ventana)
+  const [remitarPrId, setRemitarPrId] = useState<string | null>(null);
 
   // Detail panel
   const [selected, setSelected] = useState<Presupuesto | null>(null);
@@ -2453,179 +2442,6 @@ export default function PresupuestosPage() {
     }
   }
 
-  async function openRemitarModal(pr: Presupuesto) {
-    try {
-      // Fetch PR items
-      const { data: prItems, error: itemsErr } = await supabase
-        .from("presupuesto_items")
-        .select("id, descripcion, cantidad, unidad, orden")
-        .eq("presupuesto_id", pr.id)
-        .order("orden");
-
-      if (itemsErr || !prItems || prItems.length === 0) {
-        toast.warning("El presupuesto no tiene items para remitar");
-        return;
-      }
-
-      // Fetch existing remitos for this PR
-      const { data: existingRemitos } = await (supabase as any)
-        .from("remitos")
-        .select("id")
-        .eq("presupuesto_id", pr.id);
-
-      // Build map: presupuesto_item_id → total already remitido
-      let remitidoByPiId: Record<string, number> = {};
-      let remitidoByKey: Record<string, number> = {};
-      if (existingRemitos && existingRemitos.length > 0) {
-        const rIds = existingRemitos.map((r: any) => r.id);
-        const { data: rItems } = await (supabase as any)
-          .from("remito_items")
-          .select("descripcion, cantidad, orden, presupuesto_item_id")
-          .in("remito_id", rIds);
-        if (rItems) {
-          for (const ri of rItems as any[]) {
-            if (ri.presupuesto_item_id) {
-              remitidoByPiId[ri.presupuesto_item_id] = (remitidoByPiId[ri.presupuesto_item_id] || 0) + Number(ri.cantidad);
-            } else {
-              const key = `${ri.descripcion}__${ri.orden}`;
-              remitidoByKey[key] = (remitidoByKey[key] || 0) + Number(ri.cantidad);
-            }
-          }
-        }
-      }
-
-      const modalItems: RemitarItem[] = (prItems as any[]).map((it, idx) => {
-        // Prefer presupuesto_item_id match, fallback to descripcion+orden
-        const yaRemitido = remitidoByPiId[it.id] || remitidoByKey[`${it.descripcion}__${it.orden ?? idx}`] || 0;
-        const pendiente = Math.max(0, Number(it.cantidad) - yaRemitido);
-        return {
-          presupuesto_item_id: it.id,
-          descripcion: it.descripcion,
-          cantidad_total: Number(it.cantidad),
-          cantidad_remitida: yaRemitido,
-          cantidad_pendiente: pendiente,
-          cantidad_a_remitar: pendiente,
-          unidad: it.unidad || "UN",
-          orden: it.orden ?? idx,
-        };
-      });
-
-      const totalPendiente = modalItems.reduce((s, i) => s + i.cantidad_pendiente, 0);
-      if (totalPendiente <= 0) {
-        toast.info("Todas las cantidades de este presupuesto ya fueron remitidas");
-        return;
-      }
-
-      setRemitarModal({ pr, items: modalItems });
-    } catch (err) {
-      console.error("Error opening remitar modal:", err);
-      toast.error("Error al preparar remito");
-    }
-  }
-
-  async function handleRemitarConfirm() {
-    if (!remitarModal || !sociedadActiva) return;
-    const { pr, items } = remitarModal;
-    const itemsToRemit = items.filter(i => i.cantidad_a_remitar > 0);
-    if (itemsToRemit.length === 0) {
-      toast.warning("Ingresá al menos una cantidad para remitar");
-      return;
-    }
-    // Validate no item exceeds pending
-    for (const it of itemsToRemit) {
-      if (it.cantidad_a_remitar > it.cantidad_pendiente) {
-        toast.error(`"${it.descripcion}" excede la cantidad pendiente (${it.cantidad_pendiente})`);
-        return;
-      }
-    }
-
-    setRemitarLoading(true);
-    try {
-      // Fetch presupuesto total for valor_declarado
-      const { data: prHeader } = await supabase
-        .from("presupuestos")
-        .select("total, subtotal")
-        .eq("id", pr.id)
-        .single();
-      const valorDeclarado = (prHeader as any)?.total || (prHeader as any)?.subtotal || null;
-
-      // Get next CAI number atomically (skip for muestras and manual presupuestos)
-      let caiData: { cai_numero: string; punto_venta: number; nro_comprobante: number } | null = null;
-      if (remitarTipo !== "muestra" && (pr as any).modalidadEmision !== "manual") {
-        const { data: caiRows } = await (supabase as any).rpc("next_cai_number", {
-          p_sociedad_id: sociedadActiva.id,
-          p_tipo: "remito_r",
-        });
-        if (caiRows && caiRows.length > 0) caiData = caiRows[0];
-      }
-
-      const remitoInsert: Record<string, unknown> = {
-        numero: null,
-        cliente_id: pr.clienteId,
-        fecha: todayAR(),
-        observaciones: `Generado desde presupuesto ${pr.numero}`,
-        presupuesto_id: pr.id,
-        estado: "pendiente",
-        sociedad_id: sociedadActiva.id,
-        created_by: profile?.id || null,
-        oc_cliente: pr.ocCliente || null,
-        valor_declarado: valorDeclarado ? Number(valorDeclarado) : null,
-        tipo_remito: remitarTipo === "muestra" ? "muestra" : "interno",
-      };
-      if (caiData) {
-        remitoInsert.cai_numero = caiData.cai_numero;
-        remitoInsert.punto_venta_cai = caiData.punto_venta;
-        remitoInsert.nro_comprobante_cai = caiData.nro_comprobante;
-      }
-      const { data: remitoData, error: remitoErr } = await (supabase as any)
-        .from("remitos")
-        .insert(remitoInsert)
-        .select("id, numero")
-        .single();
-
-      if (remitoErr || !remitoData) {
-        toast.error("Error al crear remito: " + (remitoErr?.message || "sin datos"));
-        return;
-      }
-
-      const remitoItems = itemsToRemit.map((it) => ({
-        remito_id: remitoData.id,
-        descripcion: it.descripcion,
-        cantidad: it.cantidad_a_remitar,
-        unidad: it.unidad,
-        orden: it.orden,
-        presupuesto_item_id: it.presupuesto_item_id || null,
-      }));
-      const { error: remitoItemsErr } = await (supabase as any).from("remito_items").insert(remitoItems);
-      if (remitoItemsErr) {
-        toast.error("Remito creado pero error en items: " + remitoItemsErr.message);
-        return;
-      }
-
-      // Check if ALL quantities are now fully remitted
-      const allFullyRemitted = items.every(i => {
-        const willBeRemitted = i.cantidad_remitida + i.cantidad_a_remitar;
-        return willBeRemitted >= i.cantidad_total;
-      });
-
-      if (allFullyRemitted) {
-        let remitidoUpdate = supabase.from("presupuestos").update({ estado: "remitido" } as any).eq("id", pr.id);
-        if (sociedadActiva?.id) remitidoUpdate = remitidoUpdate.eq("sociedad_id" as any, sociedadActiva.id);
-        await remitidoUpdate;
-      }
-
-      setRemitidoIds((prev) => new Set([...prev, pr.id]));
-      setRemitarModal(null);
-      toast.success(`Remito ${remitoData.numero || ""} creado con ${itemsToRemit.length} items`);
-      await fetchPresupuestos();
-    } catch (err) {
-      console.error("Error creating remito:", err);
-      toast.error("Error al crear remito");
-    } finally {
-      setRemitarLoading(false);
-    }
-  }
-
   function handleRechazoConfirm() {
     if (rechazoModal && motivoRechazo.trim()) {
       handleEstadoChange(rechazoModal, rechazoTipo, motivoRechazo.trim());
@@ -3383,7 +3199,7 @@ export default function PresupuestosPage() {
                 )}
                 {selected.estado !== "solicitud" && remitidoStatus[selected.id] !== "total" && (
                   <button
-                    onClick={() => openRemitarModal(selected)}
+                    onClick={() => setRemitarPrId(selected.id)}
                     className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-950/30 transition-colors"
                     title="Generar remito"
                   >
@@ -4931,91 +4747,8 @@ export default function PresupuestosPage() {
         </>
       )}
 
-      {/* ==================== REMITAR MODAL ==================== */}
-      {remitarModal && (
-        <>
-          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setRemitarModal(null)} />
-          <div className="fixed inset-x-4 top-[10%] z-50 mx-auto max-w-lg rounded-2xl bg-white shadow-2xl dark:bg-zinc-900 flex flex-col max-h-[80vh]">
-            <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-3 dark:border-zinc-700">
-              <h3 className="text-base font-bold text-zinc-900 dark:text-white">Remitar — {remitarModal.pr.numero}</h3>
-              <button onClick={() => setRemitarModal(null)} className="rounded p-1 text-zinc-400 hover:text-zinc-600"><X className="h-4 w-4" /></button>
-            </div>
-            <div className="p-5 space-y-3 overflow-y-auto flex-1">
-              {/* Tipo de remito */}
-              <div>
-                <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">Tipo de remito</label>
-                <div className="flex gap-2">
-                  <button type="button" onClick={() => setRemitarTipo("interno")}
-                    className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${remitarTipo === "interno" ? "bg-emerald-600 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
-                    Remito R (con CAI)
-                  </button>
-                  <button type="button" onClick={() => setRemitarTipo("muestra")}
-                    className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${remitarTipo === "muestra" ? "bg-violet-600 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
-                    Muestras (sin CAI)
-                  </button>
-                </div>
-              </div>
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">Ingresá las cantidades a incluir en este remito. Los items con cantidad 0 no se incluyen.</p>
-              <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                {remitarModal.items.map((item, idx) => (
-                  <div key={idx} className="py-3 first:pt-0 last:pb-0">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-zinc-900 dark:text-white truncate">{item.descripcion}</p>
-                        <div className="flex items-center gap-3 mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                          <span>Total: {item.cantidad_total} {item.unidad}</span>
-                          {item.cantidad_remitida > 0 && (
-                            <span className="text-amber-600 dark:text-amber-400">Ya remitido: {item.cantidad_remitida}</span>
-                          )}
-                          <span className="text-emerald-600 dark:text-emerald-400 font-medium">Pendiente: {item.cantidad_pendiente}</span>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <input
-                          type="number"
-                          min={0}
-                          max={item.cantidad_pendiente}
-                          step="any"
-                          value={item.cantidad_a_remitar || ""}
-                          onChange={(e) => {
-                            const val = Math.max(0, Math.min(Number(e.target.value), item.cantidad_pendiente));
-                            setRemitarModal(prev => {
-                              if (!prev) return prev;
-                              const newItems = [...prev.items];
-                              newItems[idx] = { ...newItems[idx], cantidad_a_remitar: val };
-                              return { ...prev, items: newItems };
-                            });
-                          }}
-                          className="w-20 rounded-lg border border-zinc-200 px-2 py-1.5 text-sm text-right font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
-                        />
-                        <span className="text-xs text-zinc-400 w-6">{item.unidad}</span>
-                      </div>
-                    </div>
-                    {item.cantidad_a_remitar > item.cantidad_pendiente && (
-                      <p className="text-xs text-red-500 mt-1">Excede la cantidad pendiente</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-              <div className="flex items-center justify-between rounded-lg bg-zinc-50 dark:bg-zinc-800/50 px-3 py-2 text-sm">
-                <span className="text-zinc-600 dark:text-zinc-300 font-medium">Items a incluir</span>
-                <span className="font-bold text-zinc-900 dark:text-white">{remitarModal.items.filter(i => i.cantidad_a_remitar > 0).length} de {remitarModal.items.length}</span>
-              </div>
-            </div>
-            <div className="flex justify-end gap-2 border-t border-zinc-200 px-5 py-3 dark:border-zinc-700">
-              <button onClick={() => setRemitarModal(null)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300">Cancelar</button>
-              <button
-                onClick={handleRemitarConfirm}
-                disabled={remitarLoading || remitarModal.items.every(i => i.cantidad_a_remitar <= 0)}
-                className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
-              >
-                {remitarLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Truck className="h-4 w-4" />}
-                Generar remito
-              </button>
-            </div>
-          </div>
-        </>
-      )}
+      {/* ==================== REMITAR (ventana única) ==================== */}
+      <RemitoVentana open={!!remitarPrId} prId={remitarPrId} onClose={() => setRemitarPrId(null)} onGuardado={() => { void fetchPresupuestos(); }} />
 
       {/* ==================== EMAIL MODAL ==================== */}
       <EmailComposeModal

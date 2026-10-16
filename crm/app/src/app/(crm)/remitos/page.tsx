@@ -6,8 +6,13 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { mockRemitos } from "@/lib/mock-data";
-import { Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, Trash2, Minus, ShieldCheck, GitBranch, MapPin, Maximize2, Search, Camera } from "lucide-react";
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, Trash2, Minus, ShieldCheck, GitBranch, MapPin, Maximize2, Search, Camera, Pencil } from "lucide-react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { RemitoVentana } from "@/components/remito-ventana";
+import { useToast } from "@/components/ui/toast";
+import { abrirRemitoPDF, remitoPDFBase64 } from "@/lib/remito-pdf";
+import { numeroCAI, descripcionCorta } from "@/lib/remitos-crear";
+import { prepararArchivo } from "@/lib/preparar-foto";
 import { useUser } from "@/lib/auth-context";
 import { formatDate, formatCurrency, todayAR } from "@/lib/utils";
 import { generateRemitoPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
@@ -86,7 +91,9 @@ interface RemitoRow {
   presupuesto_numero?: string | null;
   presupuesto_modalidad?: string | null;
   ocs_numeros?: string[];
-  remito_items: { id: string }[];
+  remito_items: { id: string; descripcion?: string | null; orden?: number | null }[];
+  transportistas?: string[];
+  presupuesto_vendedor?: string | null;
   // Entrega (Remitos nueva): foto del remito firmado y quién recibió
   foto_url?: string | null;
   recibio?: string | null;
@@ -139,36 +146,16 @@ interface Sucursal {
 
 export default function RemitosPage() {
   const { sociedadActiva, profile } = useUser();
+  const { toast } = useToast();
   const [remitos, setRemitos] = useState<RemitoRow[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Create remito modal state
-  const [createModalOpen, setCreateModalOpen] = useState(false);
-  // El tipo se guarda en observaciones para mantener compatibilidad con instalaciones
-  // anteriores que todavía no tienen una columna tipo_remito.
-  const [createTipoRemito, setCreateTipoRemito] = useState<"interno" | "muestra" | "electronico">("interno");
-  const [createForm, setCreateForm] = useState({
-    numero: "",
-    cliente_id: "",
-    fecha: todayAR(),
-    observaciones: "",
-    presupuesto_id: "",
-    valor_declarado: "",
-  });
-  const [createItems, setCreateItems] = useState<CreateItem[]>([]);
-  const [clientes, setClientes] = useState<{ id: string; razon_social: string }[]>([]);
-  const [clienteSearch, setClienteSearch] = useState("");
-  const [clienteDropdownOpen, setClienteDropdownOpen] = useState(false);
-  const [presupuestosAprobados, setPresupuestosAprobados] = useState<{ id: string; numero: string; subtotal: number | null; total: number | null; cliente_id: string | null }[]>([]);
-  const [loadingPresupuestosCliente, setLoadingPresupuestosCliente] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState("");
-  const [valorDeclaradoSugerido, setValorDeclaradoSugerido] = useState("");
-  // PR de origen manual (sin ARCA): el remito sale interno, SIN número de CAI (igual que al remitar desde el PR).
-  const [createPRManual, setCreatePRManual] = useState(false);
-  const [createPROc, setCreatePROc] = useState("");
-  const [loadingPRItems, setLoadingPRItems] = useState(false);
-
+  // Ventana única de remitos (crear desde PR / independiente, y editar): components/remito-ventana
+  const [ventana, setVentana] = useState<{ remitoId: string | null } | null>(null);
+  // Foto del remito firmado subiéndose (id del remito)
+  const [subiendoFoto, setSubiendoFoto] = useState<string | null>(null);
+  const fotoInput = useRef<HTMLInputElement>(null);
+  const fotoPara = useRef<RemitoRow | null>(null);
   // Detail panel
   const [detailRemito, setDetailRemito] = useState<RemitoRow | null>(null);
   const [detailItems, setDetailItems] = useState<RemitoDetailItem[]>([]);
@@ -211,16 +198,6 @@ export default function RemitosPage() {
   // Email compose modal
   const [emailModalOpen, setEmailModalOpen] = useState(false);
   const [emailModalData, setEmailModalData] = useState<{ to: string; subject: string; body: string; filename: string; id: string }>({ to: "", subject: "", body: "", filename: "", id: "" });
-
-  // Entrega parcial modal
-  const [parcialModalOpen, setParcialModalOpen] = useState(false);
-  const [parcialRemito, setParcialRemito] = useState<RemitoRow | null>(null);
-  const [parcialItems, setParcialItems] = useState<(RemitoDetailItem & { cantidadEntregada: number })[]>([]);
-  const [loadingParcial, setLoadingParcial] = useState(false);
-  const [savingParcial, setSavingParcial] = useState(false);
-
-  // Sucursales for create modal split
-  const [clienteSucursales, setClienteSucursales] = useState<Sucursal[]>([]);
 
   // Split existing remito modal
   const [splitModalOpen, setSplitModalOpen] = useState(false);
@@ -287,25 +264,11 @@ export default function RemitosPage() {
     },
   ];
 
-  // PRs filtered by selected client in create modal
-  const filteredPRs = useMemo(() => {
-    if (!createForm.cliente_id) return presupuestosAprobados;
-    return presupuestosAprobados.filter(p => p.cliente_id === createForm.cliente_id);
-  }, [presupuestosAprobados, createForm.cliente_id]);
-
-  const filteredClientes = useMemo(() => {
-    const term = clienteSearch.trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-    if (!term) return clientes;
-    return clientes.filter((cliente) =>
-      cliente.razon_social.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().includes(term)
-    );
-  }, [clientes, clienteSearch]);
-
   const fetchData = useCallback(async () => {
       try {
         let q = (supabase as any)
           .from("remitos")
-          .select(`*, clientes(razon_social, email, cuit, direccion), presupuestos(numero, modalidad_emision), remito_items(id)`)
+          .select(`*, clientes(razon_social, email, cuit, direccion), presupuestos(numero, modalidad_emision, vendedor_id, created_by), remito_items(id, descripcion, orden)`)
           .order("fecha", { ascending: false });
 
         if (!sociedadActiva?.id) { setRemitos([]); return; }
@@ -323,7 +286,22 @@ export default function RemitosPage() {
               for (const o of ocs || []) ocsPorPR.set(o.presupuesto_origen_id, [...(ocsPorPR.get(o.presupuesto_origen_id) || []), o.numero]);
             }
           } catch { /* sin OC: la columna queda vacía */ }
-          setRemitos((data as any[]).map(r => ({ ...r, clienteNombre: r.clientes?.razon_social || "", presupuesto_numero: r.presupuestos?.numero || null, presupuesto_modalidad: r.presupuestos?.modalidad_emision || null, ocs_numeros: ocsPorPR.get(r.presupuesto_id) || [] })) as RemitoRow[]);
+          // Nombre de la sucursal y transportista de cada remito (para la lista y el buscador).
+          const sucNombre = new Map<string, string>();
+          const transPorRemito = new Map<string, string[]>();
+          try {
+            const sucIds = [...new Set((data as any[]).map(r => r.sucursal_id).filter(Boolean))] as string[];
+            const remIds = (data as any[]).map(r => r.id) as string[];
+            for (let i = 0; i < sucIds.length; i += 150) {
+              const { data: sucs } = await (supabase as any).from("cliente_sucursales").select("id, nombre").in("id", sucIds.slice(i, i + 150));
+              for (const s of sucs || []) sucNombre.set(s.id, s.nombre);
+            }
+            for (let i = 0; i < remIds.length; i += 150) {
+              const { data: ts } = await (supabase as any).from("transportes").select("remito_id, transportista").in("remito_id", remIds.slice(i, i + 150));
+              for (const t of ts || []) if (t.transportista) transPorRemito.set(t.remito_id, [...(transPorRemito.get(t.remito_id) || []), t.transportista]);
+            }
+          } catch { /* sin sucursal ni transporte: quedan vacíos */ }
+          setRemitos((data as any[]).map(r => ({ ...r, clienteNombre: r.clientes?.razon_social || "", presupuesto_numero: r.presupuestos?.numero || null, presupuesto_modalidad: r.presupuestos?.modalidad_emision || null, presupuesto_vendedor: r.presupuestos?.vendedor_id || r.presupuestos?.created_by || null, ocs_numeros: ocsPorPR.get(r.presupuesto_id) || [], sucursal_nombre: r.sucursal_id ? sucNombre.get(r.sucursal_id) : undefined, transportistas: transPorRemito.get(r.id) || [] })) as RemitoRow[]);
         } else if (error) {
           setRemitos(mockRemitos.map((r) => ({
             id: r.id, numero: r.numero, cliente_id: r.clienteId,
@@ -351,6 +329,58 @@ export default function RemitosPage() {
   }, [sociedadActiva?.id]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  /** PDF del remito desde la lista (el mismo que el del detalle). */
+  async function pdfDeFila(row: RemitoRow) {
+    if (!sociedadActiva) return;
+    try { await abrirRemitoPDF(row.id, sociedadActiva); } catch (err) { toast.error(`No se pudo armar el PDF: ${err instanceof Error ? err.message : "error"}`); }
+  }
+
+  /**
+   * Foto del remito firmado (no es obligatoria): se achica, se guarda en comprobantes/remitos/... y la IA lee quién recibió
+   * y lo anotado a mano. Si el remito no estaba entregado, queda entregado y se avisa al vendedor del PR.
+   */
+  async function subirFoto(r: RemitoRow, file: File) {
+    if (!sociedadActiva?.id) return;
+    setSubiendoFoto(r.id);
+    try {
+      const prep = await prepararArchivo(file);
+      const ruta = `remitos/${sociedadActiva.id}/${r.id}-${Date.now()}.${prep.ext}`;
+      const { error: eS } = await supabase.storage.from("comprobantes").upload(ruta, prep.blob, { contentType: prep.mediaType, upsert: false });
+      if (eS) throw eS;
+      const url = supabase.storage.from("comprobantes").getPublicUrl(ruta).data.publicUrl;
+      let leido: any = null;
+      try {
+        const { data: its } = await (supabase as any).from("remito_items").select("presupuesto_item_id, descripcion, cantidad").eq("remito_id", r.id);
+        const res = await fetch("/api/remitos/leer-foto", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ base64: prep.base64, mediaType: prep.mediaType, remitos: [{ id: r.id, numero: r.numero, cai: r.nro_comprobante_cai, cliente: r.clienteNombre, fecha: r.fecha, items: its || [] }] }),
+        });
+        if (res.ok) leido = await res.json();
+      } catch { /* sin lectura de la IA: la foto queda igual */ }
+      const cambios: Record<string, unknown> = { foto_url: url, foto_ia: leido };
+      if (leido?.recibio) cambios.recibio = leido.recibio;
+      if (leido?.anotaciones) cambios.nota_ia = leido.anotaciones;
+      const marcar = r.estado !== "entregado";
+      if (marcar) { cambios.estado = "entregado"; cambios.entregado_at = new Date().toISOString(); cambios.entregado_por = profile?.id || null; }
+      const { error } = await (supabase as any).from("remitos").update(cambios).eq("id", r.id).eq("sociedad_id", sociedadActiva.id);
+      if (error) throw error;
+      if (marcar && r.presupuesto_vendedor && r.presupuesto_vendedor !== profile?.id) {
+        await (supabase as any).from("alertas").insert({
+          tipo: "seguimiento", title: `Entregado: ${r.presupuesto_numero || r.numero}`,
+          description: `${profile?.full_name || "Alguien"} subió el remito firmado ${r.numero} de ${r.clienteNombre}${leido?.recibio ? ` · recibió ${leido.recibio}` : ""}`,
+          entity_id: r.id, entity_type: "remito", module: "remitos", user_id: r.presupuesto_vendedor, sociedad_id: sociedadActiva.id,
+        }).then(() => {}, () => {});
+      }
+      toast.success(`Foto guardada en ${r.numero}${marcar ? " · quedó entregado" : ""}${leido?.recibio ? ` · recibió ${leido.recibio}` : ""}`);
+      if (leido?.anotaciones) toast.warning(`Anotaron a mano: ${leido.anotaciones}`);
+      await fetchData();
+    } catch (err) {
+      toast.error(`No se pudo subir la foto: ${err instanceof Error ? err.message : "error"}`);
+    } finally {
+      setSubiendoFoto(null);
+    }
+  }
 
   async function handleEstadoChange(id: string, estado: "pendiente" | "entregado" | "parcial") {
     if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de modificar el remito"); return; }
@@ -391,134 +421,6 @@ export default function RemitosPage() {
     }
   }
 
-  async function openParcialModal(remito: RemitoRow) {
-    setParcialRemito(remito);
-    setParcialModalOpen(true);
-    setLoadingParcial(true);
-    try {
-      const { data: items } = await (supabase as any)
-        .from("remito_items")
-        .select("id, descripcion, cantidad, unidad, orden, presupuesto_item_id")
-        .eq("remito_id", remito.id)
-        .order("orden", { ascending: true });
-      if (items && items.length > 0) {
-        setParcialItems((items as unknown as RemitoDetailItem[]).map(it => ({
-          ...it,
-          cantidadEntregada: it.cantidad,
-        })));
-      } else {
-        setParcialItems([]);
-      }
-    } catch {
-      setParcialItems([]);
-    } finally {
-      setLoadingParcial(false);
-    }
-  }
-
-  async function handleSaveParcial() {
-    if (!parcialRemito || parcialItems.length === 0) return;
-    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de guardar la entrega"); return; }
-    if (parcialRemito.sociedad_id && parcialRemito.sociedad_id !== sociedadActiva.id) {
-      alert("El remito no pertenece a la sociedad activa"); return;
-    }
-    setSavingParcial(true);
-    try {
-      const entregados = parcialItems.filter(it => it.cantidadEntregada > 0);
-      const pendientes = parcialItems
-        .filter(it => it.cantidadEntregada < it.cantidad)
-        .map(it => ({ ...it, cantidadRestante: it.cantidad - it.cantidadEntregada }));
-
-      // Update existing remito items with delivered quantities
-      for (const item of entregados) {
-        const { error } = await supabase
-          .from("remito_items")
-          .update({ cantidad: item.cantidadEntregada })
-          .eq("id", item.id).eq("remito_id", parcialRemito.id);
-        if (error) { alert("Error al actualizar item: " + error.message); return; }
-      }
-
-      // Remove items with 0 delivered
-      const ceroItems = parcialItems.filter(it => it.cantidadEntregada === 0);
-      for (const item of ceroItems) {
-        await supabase.from("remito_items").delete().eq("id", item.id).eq("remito_id", parcialRemito.id);
-      }
-
-      // Mark current remito as parcial
-      let parcialUpdate = supabase.from("remitos").update({ estado: "parcial" }).eq("id", parcialRemito.id);
-      parcialUpdate = parcialUpdate.eq("sociedad_id" as any, sociedadActiva.id);
-      const { error: statusErr } = await parcialUpdate;
-      if (statusErr) { alert("Error al actualizar estado: " + statusErr.message); return; }
-
-      // If there are pending quantities, create a new remito for the remainder
-      if (pendientes.length > 0) {
-        const maxNum = remitos.reduce((max, r) => {
-          const parts = r.numero?.split("-");
-          const n = parts?.length === 3 ? parseInt(parts[2]) : 0;
-          return n > max ? n : max;
-        }, 999);
-        const newNumero = `R-0001-${String(maxNum + 1).padStart(8, "0")}`;
-
-        // Get next CAI number for remainder remito (only if original had CAI)
-        let caiParcial: { cai_numero: string; punto_venta: number; nro_comprobante: number } | null = null;
-        if (parcialRemito.cai_numero) {
-          const { data: caiPRows } = await (supabase as any).rpc("next_cai_number", {
-            p_sociedad_id: sociedadActiva.id,
-            p_tipo: "remito_r",
-          });
-          if (caiPRows && caiPRows.length > 0) caiParcial = caiPRows[0];
-        }
-
-        const parcialInsert: Record<string, unknown> = {
-          numero: newNumero,
-          cliente_id: parcialRemito.cliente_id,
-          fecha: todayAR(),
-          observaciones: `Saldo pendiente de remito ${parcialRemito.numero}`,
-          presupuesto_id: parcialRemito.presupuesto_id || null,
-          estado: "pendiente",
-          sociedad_id: sociedadActiva.id,
-          valor_declarado: null,
-          created_by: profile?.id || null,
-        };
-        if (caiParcial) {
-          parcialInsert.cai_numero = caiParcial.cai_numero;
-          parcialInsert.punto_venta_cai = caiParcial.punto_venta;
-          parcialInsert.nro_comprobante_cai = caiParcial.nro_comprobante;
-        }
-        const { data: newRemito, error: newErr } = await (supabase.from("remitos") as any).insert(parcialInsert).select("id").single();
-
-        if (newErr) {
-          console.error("Error creating remainder remito:", newErr);
-        } else if (newRemito) {
-          const newItems = pendientes.map((it) => ({
-            remito_id: newRemito.id,
-            descripcion: it.descripcion,
-            cantidad: it.cantidadRestante,
-            unidad: it.unidad || "UN",
-            orden: it.orden,
-            presupuesto_item_id: it.presupuesto_item_id || null,
-          }));
-          const { error: itemsErr } = await (supabase.from("remito_items") as any).insert(newItems);
-          if (itemsErr) console.error("Error inserting remainder items:", itemsErr);
-        }
-      }
-
-      setParcialModalOpen(false);
-      setParcialRemito(null);
-      setParcialItems([]);
-      if (detailRemito?.id === parcialRemito.id) {
-        setDetailRemito({ ...parcialRemito, estado: "parcial" });
-        // Refresh detail items
-        handleRowClick({ ...parcialRemito, estado: "parcial" });
-      }
-      await fetchData();
-    } catch (err) {
-      console.error("Error in entrega parcial:", err);
-    } finally {
-      setSavingParcial(false);
-    }
-  }
-
   async function handleAutorizarAFIP() {
     if (!detailRemito) return;
     setAutorizandoAFIP(true);
@@ -555,317 +457,6 @@ export default function RemitosPage() {
       setAutorizandoAFIP(false);
     }
   }
-
-  function getNextInternoNumero() {
-    const maxNum = remitos.reduce((max, r) => {
-      const parts = r.numero?.split("-");
-      const n = parts?.length === 3 ? parseInt(parts[2]) : 0;
-      return n > max ? n : max;
-    }, 999); // Start from 1000
-    return `R-0001-${String(maxNum + 1).padStart(8, "0")}`;
-  }
-
-  async function openCreateModal() {
-    setCreateTipoRemito("interno");
-    setCreateForm({
-      numero: getNextInternoNumero(),
-      cliente_id: "",
-      fecha: todayAR(),
-      observaciones: "",
-      presupuesto_id: "",
-      valor_declarado: "",
-    });
-    setCreateItems([]);
-    setCreateError("");
-    setCreatePRManual(false); setCreatePROc("");
-    setValorDeclaradoSugerido("");
-    setClienteSucursales([]);
-    setPresupuestosAprobados([]);
-    setClienteSearch("");
-    setClienteDropdownOpen(false);
-    setCreateModalOpen(true);
-
-    // Some legacy clients have activo=null, so only exclude records explicitly disabled.
-    let clienteQ = (supabase as any).from("clientes").select("id, razon_social, activo").order("razon_social");
-    if (sociedadActiva?.id) clienteQ = clienteQ.eq("sociedad_id" as any, sociedadActiva.id);
-    const { data, error } = await clienteQ;
-    if (error) {
-      setClientes([]);
-      setCreateError(`No se pudieron cargar los clientes: ${error.message}`);
-      return;
-    }
-    setClientes(((data || []) as Array<{ id: string; razon_social: string; activo: boolean | null }>)
-      .filter((cliente) => cliente.activo !== false)
-      .map(({ id, razon_social }) => ({ id, razon_social })));
-  }
-
-  async function loadPresupuestosForCliente(clienteId: string) {
-    setPresupuestosAprobados([]);
-    if (!clienteId) return;
-    setLoadingPresupuestosCliente(true);
-    try {
-      let prQ = (supabase as any)
-        .from("presupuestos")
-        .select("id, numero, subtotal, total, cliente_id, estado")
-        .eq("cliente_id", clienteId)
-        .not("estado", "eq", "solicitud")
-        .order("created_at", { ascending: false });
-      if (sociedadActiva?.id) prQ = prQ.eq("sociedad_id" as any, sociedadActiva.id);
-      const { data, error } = await prQ;
-      if (error) throw error;
-      setPresupuestosAprobados((data || []) as any[]);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Error desconocido";
-      setCreateError(`No se pudieron cargar los presupuestos del cliente: ${message}`);
-    } finally {
-      setLoadingPresupuestosCliente(false);
-    }
-  }
-
-  async function handleClienteSelect(clienteId: string) {
-    const cliente = clientes.find((item) => item.id === clienteId);
-    setClienteSearch(cliente?.razon_social || "");
-    setClienteDropdownOpen(false);
-    setCreateForm((prev) => ({ ...prev, cliente_id: clienteId, presupuesto_id: "" }));
-    setCreateItems([]);
-    setClienteSucursales([]);
-    setCreateError("");
-    await loadPresupuestosForCliente(clienteId);
-    if (clienteId) {
-      const { data: sucs } = await (supabase as any)
-        .from("cliente_sucursales")
-        .select("id, nombre, direccion, localidad, provincia, cp")
-        .eq("cliente_id", clienteId)
-        .eq("activo", true)
-        .order("principal", { ascending: false });
-      if (sucs && sucs.length > 0) setClienteSucursales(sucs as Sucursal[]);
-    }
-  }
-
-  // Fetch items from PR when selected
-  async function handlePRSelect(prId: string) {
-    const pr = presupuestosAprobados.find((p) => p.id === prId);
-    const autoValor = pr?.total ? String(pr.total) : pr?.subtotal ? String(pr.subtotal) : "";
-    setValorDeclaradoSugerido(autoValor);
-
-    setCreateForm((prev) => ({
-      ...prev,
-      presupuesto_id: prId,
-      cliente_id: pr?.cliente_id || prev.cliente_id,
-      valor_declarado: "",
-    }));
-
-    if (!prId) {
-      setCreateItems([]);
-      setCreatePRManual(false); setCreatePROc("");
-      return;
-    }
-
-    // Fetch items from presupuesto + PR sucursal
-    setLoadingPRItems(true);
-    try {
-      const [itemsRes, prHeaderRes] = await Promise.all([
-        supabase.from("presupuesto_items").select("id, descripcion, cantidad, unidad, orden").eq("presupuesto_id", prId).order("orden"),
-        supabase.from("presupuestos").select("sucursal_id, modalidad_emision, oc_cliente").eq("id", prId).single(),
-      ]);
-      const prSucursalId = (prHeaderRes.data as any)?.sucursal_id || "";
-      setCreatePRManual((prHeaderRes.data as any)?.modalidad_emision === "manual");
-      setCreatePROc((prHeaderRes.data as any)?.oc_cliente || "");
-
-      // Fetch sucursales if client changed via PR and we don't have them
-      const clienteId = pr?.cliente_id || createForm.cliente_id;
-      if (clienteId && clienteSucursales.length === 0) {
-        const { data: sucs } = await (supabase as any).from("cliente_sucursales")
-          .select("id, nombre, direccion, localidad, provincia, cp")
-          .eq("cliente_id", clienteId).eq("activo", true).order("principal", { ascending: false });
-        if (sucs && sucs.length > 0) setClienteSucursales(sucs as Sucursal[]);
-      }
-
-      const items = itemsRes.data;
-      if (items && items.length > 0) {
-        // Fetch existing remitos to calculate pending quantities
-        const { data: existingRemitos } = await (supabase as any)
-          .from("remitos").select("id").eq("presupuesto_id", prId);
-        let remitidoByPiId: Record<string, number> = {};
-        let remitidoByKey: Record<string, number> = {};
-        if (existingRemitos && existingRemitos.length > 0) {
-          const rIds = existingRemitos.map((r: any) => r.id);
-          const { data: rItems } = await (supabase as any)
-            .from("remito_items")
-            .select("descripcion, cantidad, orden, presupuesto_item_id")
-            .in("remito_id", rIds);
-          if (rItems) {
-            for (const ri of rItems as any[]) {
-              if (ri.presupuesto_item_id) {
-                remitidoByPiId[ri.presupuesto_item_id] = (remitidoByPiId[ri.presupuesto_item_id] || 0) + Number(ri.cantidad);
-              } else {
-                const key = `${ri.descripcion}__${ri.orden}`;
-                remitidoByKey[key] = (remitidoByKey[key] || 0) + Number(ri.cantidad);
-              }
-            }
-          }
-        }
-
-        const mapped = items.map((it: any, idx: number) => {
-          const yaRemitido = remitidoByPiId[it.id] || remitidoByKey[`${it.descripcion}__${it.orden ?? idx}`] || 0;
-          const pendiente = Math.max(0, Number(it.cantidad) - yaRemitido);
-          return {
-            tempId: `pr-${idx}`,
-            descripcion: it.descripcion || "",
-            cantidad: pendiente,
-            unidad: it.unidad || "UN",
-            sucursal_id: prSucursalId,
-            presupuesto_item_id: it.id || null,
-            orden: it.orden ?? idx,
-          };
-        }).filter((it: any) => it.cantidad > 0);
-
-        if (mapped.length === 0) {
-          setCreateError("Todas las cantidades de este PR ya fueron remitidas");
-          setCreateItems([]);
-        } else {
-          setCreateItems(mapped);
-        }
-      } else {
-        setCreateItems([]);
-      }
-    } catch {
-      setCreateItems([]);
-    } finally {
-      setLoadingPRItems(false);
-    }
-  }
-
-  function addManualItem() {
-    setCreateItems(prev => [...prev, {
-      tempId: `manual-${Date.now()}`,
-      descripcion: "",
-      cantidad: 1,
-      unidad: "UN",
-    }]);
-  }
-
-  function updateCreateItem(tempId: string, field: keyof CreateItem, value: string | number) {
-    setCreateItems(prev => prev.map(it => it.tempId === tempId ? { ...it, [field]: value } : it));
-  }
-
-  function removeCreateItem(tempId: string) {
-    setCreateItems(prev => prev.filter(it => it.tempId !== tempId));
-  }
-
-  async function handleCreateRemito() {
-    setCreateError("");
-    if (!createForm.cliente_id) { setCreateError("Seleccioná un cliente"); return; }
-    if (!createForm.fecha) { setCreateError("La fecha es obligatoria"); return; }
-
-    // Filter out items with empty description
-    const validItems = createItems.filter(it => it.descripcion.trim());
-    if (validItems.length === 0) { setCreateError("Agregá al menos un item al remito"); return; }
-    if (!sociedadActiva?.id) { setCreateError("Seleccioná una sociedad antes de crear el remito"); return; }
-
-    setCreating(true);
-    try {
-      // Group items by sucursal_id for splitting
-      const hasSucursales = clienteSucursales.length > 0 && validItems.some(it => it.sucursal_id);
-      const groups = new Map<string, CreateItem[]>();
-
-      if (hasSucursales) {
-        for (const item of validItems) {
-          const key = item.sucursal_id || "__none";
-          if (!groups.has(key)) groups.set(key, []);
-          groups.get(key)!.push(item);
-        }
-      } else {
-        groups.set("__none", validItems);
-      }
-
-      const groupEntries = [...groups.entries()];
-      for (let gi = 0; gi < groupEntries.length; gi++) {
-        const [sucKey, groupItems] = groupEntries[gi];
-        const sucursalId = sucKey === "__none" ? null : sucKey;
-        const sucNombre = sucursalId ? clienteSucursales.find(s => s.id === sucursalId)?.nombre : null;
-
-        const typeLabel = createTipoRemito === "muestra" ? "Muestra" : "Remito R";
-        const obsBase = [`Tipo: ${typeLabel}`, createForm.observaciones]
-          .filter(Boolean).join(" — ");
-        const obs = groupEntries.length > 1 && sucNombre
-          ? [obsBase, `Sucursal: ${sucNombre}`].filter(Boolean).join(" — ")
-          : obsBase;
-
-        // Get next CAI number if tipo is not "muestra" (muestras are internal, no CAI)
-        let caiData: { cai_numero: string; punto_venta: number; nro_comprobante: number; fecha_vencimiento: string } | null = null;
-        // Un PR manual (sin ARCA) no usa números de CAI: el remito sale interno, igual que al remitar desde el PR.
-        if (createTipoRemito !== "muestra" && !createPRManual) {
-          const { data: caiRows, error: caiErr } = await (supabase as any).rpc("next_cai_number", {
-            p_sociedad_id: sociedadActiva.id,
-            p_tipo: "remito_r",
-          });
-          if (!caiErr && caiRows && caiRows.length > 0) {
-            caiData = caiRows[0];
-          }
-          // If no CAI configured, continue without — remito will be internal
-        }
-
-        const remitoInsert: Record<string, unknown> = {
-          numero: null,
-          cliente_id: createForm.cliente_id,
-          fecha: createForm.fecha,
-          observaciones: obs,
-          tipo_remito: createTipoRemito,
-          presupuesto_id: createForm.presupuesto_id || null,
-          estado: "pendiente",
-          valor_declarado: createForm.valor_declarado ? Number(createForm.valor_declarado) : null,
-          sociedad_id: sociedadActiva.id,
-          sucursal_id: sucursalId,
-          created_by: profile?.id || null,
-          oc_cliente: createPROc || null,
-        };
-        if (caiData) {
-          remitoInsert.cai_numero = caiData.cai_numero;
-          remitoInsert.punto_venta_cai = caiData.punto_venta;
-          remitoInsert.nro_comprobante_cai = caiData.nro_comprobante;
-        }
-        let { data: remitoData, error } = await (supabase.from("remitos") as any).insert(remitoInsert).select("id").single();
-        // Compatibilidad transitoria con una base que todavía no aplicó la migración.
-        if (error && /tipo_remito|cai_numero|punto_venta_cai|nro_comprobante_cai|column/i.test(error.message || "")) {
-          const { tipo_remito: _tipo, cai_numero: _c, punto_venta_cai: _p, nro_comprobante_cai: _n, oc_cliente: _oc, ...legacyInsert } = remitoInsert;
-          ({ data: remitoData, error } = await (supabase.from("remitos") as any).insert(legacyInsert).select("id").single());
-        }
-
-        if (error || !remitoData) {
-          setCreateError("Error al crear remito: " + (error?.message || "sin datos"));
-          return;
-        }
-
-        const remitoItems = groupItems.map((it, idx) => ({
-          remito_id: remitoData.id,
-          descripcion: it.descripcion,
-          cantidad: Number(it.cantidad),
-          unidad: it.unidad || "UN",
-          orden: it.orden ?? idx,
-          presupuesto_item_id: it.presupuesto_item_id || null,
-        }));
-        const { error: itemsErr } = await (supabase as any).from("remito_items").insert(remitoItems);
-        if (itemsErr) {
-          let rollbackRemito = (supabase as any).from("remitos").delete().eq("id", remitoData.id);
-          if (sociedadActiva?.id) rollbackRemito = rollbackRemito.eq("sociedad_id", sociedadActiva.id);
-          await rollbackRemito;
-          setCreateError(`No se pudieron guardar los items del remito: ${itemsErr.message}`);
-          return;
-        }
-      }
-
-      setCreateModalOpen(false);
-      await fetchData();
-    } catch (err) {
-      console.error("Error creating remito:", err);
-      setCreateError("Error inesperado al crear remito");
-    } finally {
-      setCreating(false);
-    }
-  }
-
-
 
   async function openSplitModal() {
     if (!detailRemito) return;
@@ -1124,9 +715,9 @@ export default function RemitosPage() {
     return lines;
   }
 
-  async function handleEmailRemito() {
-    if (!detailRemito) return;
-    const r = detailRemito;
+  async function handleEmailRemito(fila?: RemitoRow) {
+    const r = fila || detailRemito;
+    if (!r) return;
     const template = await loadEmailTemplate("remito", sociedadActiva?.id || "");
     const vars = {
       numero: r.numero,
@@ -1258,10 +849,10 @@ export default function RemitosPage() {
       <Header
         title="Remitos"
         subtitle="Remitos de entrega"
-        action={{ label: "Nuevo remito", onClick: openCreateModal }}
+        action={{ label: "Nuevo remito", onClick: () => setVentana({ remitoId: null }) }}
       />
       <div className="p-3 sm:p-5 space-y-4">
-        <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Buscar por N° de remito, cliente, PR u OC del cliente…"
+        <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Buscar lo que quieras: cliente, artículo, N° de remito o CAI, PR, OC, sucursal, transporte, observaciones…"
           className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" />
         <SmartFilters
           filters={smartFilterConfigs}
@@ -1272,60 +863,43 @@ export default function RemitosPage() {
         <Card className="p-0 overflow-hidden">
           <DataTable<RemitoRow>
             columns={[
-              { key: "presupuesto_id", label: "N° PR", sortable: true, sortValue: (row) => row.presupuesto_numero || "", render: (row) => row.presupuesto_id ? <Badge variant="info">{row.presupuesto_numero || "Vinculado"}</Badge> : <span className="text-zinc-400">{"—"}</span> },
-              { key: "ocs_numeros", label: "N° OC", sortable: true, sortValue: (row) => (row.ocs_numeros || []).join(" "), render: (row) => (row.ocs_numeros || []).length ? <span className="font-mono text-xs text-violet-700 dark:text-violet-300">{(row.ocs_numeros || []).join(", ")}</span> : <span className="text-zinc-400">{"—"}</span> },
-              {
-                key: "numero", label: "N° Remito", sortable: true,
-                render: (row) => {
-                  const hasCai = !!(row.cai_numero && row.punto_venta_cai && row.nro_comprobante_cai);
-                  const displayNum = hasCai
-                    ? `R ${String(row.punto_venta_cai).padStart(4, "0")}-${String(row.nro_comprobante_cai).padStart(8, "0")}`
-                    : row.numero;
-                  return (
-                    <div className="flex items-center gap-2">
-                      <Truck className={`h-4 w-4 ${hasCai ? "text-emerald-500" : "text-zinc-400"}`} />
-                      <span className="font-mono text-xs font-bold">{displayNum}</span>
-                      {hasCai && <span title="CAI autorizado"><ShieldCheck className="h-3 w-3 text-emerald-400" /></span>}
-                      {row.foto_url && <a href={row.foto_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} title={`Remito firmado${row.recibio ? ` · recibió ${row.recibio}` : ""}`}><Camera className="h-3.5 w-3.5 text-sky-500 hover:text-sky-700" /></a>}
-                    </div>
-                  );
-                },
-              },
-              { key: "clientes", label: "Cliente", sortable: true, sortKey: "clienteNombre", render: (row) => <span className="font-medium">{row.clientes?.razon_social}</span> },
-              { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-zinc-500">{formatDate(row.fecha)}</span> },
-              { key: "remito_items", label: "Items", sortable: true, sortValue: (row) => row.remito_items.length, render: (row) => (
-                <span className={`text-zinc-500 ${row.remito_items.length === 0 ? "text-red-400 font-medium" : ""}`}>
-                  {row.remito_items.length === 0 ? "Sin items" : `${row.remito_items.length} productos`}
-                </span>
+              { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="whitespace-nowrap text-zinc-500">{formatDate(row.fecha)}</span> },
+              { key: "numero", label: "N° remito", sortable: true, render: (row) => <span className="whitespace-nowrap font-mono text-xs font-bold">{row.numero}</span> },
+              { key: "presupuesto_id", label: "N° PR", sortable: true, sortValue: (row) => row.presupuesto_numero || "", render: (row) => row.presupuesto_id ? <span className="whitespace-nowrap font-mono text-xs text-blue-700 dark:text-blue-300">{row.presupuesto_numero || "Vinculado"}</span> : <span className="text-zinc-400">{"—"}</span> },
+              { key: "oc_cliente", label: "N° OC", sortable: true, sortValue: (row) => row.oc_cliente || "", render: (row) => row.oc_cliente ? <span className="font-mono text-xs">{row.oc_cliente}</span> : <span className="text-zinc-400">{"—"}</span> },
+              { key: "clientes", label: "Cliente", sortable: true, sortKey: "clienteNombre", render: (row) => (
+                <div className="leading-tight">
+                  <span className="font-medium">{row.clientes?.razon_social}</span>
+                  {row.sucursal_nombre && <span className="block text-[11px] text-zinc-400">{row.sucursal_nombre}</span>}
+                </div>
               ) },
-              { key: "tipo_remito", label: "Tipo", sortable: true, sortValue: (row) => tipoRemitoTexto(row), render: (row) => { const k = tipoRemitoClave(row); return <Badge variant={k === "arca" ? "info" : k === "muestra" ? "purple" : k === "cai" ? "success" : k === "manual" ? "orange" : "default"}>{tipoRemitoTexto(row)}</Badge>; } },
-              { key: "oc_cliente", label: "OC Cliente", sortable: true, sortValue: (row) => row.oc_cliente || "", render: (row) => row.oc_cliente ? <span className="font-mono text-xs text-blue-600 dark:text-blue-400">{row.oc_cliente}</span> : <span className="text-zinc-400">{"\u2014"}</span> },
-              {
-                key: "estado", label: "Estado", sortable: true,
-                render: (row) => {
-                  const cfg = estadoConfig[row.estado] || { label: row.estado, variant: "info" as const };
-                  return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
-                },
-              },
+              { key: "descripcion", label: "Descripción", sortable: true, sortValue: (row) => descripcionCorta(row.remito_items).corta, render: (row) => {
+                const d = descripcionCorta(row.remito_items);
+                return d.corta ? <span className="line-clamp-1 max-w-[260px] text-xs text-zinc-600 dark:text-zinc-300" title={d.todas}>{d.corta}</span> : <span className="text-xs font-medium text-red-400">Sin items</span>;
+              } },
+              { key: "tipo_remito", label: "Tipo remito", sortable: true, sortValue: (row) => `${tipoRemitoTexto(row)} ${numeroCAI(row.punto_venta_cai, row.nro_comprobante_cai) || ""}`, render: (row) => {
+                const k = tipoRemitoClave(row);
+                const cai = numeroCAI(row.punto_venta_cai, row.nro_comprobante_cai);
+                if (k === "cai" && cai) return <span className="whitespace-nowrap text-xs font-medium text-emerald-700 dark:text-emerald-400" title={`CAI ${row.cai_numero}`}>Remito R {cai}</span>;
+                return <Badge variant={k === "arca" ? "info" : k === "muestra" ? "purple" : k === "manual" ? "orange" : "default"}>{tipoRemitoTexto(row)}</Badge>;
+              } },
+              { key: "transportistas", label: "Transporte", sortable: true, sortValue: (row) => (row.transportistas || []).join(" "), render: (row) => (row.transportistas || []).length ? <span className="text-xs">{(row.transportistas || []).join(", ")}</span> : <span className="text-zinc-400">{"—"}</span> },
+              { key: "foto_url", label: "Foto", sortable: true, sortValue: (row) => (row.foto_url ? 1 : 0), render: (row) => (
+                <div onClick={(e) => e.stopPropagation()}>
+                  {row.foto_url ? (
+                    <a href={row.foto_url} target="_blank" rel="noreferrer" title={`Remito firmado${row.recibio ? ` · recibió ${row.recibio}` : ""}`} className="inline-flex items-center gap-1 text-xs text-sky-600 hover:text-sky-800"><Camera className="h-4 w-4" />{row.recibio ? <span className="max-w-[90px] truncate">{row.recibio}</span> : null}</a>
+                  ) : subiendoFoto === row.id ? <Loader2 className="h-4 w-4 animate-spin text-orange-500" /> : (
+                    <button onClick={() => { fotoPara.current = row; fotoInput.current?.click(); }} title="Subir la foto del remito firmado (no es obligatoria)" className="rounded p-1 text-zinc-300 hover:bg-sky-50 hover:text-sky-600"><Camera className="h-4 w-4" /></button>
+                  )}
+                </div>
+              ) },
               {
                 key: "actions", label: "", sortable: false,
                 render: (row) => (
-                  <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                    {row.estado === "pendiente" && (
-                      <>
-                        <button onClick={() => openParcialModal(row)} className="rounded p-1.5 text-zinc-400 hover:bg-blue-100 hover:text-blue-600" title="Entrega parcial">
-                          <Package className="h-3.5 w-3.5" />
-                        </button>
-                        <button onClick={() => handleEstadoChange(row.id, "entregado")} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600" title="Marcar entregado">
-                          <CheckCircle2 className="h-3.5 w-3.5" />
-                        </button>
-                      </>
-                    )}
-                    {row.estado === "parcial" && (
-                      <button onClick={() => handleEstadoChange(row.id, "entregado")} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600" title="Marcar entregado">
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                      </button>
-                    )}
+                  <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+                    <button onClick={() => setVentana({ remitoId: row.id })} className="rounded p-1.5 text-zinc-400 hover:bg-orange-50 hover:text-orange-600" title="Editar remito"><Pencil className="h-3.5 w-3.5" /></button>
+                    <button onClick={() => pdfDeFila(row)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700" title="Descargar PDF"><Download className="h-3.5 w-3.5" /></button>
+                    <button onClick={() => handleEmailRemito(row)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700" title="Enviar por mail"><Mail className="h-3.5 w-3.5" /></button>
                   </div>
                 ),
               },
@@ -1343,10 +917,12 @@ export default function RemitosPage() {
               if (vinculadoFilter === "no" && r.presupuesto_id) return false;
               const tipoFilter = smartFilterValues.tipo as string;
               if (tipoFilter && tipoRemitoClave(r) !== tipoFilter) return false;
-              const q = busqueda.trim().toLowerCase();
+              const q = busqueda.trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
               if (q) {
                 const cai = r.cai_numero ? `r ${String(r.punto_venta_cai || "").padStart(4, "0")}-${String(r.nro_comprobante_cai || "").padStart(8, "0")}` : "";
-                const texto = `${r.numero} ${cai} ${r.clientes?.razon_social || ""} ${r.presupuesto_numero || ""} ${r.oc_cliente || ""}`.toLowerCase();
+                const cai2 = numeroCAI(r.punto_venta_cai, r.nro_comprobante_cai) || "";
+                const articulos = (r.remito_items || []).map((it) => it.descripcion || "").join(" ");
+                const texto = `${r.numero} ${cai} ${cai2} ${r.clientes?.razon_social || ""} ${r.presupuesto_numero || ""} ${r.oc_cliente || ""} ${r.sucursal_nombre || ""} ${articulos} ${r.observaciones || ""} ${(r.transportistas || []).join(" ")} ${r.recibio || ""}`.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
                 if (!q.split(/\s+/).every((w) => texto.includes(w))) return false;
               }
               return true;
@@ -1379,7 +955,7 @@ export default function RemitosPage() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={handleEmailRemito} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors" title="Enviar por correo">
+                <button onClick={() => handleEmailRemito()} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors" title="Enviar por correo">
                   <Mail className="h-3.5 w-3.5" /> Email
                 </button>
                 <button onClick={handleCopySummary} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors" title="Copiar resumen">
@@ -1404,11 +980,9 @@ export default function RemitosPage() {
             <div className="px-6 py-5 space-y-5">
               {/* Action buttons */}
               <div className="flex flex-wrap gap-2">
-                {(detailRemito.estado === "pendiente" || detailRemito.estado === "parcial") && (
-                  <button onClick={() => openParcialModal(detailRemito)} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors">
-                    <Package className="h-4 w-4" /> Entrega parcial
-                  </button>
-                )}
+                <button onClick={() => setVentana({ remitoId: detailRemito.id })} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-orange-500 text-white hover:bg-orange-600 transition-colors">
+                  <Pencil className="h-4 w-4" /> Editar
+                </button>
                 {(detailRemito.estado === "pendiente" || detailRemito.estado === "parcial") && (
                   <button onClick={() => openSplitModal()} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-violet-500 text-white hover:bg-violet-600 transition-colors">
                     <GitBranch className="h-4 w-4" /> Dividir remito
@@ -1791,265 +1365,11 @@ export default function RemitosPage() {
         </>
       )}
 
-      {/* Create Remito Modal */}
-      {createModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <Card className="w-full max-w-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold dark:text-white">Nuevo Remito</h2>
-              <button onClick={() => setCreateModalOpen(false)} className="text-zinc-400 hover:text-zinc-600">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            <div className="space-y-3">
-              {/* Tipo de remito */}
-              <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Tipo de remito</label>
-                <div className="flex gap-2">
-                  <button type="button" onClick={() => { setCreateTipoRemito("interno"); setCreateForm(f => ({ ...f, numero: getNextInternoNumero() })); }}
-                    className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${createTipoRemito === "interno" ? "bg-emerald-600 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
-                    Remito R (con CAI)
-                  </button>
-                  <button type="button" onClick={() => { setCreateTipoRemito("muestra"); setCreateForm(f => ({ ...f, numero: getNextInternoNumero() })); }}
-                    className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${createTipoRemito === "muestra" ? "bg-violet-600 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
-                    Muestras (sin CAI)
-                  </button>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Número</label>
-                  <div className="flex items-center h-[38px] rounded-lg border border-zinc-200 bg-zinc-50 px-3 text-sm text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400">
-                    {createTipoRemito === "muestra" ? "Asignado automáticamente" : "CAI — asignado al crear"}
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Fecha</label>
-                  <input
-                    type="date"
-                    value={createForm.fecha}
-                    onChange={(e) => setCreateForm({ ...createForm, fecha: e.target.value })}
-                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Cliente *</label>
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-                  <input
-                    type="text"
-                    value={clienteSearch}
-                    onFocus={() => setClienteDropdownOpen(true)}
-                    onBlur={() => window.setTimeout(() => setClienteDropdownOpen(false), 150)}
-                    onChange={(e) => {
-                      setClienteSearch(e.target.value);
-                      setClienteDropdownOpen(true);
-                      if (createForm.cliente_id) {
-                        setCreateForm((prev) => ({ ...prev, cliente_id: "", presupuesto_id: "" }));
-                        setCreateItems([]);
-                        setClienteSucursales([]);
-                        setPresupuestosAprobados([]);
-                      }
-                    }}
-                    placeholder="Escribí para buscar un cliente..."
-                    autoComplete="off"
-                    className="w-full rounded-lg border border-zinc-300 py-2 pl-9 pr-3 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                  />
-                  {clienteDropdownOpen && (
-                    <div className="absolute z-30 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-zinc-200 bg-white py-1 shadow-xl dark:border-zinc-700 dark:bg-zinc-900">
-                      {filteredClientes.length > 0 ? filteredClientes.map((cliente) => (
-                        <button
-                          key={cliente.id}
-                          type="button"
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => handleClienteSelect(cliente.id)}
-                          className={`block w-full px-3 py-2 text-left text-sm hover:bg-orange-50 hover:text-orange-700 dark:hover:bg-orange-950/30 dark:hover:text-orange-400 ${cliente.id === createForm.cliente_id ? "bg-orange-50 text-orange-700 dark:bg-orange-950/30 dark:text-orange-400" : "text-zinc-700 dark:text-zinc-200"}`}
-                        >
-                          {cliente.razon_social}
-                        </button>
-                      )) : (
-                        <p className="px-3 py-3 text-sm text-zinc-400">No se encontraron clientes</p>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-                  Presupuesto {createForm.cliente_id ? "(filtrado por cliente)" : "(opcional)"}
-                </label>
-                <select
-                  value={createForm.presupuesto_id}
-                  onChange={(e) => handlePRSelect(e.target.value)}
-                  disabled={!createForm.cliente_id || loadingPresupuestosCliente}
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                >
-                  <option value="">{loadingPresupuestosCliente ? "Cargando presupuestos..." : "Sin presupuesto"}</option>
-                  {filteredPRs.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.numero}{p.total ? ` — $${Number(p.total).toLocaleString("es-AR")}` : p.subtotal ? ` — Neto: $${Number(p.subtotal).toLocaleString("es-AR")}` : ""}
-                    </option>
-                  ))}
-                </select>
-                {createForm.cliente_id && !loadingPresupuestosCliente && filteredPRs.length === 0 && (
-                  <p className="text-xs text-zinc-400 mt-1">No hay presupuestos aprobados para este cliente</p>
-                )}
-              </div>
-
-              {/* Items section */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                    Items del remito *
-                  </label>
-                  <button
-                    type="button"
-                    onClick={addManualItem}
-                    className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-600 font-medium"
-                  >
-                    <Plus className="h-3 w-3" /> Agregar item
-                  </button>
-                </div>
-                {loadingPRItems ? (
-                  <div className="flex items-center justify-center py-4 text-sm text-zinc-400">
-                    <Loader2 className="h-4 w-4 animate-spin mr-2" /> Cargando items del presupuesto...
-                  </div>
-                ) : createItems.length === 0 ? (
-                  <p className="text-xs text-zinc-400 text-center py-4 rounded-lg border border-dashed border-zinc-300 dark:border-zinc-700">
-                    {createForm.presupuesto_id ? "El presupuesto no tiene items" : "Seleccioná un presupuesto o agregá items manualmente"}
-                  </p>
-                ) : (
-                  <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="bg-zinc-50 dark:bg-zinc-800/50 text-xs text-zinc-500">
-                          <th className="text-left px-3 py-2">Descripción</th>
-                          <th className="text-center px-2 py-2 w-24">Cantidad</th>
-                          <th className="text-center px-2 py-2 w-20">Unidad</th>
-                          {clienteSucursales.length > 0 && <th className="text-left px-2 py-2 w-40">Sucursal</th>}
-                          <th className="w-10"></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {createItems.map((item) => (
-                          <tr key={item.tempId} className="border-t border-zinc-100 dark:border-zinc-800">
-                            <td className="px-2 py-1.5">
-                              <input
-                                type="text"
-                                value={item.descripcion}
-                                onChange={(e) => updateCreateItem(item.tempId, "descripcion", e.target.value)}
-                                className="w-full rounded border border-zinc-200 px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
-                                placeholder="Descripción del item"
-                              />
-                            </td>
-                            <td className="px-2 py-1.5">
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={item.cantidad}
-                                onChange={(e) => updateCreateItem(item.tempId, "cantidad", Number(e.target.value))}
-                                className="w-full rounded border border-zinc-200 px-2 py-1 text-sm text-center dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
-                              />
-                            </td>
-                            <td className="px-2 py-1.5">
-                              <input
-                                type="text"
-                                value={item.unidad}
-                                onChange={(e) => updateCreateItem(item.tempId, "unidad", e.target.value)}
-                                className="w-full rounded border border-zinc-200 px-2 py-1 text-sm text-center dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
-                              />
-                            </td>
-                            {clienteSucursales.length > 0 && (
-                              <td className="px-2 py-1.5">
-                                <select
-                                  value={item.sucursal_id || ""}
-                                  onChange={(e) => updateCreateItem(item.tempId, "sucursal_id" as any, e.target.value)}
-                                  className="w-full rounded border border-zinc-200 px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
-                                >
-                                  <option value="">Dir. principal</option>
-                                  {clienteSucursales.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
-                                </select>
-                              </td>
-                            )}
-                            <td className="px-1 py-1.5">
-                              <button
-                                type="button"
-                                onClick={() => removeCreateItem(item.tempId)}
-                                className="rounded p-1 text-zinc-400 hover:bg-red-100 hover:text-red-500 transition-colors"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-                  Valor declarado ($) <span className="text-zinc-400 font-normal">(requerido para transporte)</span>
-                </label>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={createForm.valor_declarado}
-                  onChange={(e) => {
-                    const v = e.target.value.replace(",", ".");
-                    if (v === "" || v === "." || /^\d*\.?\d*$/.test(v)) {
-                      setCreateForm({ ...createForm, valor_declarado: v });
-                    }
-                  }}
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                  placeholder={valorDeclaradoSugerido ? `Sugerido: $${Number(valorDeclaradoSugerido).toLocaleString("es-AR", { minimumFractionDigits: 2 })}` : "Ingrese el valor declarado..."}
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Observaciones</label>
-                <textarea
-                  value={createForm.observaciones}
-                  onChange={(e) => setCreateForm({ ...createForm, observaciones: e.target.value })}
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                  rows={2}
-                  placeholder="Observaciones opcionales..."
-                />
-              </div>
-            </div>
-            {createPRManual && <p className="rounded border border-sky-200 bg-sky-50 p-2 text-xs text-sky-800 dark:border-sky-900 dark:bg-sky-950/30 dark:text-sky-200">Este PR es <b>manual (sin ARCA)</b>: el remito sale <b>interno, sin número de CAI</b>.</p>}
-            {createError && (
-              <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{createError}</p>
-            )}
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                onClick={() => { setCreateModalOpen(false); setCreateError(""); }}
-                className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleCreateRemito}
-                disabled={creating}
-                className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50"
-              >
-                {creating ? "Creando..." : (() => {
-                  const validCount = createItems.filter(i => i.descripcion.trim()).length;
-                  if (clienteSucursales.length > 0) {
-                    const sucGroups = new Set(createItems.filter(i => i.descripcion.trim()).map(i => i.sucursal_id || "__none"));
-                    return sucGroups.size > 1 ? `Crear ${sucGroups.size} Remitos (${validCount} items)` : `Crear Remito (${validCount} items)`;
-                  }
-                  return `Crear Remito (${validCount} items)`;
-                })()}
-              </button>
-            </div>
-          </Card>
-        </div>
-      )}
-
+      {/* Ventana única: Nuevo remito / Editar */}
+      <RemitoVentana open={!!ventana} remitoId={ventana?.remitoId || null} onClose={() => setVentana(null)}
+        onGuardado={() => { void fetchData(); if (detailRemito) setDetailRemito(null); }} />
+      <input ref={fotoInput} type="file" accept="image/*,application/pdf" capture="environment" className="hidden"
+        onChange={(e) => { const f = e.target.files?.[0]; const r = fotoPara.current; e.target.value = ""; if (f && r) void subirFoto(r, f); }} />
 
       {/* Split por Sucursal Modal */}
       {splitModalOpen && detailRemito && (
@@ -2209,113 +1529,6 @@ export default function RemitosPage() {
         </div>
       )}
 
-      {/* Entrega Parcial Modal */}
-      {parcialModalOpen && parcialRemito && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <Card className="w-full max-w-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-semibold dark:text-white">Entrega Parcial</h2>
-                <p className="text-sm text-zinc-400">
-                  Remito {parcialRemito.numero} — {parcialRemito.clientes?.razon_social || "—"}
-                </p>
-              </div>
-              <button onClick={() => { setParcialModalOpen(false); setParcialRemito(null); }} className="text-zinc-400 hover:text-zinc-600">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">
-              Ingresá la cantidad entregada de cada item. Se creará un nuevo remito con las cantidades pendientes.
-            </p>
-
-            {loadingParcial ? (
-              <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-5 w-5 animate-spin text-orange-500" />
-              </div>
-            ) : parcialItems.length === 0 ? (
-              <p className="text-sm text-zinc-400 text-center py-6">Este remito no tiene items cargados.</p>
-            ) : (
-              <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-zinc-50 dark:bg-zinc-800/50 text-xs text-zinc-500">
-                      <th className="text-left px-3 py-2">Descripcion</th>
-                      <th className="text-right px-3 py-2 w-24">Original</th>
-                      <th className="text-center px-3 py-2 w-32">Entregada</th>
-                      <th className="text-right px-3 py-2 w-24">Pendiente</th>
-                      <th className="text-left px-3 py-2 w-16">Unidad</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {parcialItems.map((item) => {
-                      const pendiente = item.cantidad - item.cantidadEntregada;
-                      return (
-                        <tr key={item.id} className="border-t border-zinc-100 dark:border-zinc-800">
-                          <td className="px-3 py-2 dark:text-white">{item.descripcion}</td>
-                          <td className="px-3 py-2 text-right text-zinc-500">{item.cantidad}</td>
-                          <td className="px-2 py-1.5 text-center">
-                            <input
-                              type="number"
-                              min="0"
-                              max={item.cantidad}
-                              step="1"
-                              value={item.cantidadEntregada}
-                              onChange={(e) => {
-                                const val = Math.max(0, Math.min(item.cantidad, Number(e.target.value) || 0));
-                                setParcialItems(prev => prev.map(it => it.id === item.id ? { ...it, cantidadEntregada: val } : it));
-                              }}
-                              className="w-full rounded border border-zinc-200 px-2 py-1 text-sm text-center dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
-                            />
-                          </td>
-                          <td className={`px-3 py-2 text-right font-medium ${pendiente > 0 ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400"}`}>
-                            {pendiente}
-                          </td>
-                          <td className="px-3 py-2 text-zinc-500">{item.unidad || "u"}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {parcialItems.length > 0 && !loadingParcial && (
-              <div className="rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 p-3 text-sm text-blue-700 dark:text-blue-300">
-                {parcialItems.some(it => it.cantidadEntregada < it.cantidad) ? (
-                  <p>Se actualizarán las cantidades del remito actual y se creará un nuevo remito con {parcialItems.filter(it => it.cantidadEntregada < it.cantidad).length} item(s) pendiente(s).</p>
-                ) : (
-                  <p>Todas las cantidades fueron entregadas. El remito se marcará como parcial sin crear saldo pendiente.</p>
-                )}
-              </div>
-            )}
-
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                onClick={() => { setParcialModalOpen(false); setParcialRemito(null); }}
-                className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleSaveParcial}
-                disabled={savingParcial || parcialItems.length === 0}
-                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
-              >
-                {savingParcial ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" /> Guardando...
-                  </>
-                ) : (
-                  <>
-                    <Package className="h-4 w-4" /> Confirmar entrega parcial
-                  </>
-                )}
-              </button>
-            </div>
-          </Card>
-        </div>
-      )}
       {/* PDF valor declarado modal */}
       {pdfModalOpen && (
         <>
@@ -2363,53 +1576,8 @@ export default function RemitosPage() {
         defaultBody={emailModalData.body}
         pdfFilename={emailModalData.filename}
         generatePdf={async () => {
-          if (!detailRemito || !sociedadActiva) throw new Error("No se encontró el remito");
-          const r = detailRemito;
-          const soc = getSociedadPDF(sociedadActiva);
-          let caiVto: string | null = null;
-          if (r.cai_numero) {
-            const { data: cc } = await (supabase as any)
-              .from("cai_config")
-              .select("fecha_vencimiento")
-              .eq("sociedad_id", sociedadActiva.id)
-              .eq("cai_numero", r.cai_numero)
-              .maybeSingle();
-            caiVto = cc?.fecha_vencimiento || null;
-          }
-          const html = generateRemitoPDF({
-            numero: r.numero,
-            fecha: r.fecha,
-            cae: r.cae,
-            cae_vencimiento: r.car_vencimiento,
-            nro_remito_afip: r.nro_remito_afip,
-            oc_cliente: r.oc_cliente,
-            valor_declarado: r.valor_declarado,
-            observaciones: r.observaciones,
-            cai_numero: r.cai_numero,
-            punto_venta_cai: r.punto_venta_cai,
-            nro_comprobante_cai: r.nro_comprobante_cai,
-            cai_vencimiento: caiVto,
-            cuit_emisor: sociedadActiva.cuit,
-            cliente: r.clientes ? {
-              razon_social: r.clientes.razon_social,
-              cuit: r.clientes.cuit,
-              direccion: r.clientes.direccion,
-            } : null,
-            sucursal_nombre: r.sucursal_nombre,
-            sucursal_direccion: r.sucursal_direccion,
-            items: detailItems.map(it => ({
-              descripcion: it.descripcion,
-              cantidad: it.cantidad,
-              unidad: it.unidad,
-            })),
-            transportes: detailTransportes.map(t => ({
-              transportista: t.transportista,
-              destino: t.destino,
-              costo: t.costo,
-              moneda: t.moneda,
-            })),
-          }, soc);
-          return htmlToPdfBase64(html);
+          if (!emailModalData.id || !sociedadActiva) throw new Error("No se encontró el remito");
+          return remitoPDFBase64(emailModalData.id, sociedadActiva);
         }}
       />
     </>

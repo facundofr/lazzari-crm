@@ -813,27 +813,6 @@ export default function ConfiguracionPage() {
                       </label>
                     ),
                   },
-                  {
-                    key: "pruebaRemitosNueva", label: "Prueba: Remitos nueva", sortable: false,
-                    render: (row) => (
-                      <label className="inline-flex items-center gap-1.5 text-xs text-zinc-500" title="Ve la pantalla Remitos nueva (los remitos se arman solos con lo que falta entregar)">
-                        <input
-                          type="checkbox"
-                          checked={!!row.pruebaRemitosNueva}
-                          disabled={!canManageUsers}
-                          onChange={async (e) => {
-                            const valor = e.target.checked;
-                            try {
-                              await updateSystemUser(row.id, { prueba_remitos_nueva: valor });
-                              setDbUsers(prev => prev.map(u => u.id === row.id ? { ...u, pruebaRemitosNueva: valor } : u));
-                            } catch (updateError) { alert(updateError instanceof Error ? updateError.message : "No se pudo cambiar la casilla"); }
-                          }}
-                          className="h-4 w-4 accent-orange-600"
-                        />
-                        {row.pruebaRemitosNueva ? "Sí" : "No"}
-                      </label>
-                    ),
-                  },
                   { key: "createdAt", label: "Registrado", sortable: true, render: (row) => <span className="text-zinc-400 text-xs">{row.createdAt}</span> },
                   {
                     key: "actions", label: "", sortable: false,
