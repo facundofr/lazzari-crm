@@ -169,3 +169,19 @@ export function legacyDesdePlan(p: PlanPago, actual: { forma_pago: string; dias_
   const d = p.condicion_pago ? diasHastaVencer(p) : null;
   return { forma_pago, dias_cuenta_corriente: d ?? actual.dias_cuenta_corriente };
 }
+
+/**
+ * Condición de pago leída de la factura (Augusto 16/10: quedaba "Sin indicar" aunque la factura la dice).
+ * "10 DIAS FECHA FACTURA CONTRA ENTREGA" → cuenta corriente 10 días; "Contado" / "Contra entrega" → contra entrega;
+ * "Cuenta corriente" sin días → los días entre la fecha y el vencimiento. Devuelve null si no se puede saber.
+ */
+export function condicionDesdeFactura(notas: string | null | undefined, fecha?: string | null, vencimiento?: string | null): PlanPago | null {
+  const t = String(notas || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const m = t.match(/\b(\d{1,3})\s*dias?\b/);
+  if (m && Number(m[1]) > 0 && Number(m[1]) <= 180) return { condicion_pago: "cuenta_corriente", dias_pago: Number(m[1]) };
+  if (/anticipad/.test(t)) return { condicion_pago: "anticipado", dias_pago: 0 };
+  if (/\bcontado\b|contra\s*entrega|contrarreembolso/.test(t)) return { condicion_pago: "contra_entrega", dias_pago: 0 };
+  const d = fecha && vencimiento ? Math.round((Date.parse(vencimiento) - Date.parse(fecha)) / 86400000) : NaN;
+  if (/cuenta\s*corriente|cta\.?\s*cte/.test(t) && Number.isFinite(d) && d >= 0 && d <= 180) return d === 0 ? { condicion_pago: "contra_entrega", dias_pago: 0 } : { condicion_pago: "cuenta_corriente", dias_pago: d };
+  return null;
+}

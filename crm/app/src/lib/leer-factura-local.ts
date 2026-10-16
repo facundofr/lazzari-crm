@@ -33,9 +33,17 @@ async function buscarQrEnCanvas(canvas: HTMLCanvasElement): Promise<string | nul
   return jsQR(img.data, img.width, img.height, { inversionAttempts: "attemptBoth" })?.data ?? null;
 }
 
+/** Recorta la basura antes de "%PDF-" (ej. aviso de Ghostscript en las FA de Fujiwara; ver lib/pdf-limpiar.ts para el servidor). */
+export function recortarAntesDePdf(bytes: Uint8Array): Uint8Array {
+  const firma = [0x25, 0x50, 0x44, 0x46, 0x2d]; // "%PDF-"
+  const hasta = Math.min(bytes.length - firma.length, 8192);
+  for (let i = 0; i <= hasta; i++) if (firma.every((c, j) => bytes[i + j] === c)) return i > 0 ? bytes.subarray(i) : bytes;
+  return bytes;
+}
+
 async function leerPdf(file: File): Promise<{ qr: string | null; texto: string }> {
   const pdfjs = await cargarPdfjs();
-  const tarea = pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) });
+  const tarea = pdfjs.getDocument({ data: recortarAntesDePdf(new Uint8Array(await file.arrayBuffer())) });
   const doc = await tarea.promise;
   try {
     let texto = "";

@@ -14,6 +14,7 @@ Te voy a pasar un PDF o imagen de una factura de compra o nota de pedido de prov
     "nombre_fantasia": "nombre comercial o marca del emisor que aparece en el logo/encabezado, si es distinto de la razón social; si no, \"\"",
     "cuit": "XX-XXXXXXXX-X o solo números"
   },
+  "cuit_receptor": "CUIT del COMPRADOR (cliente/receptor de la factura, o sea nosotros), solo números, o null si no aparece",
   "fecha": "YYYY-MM-DD",
   "fecha_vencimiento": "YYYY-MM-DD o null si no aparece",
   "numero_factura": "XXXX-XXXXXXXX (punto de venta - número)",

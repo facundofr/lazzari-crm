@@ -4,7 +4,7 @@
  * en verde / amarillo / rojo. Lo usan la pantalla de conciliación y el cruce automático de la carga masiva.
  */
 import {
-  matchPurchaseLines, parseVariant,
+  matchPurchaseLines, parseVariant, esEnvio,
   type Equivalencias, type InvoiceLineInput, type OcLineInput, type MatchResult, type MatchOptions, type Asignacion,
 } from "@/lib/purchase-matching";
 
@@ -64,12 +64,17 @@ export async function sugerirEquivalencias(db: any, args: {
   const { data: aprendidas } = await db.from("proveedor_equivalencias").select("producto_factura, producto_oc")
     .eq("sociedad_id", sociedadId).eq("proveedor_id", proveedorId);
   const eq: Equivalencias = {}; const conf: Record<string, Confianza> = {}; const mot: Record<string, string> = {};
-  const res = await fetch("/api/conciliar-compra", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ proveedor: proveedorNombre, factura: lineasFactura, ocs, tallesEspeciales: opciones.tallesEspeciales }),
-  });
-  const json = await res.json();
-  if (!res.ok) throw new Error(json.error || "No se pudo conciliar");
+  // El flete / envío no se le pasa a la IA: si quedaba solo, la segunda pasada lo forzaba contra un artículo de la OC.
+  const articulos = lineasFactura.filter(l => !esEnvio(l.descripcion));
+  let json: any = { ia: false, aviso: "La factura solo trae envío: no hay artículos para cruzar." };
+  if (articulos.length) {
+    const res = await fetch("/api/conciliar-compra", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ proveedor: proveedorNombre, factura: articulos, ocs, tallesEspeciales: opciones.tallesEspeciales }),
+    });
+    json = await res.json();
+    if (!res.ok) throw new Error(json.error || "No se pudo conciliar");
+  }
   Object.assign(eq, json.equivalencias || {}); Object.assign(conf, json.confianza || {}); Object.assign(mot, json.motivo || {});
   for (const a of (aprendidas || []) as Array<{ producto_factura: string; producto_oc: string }>) {
     eq[a.producto_factura] = [...new Set([...(eq[a.producto_factura] || []), a.producto_oc])];
@@ -81,9 +86,10 @@ export async function sugerirEquivalencias(db: any, args: {
   if (json.ia) {
     const r1 = matchPurchaseLines(lineasFactura, ocs, eq, manual, opciones);
     if (r1.sinAsignar.length && r1.pendientesOc.length) {
-      const restoF = r1.sinAsignar.map(x => ({ ...lineasFactura.find(l => l.key === x.invoiceKey)!, cantidad: x.cantidad }));
+      const restoF = r1.sinAsignar.map(x => ({ ...lineasFactura.find(l => l.key === x.invoiceKey)!, cantidad: x.cantidad }))
+        .filter(l => !esEnvio(l.descripcion));
       const restoO = r1.pendientesOc.map(p => ({ ...ocs.find(o => o.id === p.ocLineId)!, cantidad: p.cantidad }));
-      try {
+      if (restoF.length) try {
         const res2 = await fetch("/api/conciliar-compra", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ proveedor: proveedorNombre, factura: restoF, ocs: restoO, tallesEspeciales: opciones.tallesEspeciales }),
@@ -99,6 +105,27 @@ export async function sugerirEquivalencias(db: any, args: {
   }
   const iaInfo = json.ia ? `Sugerencias de IA${json.modelo ? ` (${json.modelo})` : ""}` : json.aviso || "Sin IA: se usó similitud de nombres.";
   return { equivalencias: eq, confianza: conf, motivo: mot, iaInfo };
+}
+
+/** Renglones de envío / flete que no están en ninguna OC y nadie decidió todavía (se pregunta: ¿se suma a la OC o va aparte?). */
+export function fletesSinOc(lineas: InvoiceLineInput[], resultado: MatchResult, manual: Manual = {}): string[] {
+  const sinOc = new Set(resultado.sinAsignar.filter(s => s.tipo === "sin_oc").map(s => s.invoiceKey));
+  return lineas.filter(l => sinOc.has(l.key) && !manual[l.key] && esEnvio(l.descripcion)).map(l => l.key);
+}
+
+/** OC a la que se puede sumar el flete de una factura: la que se lleva más unidades de esa misma factura. */
+export function ocParaFlete(lineas: InvoiceLineInput[], resultado: MatchResult, key: string): { ocId: string; ocNumero: string } | null {
+  const ref = lineas.find(l => l.key === key)?.facturaRef;
+  const deEsa = new Set(lineas.filter(l => l.facturaRef === ref).map(l => l.key));
+  const porOc = new Map<string, { ocId: string; ocNumero: string; unidades: number }>();
+  for (const a of resultado.asignaciones) {
+    if (!deEsa.has(a.invoiceKey)) continue;
+    const x = porOc.get(a.ocId) || { ocId: a.ocId, ocNumero: a.ocNumero, unidades: 0 };
+    x.unidades += a.cantidad;
+    porOc.set(a.ocId, x);
+  }
+  const mejor = [...porOc.values()].sort((a, b) => b.unidades - a.unidades)[0];
+  return mejor ? { ocId: mejor.ocId, ocNumero: mejor.ocNumero } : null;
 }
 
 export type ColorLinea = "verde" | "amarillo" | "rojo" | "fuera";

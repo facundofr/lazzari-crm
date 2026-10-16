@@ -14,7 +14,7 @@ import { leerFacturaLocal, type LecturaLocal } from "@/lib/leer-factura-local";
 import { duplicadosComprobanteCompra } from "@/lib/saldo-factura-compra";
 import { ProveedorFormModal, type ProveedorForm } from "@/components/proveedor-form-modal";
 import { CondicionPagoEditor } from "@/components/condicion-pago-editor";
-import { textoCondicionPago, vencimientoFactura, type PlanPago } from "@/lib/condicion-pago";
+import { textoCondicionPago, vencimientoFactura, type PlanPago, condicionDesdeFactura } from "@/lib/condicion-pago";
 import { equivalenciaSugerida, costoPorUnidadPR, avisoCambioCostoPR } from "@/lib/reemplazo-oc";
 import { controlIva, emparejarPorPrecio, elegirOC } from "@/lib/factura-vs-oc";
 import { detectarDesgloseTalles, textoTalles, type Desglose } from "@/lib/factura-desglose-talles";
@@ -418,6 +418,13 @@ export default function CargarFacturaOC({
     })();
     return () => { cancelado = true; };
   }, [proveedorId, primeraOCId]);
+
+  // Si no hay condición de pago (ni en la OC ni en el proveedor), se toma la que dice la factura ("10 días fecha factura").
+  const condicionLeida = useMemo(() => condicionDesdeFactura(notas, fecha, fechaVencimiento), [notas, fecha, fechaVencimiento]);
+  useEffect(() => {
+    if (!condicionLeida || planPago.condicion_pago) return;
+    setPlanPago((prev) => (prev.condicion_pago ? prev : { ...prev, ...condicionLeida }));
+  }, [condicionLeida, planPago.condicion_pago]);
 
   // Vencimiento = fecha de factura + días que pide el proveedor (si no se escribió a mano).
   const vencimientoSugerido = vencimientoFactura(fecha, planPago);
@@ -1155,7 +1162,7 @@ export default function CargarFacturaOC({
           const original = { ...line };
           const costo = Number(item.precio_unitario) * (1 - Number(item.descuento_porcentaje || 0) / 100);
           const equivalencia = Number(String(eqTxt).replace(",", ".")) || equivalenciaSugerida(item.cantidad, Number(original.cantidad));
-          Object.assign(line, { codigo: item.codigo || null, descripcion: item.descripcion, cantidad: Number(item.cantidad), precio_unitario: costo, iva_porcentaje: Number(item.iva_porcentaje ?? 21), unidad: item.unidad || line.unidad });
+          Object.assign(line, { codigo: item.codigo || line.codigo || "", descripcion: item.descripcion, cantidad: Number(item.cantidad), precio_unitario: costo, iva_porcentaje: Number(item.iva_porcentaje ?? 21), unidad: item.unidad || line.unidad });
           reemplazosAplicados.push({ oc, line, original, item, equivalencia, costo });
         }
       }

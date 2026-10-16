@@ -5,7 +5,7 @@ import { CheckCircle2, FileUp, Loader2, X, AlertTriangle, UserPlus, PlayCircle, 
 import { supabase } from "@/lib/supabase/client";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
 import ConciliacionCompras, { lineasParaCruce } from "@/components/conciliacion-compras";
-import { cargarLineasOc, sugerirEquivalencias, contarSemaforo, type AnalisisIA } from "@/lib/conciliacion-compras-analisis";
+import { cargarLineasOc, sugerirEquivalencias, contarSemaforo, fletesSinOc, type AnalisisIA } from "@/lib/conciliacion-compras-analisis";
 import { matchPurchaseLines, citaOc } from "@/lib/purchase-matching";
 import { formatCurrency } from "@/lib/utils";
 import { traerTodo } from "@/lib/paginar";
@@ -15,12 +15,17 @@ import { ProveedorFormModal, type ProveedorForm } from "@/components/proveedor-f
 type Provider = { id: string; razon_social: string; cuit?: string | null };
 type OC = { id: string; numero: string; proveedor_id: string; proveedor_nombre: string; moneda: string };
 type RowState = "pending" | "parsing" | "ready" | "saved" | "error";
-type QueueRow = { id: string; file: File; state: RowState; message?: string; data?: any; provider?: Provider; oc?: OC; duplicada?: boolean };
+type QueueRow = { id: string; file: File; state: RowState; message?: string; data?: any; provider?: Provider; oc?: OC; duplicada?: boolean; otraSociedad?: string };
 /** Resultado del cruce automático de un proveedor (todas sus facturas del lote juntas). */
 type Cruce = { estado: "analizando" | "listo" | "sin_renglones" | "error"; verde?: number; amarillo?: number; rojo?: number; analisis?: AnalisisIA; mensaje?: string };
 type NuevoProv = { rowId: string; cuit: string; inicial: Partial<ProveedorForm> };
 
 const onlyDigits = (v: unknown) => String(v ?? "").replace(/\D/g, "");
+// CUIT de cada sociedad: si la factura está a nombre de la otra, se avisa (nunca traba).
+const SOCIEDAD_POR_CUIT: Record<string, { id: string; nombre: string }> = {
+  "20379309128": { id: "eee2a3c8-fe6c-494d-bd2f-7a5d8067d021", nombre: "Lazzari" },
+  "30719396042": { id: "fee94607-747a-4e87-ba24-aff9032f7a56", nombre: "Grupo LA" },
+};
 
 function tipoLabel(file: File, data: any): string {
   const raw = String(data?.tipo_comprobante || "").toUpperCase().trim();
@@ -116,7 +121,16 @@ export default function CargaMasivaFacturasCompra({ sociedadId, sociedadNombre, 
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json.success) throw new Error(json.error || "No se pudo leer el archivo");
       const data = { ...(json.data || {}), numero_factura: String(json.data?.numero_factura || "").trim() };
-      const provider = findProvider(onlyDigits(data.proveedor?.cuit));
+      // Si la lista de proveedores todavía no llegó (o falló), se busca por CUIT en la base.
+      let provider = findProvider(onlyDigits(data.proveedor?.cuit));
+      if (!provider && onlyDigits(data.proveedor?.cuit).length === 11) {
+        const cuit = onlyDigits(data.proveedor?.cuit);
+        const { data: ps } = await (supabase as any).from("proveedores").select("id, razon_social, cuit").eq("sociedad_id", sociedadId).eq("activo", true);
+        provider = ((ps || []) as Provider[]).find(p => onlyDigits(p.cuit) === cuit);
+        if (provider) setProvs(prev => prev.some(p => p.id === provider!.id) ? prev : [...prev, provider!]);
+      }
+      const otraSociedad = SOCIEDAD_POR_CUIT[onlyDigits(data.cuit_receptor)];
+      const deOtraSociedad = otraSociedad && otraSociedad.id !== sociedadId ? otraSociedad.nombre : "";
       const duplicada = provider ? await esDuplicada(provider.id, data.numero_factura) : false;
       // Además evitamos subir dos veces el mismo comprobante dentro del lote.
       // Si ese proveedor ya se había cruzado, se vuelve a cruzar con esta factura incluida.
@@ -125,6 +139,7 @@ export default function CargaMasivaFacturasCompra({ sociedadId, sociedadNombre, 
       setRows(prev => prev.map(r => r.id === row.id ? {
         ...r, state: "ready", data, provider, oc: ocFor(provider, data), duplicada: duplicada || repetidaEnLote,
         message: duplicada ? "Ya está cargada en el sistema" : repetidaEnLote ? "Repetida en este lote" : provider ? undefined : "Proveedor no cargado",
+        otraSociedad: deOtraSociedad || undefined,
       } : r));
     } catch (e) {
       setRows(prev => prev.map(r => r.id === row.id ? { ...r, state: "error", message: e instanceof Error ? e.message : "Error de lectura" } : r));
@@ -209,7 +224,10 @@ export default function CargaMasivaFacturasCompra({ sociedadId, sociedadNombre, 
       const opciones = { tallesEspeciales: prov?.talles_especiales || [], toleranciaPct: Number(prov?.tolerancia_precio_pct ?? 0) || 0, ocPreferidas };
       const analisis = await sugerirEquivalencias(supabase, { sociedadId, proveedorId: provId, proveedorNombre: prov?.razon_social || "", lineasFactura: lineas, ocs: usables, manual: {}, opciones });
       const r = matchPurchaseLines(lineas, usables, analisis.equivalencias, {}, opciones);
+      // El flete sin OC no es rojo: es una pregunta (¿se suma a la OC o va aparte?), cuenta como amarilla.
       const c = contarSemaforo(lineas, r, { manual: {}, confianza: analisis.confianza });
+      const fletes = fletesSinOc(lineas, r).length;
+      c.rojo -= fletes; c.amarillo += fletes;
       setCruce(x => ({ ...x, [provId]: { estado: "listo", verde: c.verde, amarillo: c.amarillo, rojo: c.rojo, analisis } }));
     } catch (e) {
       setCruce(x => ({ ...x, [provId]: { estado: "error", mensaje: e instanceof Error ? e.message : "No se pudo cruzar" } }));
@@ -375,7 +393,7 @@ export default function CargaMasivaFacturasCompra({ sociedadId, sociedadNombre, 
               const d = row.data || {};
               const sinProv = row.state === "ready" && !row.provider;
               return <tr key={row.id} className={`${i % 2 ? "bg-zinc-50 dark:bg-zinc-800/40" : ""} border-t border-zinc-100 dark:border-zinc-800 dark:text-zinc-200`}>
-                <td className="truncate px-2 py-2" title={row.file.name}>{row.file.name}</td>
+                <td className="truncate px-2 py-2" title={row.file.name}>{row.file.name}{row.otraSociedad && <div className="whitespace-normal text-[10px] font-medium text-amber-700 dark:text-amber-400" title="El CUIT del comprador en la factura es de la otra sociedad">⚠️ Está a nombre de {row.otraSociedad}: cargala desde esa sociedad</div>}</td>
                 <td className="px-2">{row.data ? tipoLabel(row.file, d) : ""}</td>
                 <td className="px-2 whitespace-nowrap">{d.numero_factura || ""}</td>
                 <td className="px-2 whitespace-nowrap">{d.fecha || ""}</td>

@@ -12,7 +12,7 @@
  *    - "Conciliación parcial": queda guardada SIN ir a pagos, para retomarla después.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { X, Loader2, Sparkles, Check, AlertTriangle, Upload, Trash2, RotateCcw, Pencil, Maximize2, Minimize2 } from "lucide-react";
+import { X, Loader2, Sparkles, Check, AlertTriangle, Upload, Trash2, RotateCcw, Pencil, Maximize2, Minimize2, ChevronDown, ChevronUp } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { aprenderNombreFantasiaDeFactura } from "@/lib/nombre-fantasia";
 import { traerTarjetas, tarjetaSugerida, movimientoPagoTarjeta, registrarPagoTarjeta, type Tarjeta } from "@/lib/pago-tarjeta";
@@ -21,13 +21,15 @@ import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { parseDecimalInput } from "@/lib/decimal-input";
 import { cargarLineasSinProveedor, coincidenciasSinProveedor, asignarRenglonesAProveedor, type CoincidenciaSinProveedor } from "@/lib/oc-sin-proveedor";
 import {
-  matchPurchaseLines, parseVariant, puntajeParecido, citaOc,
+  matchPurchaseLines, parseVariant, puntajeParecido, citaOc, esEnvio,
   type Equivalencias, type InvoiceLineInput, type MatchResult, type Asignacion,
 } from "@/lib/purchase-matching";
 import {
   cargarLineasOc, sugerirEquivalencias, semaforoLinea, contarSemaforo,
   type OcLinea, type Manual, type Confianza, type AnalisisIA,
 } from "@/lib/conciliacion-compras-analisis";
+import { armarPreguntas, type AccionPregunta } from "@/lib/conciliacion-preguntas";
+import { facturaDesdeDatos, precioNeto, lineKey, type FacturaCarga, type ItemFactura } from "@/lib/factura-compra-leida";
 
 const db = supabase as any;
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -46,100 +48,7 @@ interface Props {
 
 interface Proveedor { id: string; razon_social: string; cuit: string | null; talles_especiales?: string[] | null; tolerancia_precio_pct?: number | null }
 
-interface ItemFactura {
-  codigo: string;
-  descripcion: string;
-  cantidad: number;
-  precio_unitario: number;
-  descuento_porcentaje: number;
-  iva_porcentaje: number;
-  unidad: string;
-}
-
-interface FacturaCarga {
-  localId: string;
-  dbId: string | null;            // si se retoma una conciliación parcial
-  file: File | null;
-  archivoNombre: string;
-  numero: string;
-  tipo: string;
-  fecha: string;
-  vencimiento: string;
-  cae: string;
-  moneda: "ARS" | "USD";
-  subtotal: number;
-  iva: number;
-  ivaPorcentaje: number;
-  percepciones: number;
-  total: number;
-  items: ItemFactura[];
-  cuit: string;
-  /** Números de OC que la factura cita impresos ("Su OC N° 1199"). */
-  ocRefs?: string[];
-  /** Emisor leído por la IA (para aprender el nombre de fantasía del proveedor). */
-  razonSocialLeida?: string;
-  nombreFantasiaLeido?: string;
-}
-
-
-function tipoComprobante(raw: string): string {
-  const t = String(raw || "").toUpperCase().trim();
-  if (t === "A" || t === "FACTURA A" || t === "FC A") return "FC A";
-  if (t === "B" || t === "FACTURA B" || t === "FC B") return "FC B";
-  if (t === "C" || t === "FACTURA C" || t === "FC C") return "FC C";
-  return t || "FC A";
-}
-
-const precioNeto = (it: ItemFactura) => round2(it.precio_unitario * (1 - (it.descuento_porcentaje || 0) / 100));
-const lineKey = (f: FacturaCarga, i: number) => `${f.localId}:${i}`;
-
-/** Líneas de una factura ya leída, como las cruza la conciliación (para el cruce automático de la carga masiva). */
-export function lineasParaCruce(file: File, d: any): { lineas: InvoiceLineInput[]; ocRefs: string[]; facturaRef: string } {
-  const f = facturaDesdeDatos(file, d);
-  const facturaRef = f.numero || f.localId;
-  return {
-    facturaRef, ocRefs: f.ocRefs || [],
-    lineas: f.items.map((it, i) => ({ key: lineKey(f, i), facturaRef, codigo: it.codigo || null, descripcion: it.descripcion, cantidad: it.cantidad, precio: precioNeto(it) })),
-  };
-}
-
-/** Arma una factura de la conciliación con los datos que devolvió /api/parse-factura-compra. */
-function facturaDesdeDatos(file: File, d: any): FacturaCarga {
-  const ivaPct = d.iva_porcentaje != null ? Number(d.iva_porcentaje) || 0 : 21;
-  return {
-    localId: `f${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
-    dbId: null,
-    file,
-    archivoNombre: file.name,
-    numero: String(d.numero_factura || ""),
-    tipo: tipoComprobante(d.tipo_comprobante),
-    fecha: d.fecha || todayAR(),
-    vencimiento: d.fecha_vencimiento || "",
-    cae: d.cae || "",
-    moneda: d.moneda === "USD" ? "USD" : "ARS",
-    subtotal: Number(d.subtotal) || 0,
-    iva: Number(d.iva) || 0,
-    ivaPorcentaje: ivaPct,
-    percepciones: Number(d.percepciones) || 0,
-    total: Number(d.total) || 0,
-    cuit: String(d.proveedor?.cuit || "").replace(/\D/g, ""),
-    ocRefs: (Array.isArray(d.referencias_oc) ? d.referencias_oc : []).map((x: unknown) => String(x || "").trim()).filter(Boolean),
-    razonSocialLeida: String(d.proveedor?.razon_social || "").trim(),
-    nombreFantasiaLeido: String(d.proveedor?.nombre_fantasia || "").trim(),
-    items: (Array.isArray(d.items) ? d.items : []).map((it: any) => ({
-      codigo: String(it.codigo || ""),
-      descripcion: String(it.descripcion || ""),
-      cantidad: it.cantidad == null ? 1 : Number(it.cantidad) || 0,
-      precio_unitario: Number(it.precio_unitario) || 0,
-      descuento_porcentaje: Math.max(0, Math.min(100, Number(it.descuento_porcentaje ?? d.descuento_general_porcentaje) || 0)),
-      iva_porcentaje: it.iva_porcentaje != null ? Number(it.iva_porcentaje) : ivaPct,
-      unidad: it.unidad || "UN",
-    })).filter((it: ItemFactura) => it.descripcion && it.cantidad > 0),
-  };
-}
-
-/** Renglón de envío / flete: no es un artículo de OC; se deja fuera de OC sin hacer ruido. */
-const esEnvio = (d: string) => /(env[ií]o|flete|transporte|log[ií]stica|delivery|despacho)/i.test(d);
+export { lineasParaCruce } from "@/lib/factura-compra-leida";
 
 export default function ConciliacionCompras({ sociedadId, profileId, onClose, onSuccess, inicial, autoConfirmar }: Props) {
   const { toast } = useToast();
@@ -175,6 +84,10 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
   const [reclamar, setReclamar] = useState<Set<string>>(new Set());
   const [editando, setEditando] = useState<string | null>(null);
   const [aceptarCostos, setAceptarCostos] = useState(true);
+  // Flete que se suma como renglón a una OC (respuesta a "¿Lo sumo a la OC-xxx?").
+  const [fleteAOc, setFleteAOc] = useState<Record<string, { ocId: string; ocNumero: string }>>({});
+  // OC que quedan parciales ("vienen 31 de 35"): respuesta de si lo que falta llega después o se cierra la OC.
+  const [faltantesOc, setFaltantesOc] = useState<Record<string, { cerrar: boolean; ocNumero?: string; motivo?: string }>>({});
   const [guardando, setGuardando] = useState(false);
   // Renglones de OC SIN proveedor (o de Mercado Libre) que esta factura cubre: se pasan al proveedor real con un clic.
   const [sinProv, setSinProv] = useState<CoincidenciaSinProveedor[]>([]);
@@ -407,7 +320,7 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
   const sinAsignarPorLinea = useMemo(() => new Map((resultado?.sinAsignar || []).map(s => [s.invoiceKey, s])), [resultado]);
 
   // Decisiones con la opción recomendada ya elegida (se pueden cambiar en cada renglón):
-  //  · envío / flete sin OC → "Fuera de OC" (queda en gris, sin ruido)
+  //  · envío / flete sin OC → no se decide solo: pregunta "¿Lo sumo a la OC-xxx?" [Sumar] [No, aparte]
   //  · unidades de más de un artículo que está en la OC → se suman a esa OC (recomendado por Augusto)
   //  · "Actualizar el costo" solo si hay diferencia de precio o se aceptaron unidades de más
   const defaultsKey = useRef("");
@@ -417,16 +330,13 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
     const k = `${proveedorId}|${resultado.sinAsignar.map(s => `${s.invoiceKey}:${s.tipo}`).join(",")}`;
     if (defaultsKey.current === k) return;
     defaultsKey.current = k;
-    const extra: string[] = [], deMas: string[] = [];
+    const deMas: string[] = [];
     for (const l of lineasFactura) {
       const sa = sinAsignarPorLinea.get(l.key);
-      if (!sa) continue;
-      if (sa.tipo === "sin_oc" && esEnvio(l.descripcion) && !manual[l.key]) extra.push(l.key);
-      else if (sa.tipo === "de_mas" && !manual[l.key]) deMas.push(l.key);
+      if (sa?.tipo === "de_mas" && !manual[l.key]) deMas.push(l.key);
     }
-    if (extra.length) setManual(p => { const n = { ...p }; for (const x of extra) n[x] = "__extra__"; return n; });
     if (deMas.length) setAceptarDeMas(p => new Set([...p, ...deMas]));
-    if (extra.length || deMas.length) setRevisadas(p => new Set([...p, ...extra, ...deMas]));
+    if (deMas.length) setRevisadas(p => new Set([...p, ...deMas]));
     const ck = `${proveedorId}|${lineasFactura.map(l => l.key).join(",")}`;
     if (costosKey.current !== ck) {
       costosKey.current = ck;
@@ -464,6 +374,84 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
     () => (resultado ? contarSemaforo(lineasFactura, resultado, { manual, confianza, revisadas }) : { verde: 0, amarillo: 0, rojo: 0, fuera: 0 }),
     [resultado, lineasFactura, revisadas, confianza, manual],
   );
+
+  // Preguntas cortas con botones (una por cada cosa que no cierra): responder = decidir en un clic.
+  const preguntas = useMemo(() => resultado ? armarPreguntas({
+    lineas: lineasFactura, resultado, manual, confianza, revisadas, motivo,
+    ocLineas: ocLineas.map(o => ({ id: o.id, ocNumero: o.ocNumero, descripcion: o.descripcionOc || o.descripcion, precio: o.precio })),
+    sugerenciaSinOc: new Map([...sugerenciaSinOc].map(([k, v]) => [k, { ocLineId: v.o.id, ocNumero: v.o.ocNumero, descripcion: v.o.descripcionOc || v.o.descripcion, libre: v.libre }])),
+    ocsRespondidas: new Set(Object.keys(faltantesOc)),
+    plata: (n: number) => formatCurrency(n, facturas[0]?.moneda || "ARS"),
+  }) : [], [resultado, lineasFactura, manual, confianza, revisadas, motivo, ocLineas, sugerenciaSinOc, faltantesOc, facturas]);
+  // Pantalla liviana: si hubo preguntas, se ven solo las preguntas y Confirmar; la tabla queda en "Ver detalle".
+  const [verDetalle, setVerDetalle] = useState(false);
+  const [huboPreguntas, setHuboPreguntas] = useState(false);
+  useEffect(() => { if (preguntas.length) setHuboPreguntas(true); }, [preguntas.length]);
+  const plegado = huboPreguntas && !verDetalle;
+  // OC a cerrar que siguen siendo parciales con lo que quedó asignado (si cambió la asignación, ya no se cierran).
+  const ocsACerrar = Object.entries(faltantesOc).filter(([id, v]) => v.cerrar && resultado?.ocsParciales.includes(id));
+  function responder(keys: string[], accion: AccionPregunta) {
+    if (accion.tipo === "llegan_despues" || accion.tipo === "cerrar_oc") {
+      setFaltantesOc(p => ({ ...p, [accion.ocId]: accion.tipo === "cerrar_oc" ? { cerrar: true, ocNumero: accion.ocNumero, motivo: accion.motivo } : { cerrar: false } }));
+      return;
+    }
+    // El flete que se suma a una OC queda "fuera" del cruce y al guardar se agrega como renglón a esa OC.
+    if (accion.tipo === "fuera" || accion.tipo === "flete_oc") setManual(p => { const n = { ...p }; for (const k of keys) n[k] = "__extra__"; return n; });
+    setFleteAOc(p => {
+      const n = { ...p };
+      for (const k of keys) if (accion.tipo === "flete_oc") n[k] = { ocId: accion.ocId, ocNumero: accion.ocNumero }; else delete n[k];
+      return n;
+    });
+    if (accion.tipo === "asignar") setManual(p => ({ ...p, [keys[0]]: [{ ocLineId: accion.ocLineId, cantidad: accion.cantidad }] }));
+    if (accion.tipo === "aceptar_costo") setAceptarCostos(true);
+    if (accion.tipo === "reclamar") setReclamar(p => new Set([...p, ...keys]));
+    setRevisadas(p => new Set([...p, ...keys]));
+  }
+
+  // "Decile a la IA": corrige el cruce escribiendo; se aplica al toque y se puede deshacer.
+  const [instruccion, setInstruccion] = useState("");
+  const [pensando, setPensando] = useState(false);
+  const [respuestaIA, setRespuestaIA] = useState<{ texto: string; antes?: { manual: Manual; revisadas: Set<string>; reclamar: Set<string>; aceptarCostos: boolean; fleteAOc: typeof fleteAOc } } | null>(null);
+  async function decileALaIA() {
+    if (!instruccion.trim() || !resultado) return;
+    setPensando(true);
+    try {
+      const desc = (id: string) => { const o = ocById.get(id); return o ? `${o.ocNumero} "${(o.descripcionOc || o.descripcion).slice(0, 80)}"` : id; };
+      const cruce = lineasFactura.map(l => {
+        const as = asigPorLinea.get(l.key) || [];
+        const sa = sinAsignarPorLinea.get(l.key);
+        return { key: l.key, estado: [manual[l.key] === "__extra__" ? "fuera de OC" : "", ...as.map(a => `${a.cantidad} a ${desc(a.ocLineId)}${a.nota ? ` (${a.nota})` : ""}`), sa ? sa.motivo : "", `semáforo ${semaforo(l)}`].filter(Boolean).join(" · ") };
+      });
+      const res = await fetch("/api/compras/conciliacion-instruccion", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instruccion, factura: lineasFactura, ocs: ocsUsables.map(o => ({ id: o.id, ocNumero: o.ocNumero, descripcion: o.descripcionOc || o.descripcion, cantidad: o.cantidad, precio: o.precio })), cruce }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "La IA no respondió");
+      const decisiones = (json.decisiones || []) as Array<{ key: string; tipo: AccionPregunta["tipo"]; ocLineId?: string; cantidad?: number }>;
+      if (!decisiones.length) { setRespuestaIA({ texto: json.explicacion || "No entendí qué cambiar. Probá decirlo de otra forma." }); return; }
+      const antes = { manual, revisadas, reclamar, aceptarCostos, fleteAOc };
+      const asignar = new Map<string, Array<{ ocLineId: string; cantidad: number }>>();
+      for (const d of decisiones) {
+        if (d.tipo === "asignar" && d.ocLineId) asignar.set(d.key, [...(asignar.get(d.key) || []), { ocLineId: d.ocLineId, cantidad: Number(d.cantidad) || 0 }]);
+        else if (d.tipo !== "asignar") responder([d.key], { tipo: d.tipo } as AccionPregunta);
+      }
+      if (asignar.size) {
+        setManual(p => { const n = { ...p }; for (const [k, v] of asignar) n[k] = v; return n; });
+        setRevisadas(p => new Set([...p, ...asignar.keys()]));
+      }
+      setRespuestaIA({ texto: json.explicacion || `Listo: ${decisiones.length} cambio(s).`, antes });
+      setInstruccion("");
+    } catch (e) {
+      setRespuestaIA({ texto: e instanceof Error ? e.message : "La IA no respondió" });
+    } finally { setPensando(false); }
+  }
+  function deshacerIA() {
+    const a = respuestaIA?.antes;
+    if (!a) return;
+    setManual(a.manual); setRevisadas(a.revisadas); setReclamar(a.reclamar); setAceptarCostos(a.aceptarCostos); setFleteAOc(a.fleteAOc);
+    setRespuestaIA({ texto: "Deshecho: quedó como antes." });
+  }
 
   // Carga masiva: si todo cierra, se confirma sola (una sola vez).
   const autoConfirmado = useRef(false);
@@ -510,6 +498,35 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
     };
   }
 
+  // ── Flete sumado a una OC: se agrega como renglón (ya llegado y facturado) y se recalcula el total de la OC ──
+  async function sumarFleteAOc(f: FacturaCarga, x: { key: string; it: ItemFactura; cantidad: number }, ocId: string) {
+    const { data: oc, error: e0 } = await db.from("ordenes_compra").select("id, numero, estado, moneda, observaciones, orden_compra_items(orden, cantidad_recibida)").eq("id", ocId).single();
+    if (e0 || !oc) throw new Error(`Factura ${f.numero}: no se encontró la OC para sumar el flete (${e0?.message || "sin respuesta"})`);
+    if ((oc.moneda || "ARS") !== f.moneda) {
+      toast.error(`El flete de la FC ${f.numero} queda fuera de OC: la ${oc.numero} está en ${oc.moneda} y la factura en ${f.moneda}.`);
+      return null;
+    }
+    const items = (oc.orden_compra_items || []) as Array<{ orden: number | null; cantidad_recibida: number | null }>;
+    const precio = precioNeto(x.it);
+    const { data: nuevo, error: e1 } = await db.from("orden_compra_items").insert({
+      orden_id: oc.id, codigo: x.it.codigo || "", descripcion: x.it.descripcion, cantidad: x.cantidad, cantidad_recibida: x.cantidad,
+      unidad: x.it.unidad || "UN", precio_unitario: precio, iva_porcentaje: Number(x.it.iva_porcentaje ?? 21),
+      orden: Math.max(-1, ...items.map(i => Number(i.orden) || 0)) + 1,
+    }).select("id").single();
+    if (e1 || !nuevo) throw new Error(`Factura ${f.numero}: no se pudo sumar el flete a la ${oc.numero} (${e1?.message || "sin respuesta"})`);
+    // Total de la OC con el flete; el flete "llegado" no cambia el estado de la OC si todavía no llegó nada.
+    const { data: todos } = await db.from("orden_compra_items").select("cantidad, precio_unitario, iva_porcentaje").eq("orden_id", oc.id);
+    const neto = round2((todos || []).reduce((s: number, i: any) => s + Number(i.cantidad) * Number(i.precio_unitario), 0));
+    const iva = round2((todos || []).reduce((s: number, i: any) => s + Number(i.cantidad) * Number(i.precio_unitario) * Number(i.iva_porcentaje ?? 21) / 100, 0));
+    const nadaLlegado = !items.some(i => Number(i.cantidad_recibida) > 0);
+    await db.from("ordenes_compra").update({
+      subtotal: neto, iva, total: round2(neto + iva), updated_at: new Date().toISOString(),
+      observaciones: `${oc.observaciones || ""}\n[${formatDate(todayAR())}] FC ${f.numero.trim()}: se sumó ${x.it.descripcion} ${formatCurrency(precio * x.cantidad, f.moneda)}`.trim(),
+      ...(nadaLlegado ? { estado: oc.estado } : {}),
+    }).eq("id", oc.id);
+    return { invoiceKey: x.key, ocLineId: nuevo.id as string, cantidad: x.cantidad, precioFactura: precio, precioOc: precio, origen: "flete_oc" };
+  }
+
   // ── Guardar ──
   async function guardar(borrador: boolean, silencioso = false) {
     if (!resultado || !proveedorId) return;
@@ -533,12 +550,18 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
           resultado.asignaciones.filter(a => keys.has(a.invoiceKey));
         // Lo que sobró de esta factura: las unidades de más aceptadas van a su misma OC; el resto, a la OC complementaria.
         const sobrantes: Array<{ key: string; it: ItemFactura; cantidad: number }> = [];
+        // Marcadas "fuera de OC": se pagan con la factura y no tocan ninguna OC (el flete puede sumarse a una OC).
+        const fuera: Array<{ key: string; it: ItemFactura; cantidad: number }> = [];
+        const fletesSumados: string[] = [];
         if (!borrador) f.items.forEach((it, i) => {
           const k = lineKey(f, i);
           const sa = sinAsignarPorLinea.get(k);
           if (!sa || sa.cantidad <= 0) return;
           const ocLinea = sa.ocLineId ? ocById.get(sa.ocLineId) : undefined;
-          if (sa.tipo === "de_mas" && aceptarDeMas.has(k) && ocLinea) {
+          // El flete sin responder va aparte (nunca a una OC complementaria).
+          if (manual[k] === "__extra__" || (sa.tipo === "sin_oc" && esEnvio(it.descripcion))) {
+            fuera.push({ key: k, it, cantidad: sa.cantidad });
+          } else if (sa.tipo === "de_mas" && aceptarDeMas.has(k) && ocLinea) {
             asign.push({ invoiceKey: k, ocLineId: ocLinea.id, cantidad: sa.cantidad, precioFactura: precioNeto(it), precioOc: ocLinea.precio, origen: "de_mas" });
           } else {
             sobrantes.push({ key: k, it, cantidad: sa.cantidad });
@@ -550,6 +573,15 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
           ocExtra = creada.oc;
           asign.push(...creada.asignaciones);
         }
+        for (const x of [...fuera]) {
+          const destino = fleteAOc[x.key];
+          if (!destino) continue;
+          const a = await sumarFleteAOc(f, x, destino.ocId);
+          if (!a) continue; // otra moneda: queda fuera de OC
+          asign.push(a);
+          fletesSumados.push(`${x.it.descripcion} → ${destino.ocNumero}`);
+          fuera.splice(fuera.indexOf(x), 1);
+        }
         const eqMap = new Map<string, { producto_factura: string; producto_oc: string; codigo_proveedor: string | null }>();
         if (!borrador) for (const a of asign) {
           if (a.origen === "codigo") continue;
@@ -560,7 +592,7 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
           if (pf && po) eqMap.set(`${pf}|${po}`, { producto_factura: pf, producto_oc: po, codigo_proveedor: l.codigo || null });
         }
         const eqs = [...eqMap.values()];
-        const extras = ocExtra ? [] : sobrantes.map(x => `${x.cantidad} × ${x.it.descripcion}`);
+        const extras = [...fuera, ...(ocExtra ? [] : sobrantes)].map(x => `${x.cantidad} × ${x.it.descripcion}`);
         const aReclamar = f.items.map((it, i) => {
           const k = lineKey(f, i);
           if (!reclamar.has(k)) return null;
@@ -571,6 +603,7 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
           "Conciliada por línea contra OC" + (iaInfo ? ` · ${iaInfo}` : ""),
           ocExtra ? `OC complementaria ${ocExtra.numero} con lo que vino sin OC o de más` : "",
           extras.length ? `Fuera de OC: ${extras.join("; ")}` : "",
+          fletesSumados.length ? `Flete sumado a la OC: ${fletesSumados.join("; ")}` : "",
           aReclamar.length ? `A reclamar al proveedor (precio): ${aReclamar.join("; ")}` : "",
         ].filter(Boolean).join("\n");
         const guardarFactura = (confirmar: boolean) => db.rpc("guardar_conciliacion_compra", {
@@ -641,6 +674,12 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
           }
         }
       }
+      // "Cerrar la OC en 31": lo que falta no viene, se cierra el saldo (se puede reabrir desde la OC).
+      const ocsCerradas: string[] = [];
+      if (!borrador) for (const [ocId, v] of ocsACerrar) {
+        const { error: eC } = await db.rpc("cerrar_saldo_oc", { p_sociedad_id: sociedadId, p_oc_id: ocId, p_cerrar: true, p_motivo: `${v.motivo || "Cerrada al cargar la factura"} (FC ${guardadas.join(", ")})` });
+        ocsCerradas.push(eC ? `${v.ocNumero}: no se pudo cerrar (${eC.message}), cerrala desde la OC` : `${v.ocNumero}`);
+      }
       // Nombre de fantasía leído en la factura: si el proveedor no tiene, se guarda; si tiene otro, solo se avisa.
       const cuitProv = (proveedores.find(p => p.id === proveedorId)?.cuit || "").replace(/\D/g, "");
       const leida = cuitProv ? facturas.find(f => f.nombreFantasiaLeido && (f.cuit || "").replace(/\D/g, "") === cuitProv) : undefined;
@@ -649,6 +688,7 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
         ? `Conciliación parcial guardada (${guardadas.join(", ")}). No se envía a pagos; la podés retomar desde «Conciliar facturas».`
         : `Listo: ${guardadas.join(", ")} conciliada(s) y enviada(s) a aprobación.`
           + (ocsCreadas.length ? `\n\nOC complementaria creada y atada a la factura: ${ocsCreadas.join("; ")}.` : "")
+          + (ocsCerradas.length ? `\n\nOC cerrada(s) (lo que faltaba no llega): ${ocsCerradas.join("; ")}.` : "")
           + (pagadasTarjeta.length ? `\n\nPagadas con tarjeta (la OC estaba pagada con tarjeta, sin OP): ${pagadasTarjeta.join("; ")}.` : "")
           + (aceptarCostos ? `\n\nCostos actualizados en presupuestos: ${prActualizados} artículo(s) (se mantuvo el precio de venta y se recalculó el margen).` : "")
           + (sinPr.length ? `\n\nNo se encontró en el presupuesto de origen (revisalo a mano): ${sinPr.join("; ")}` : ""));
@@ -793,20 +833,27 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
                 <span className="flex items-center gap-1 text-sm"><span className="h-3 w-3 rounded-full bg-amber-400" />{conteo.amarillo} para revisar</span>
                 <span className="flex items-center gap-1 text-sm"><span className="h-3 w-3 rounded-full bg-red-500" />{conteo.rojo} sin OC{conteo.rojo > 0 && crearOcExtra ? " (van a OC complementaria)" : ""}</span>
                 {conteo.fuera > 0 && <span className="flex items-center gap-1 text-sm"><span className="h-3 w-3 rounded-full bg-zinc-400" />{conteo.fuera} fuera de OC</span>}
-                <label className="ml-auto flex items-center gap-2 text-sm"><input type="checkbox" checked={soloRevisar} onChange={e => setSoloRevisar(e.target.checked)} /> Mostrar solo lo que no cierra</label>
-                {conteo.amarillo > 0 && (
+                {plegado ? (
+                  <button onClick={() => setVerDetalle(true)} className="ml-auto flex items-center gap-1 text-sm text-zinc-600 underline dark:text-zinc-300"><ChevronDown className="h-4 w-4" /> Ver detalle</button>
+                ) : (
+                  <label className="ml-auto flex items-center gap-2 text-sm"><input type="checkbox" checked={soloRevisar} onChange={e => setSoloRevisar(e.target.checked)} /> Mostrar solo lo que no cierra</label>
+                )}
+                {huboPreguntas && verDetalle && <button onClick={() => setVerDetalle(false)} className="flex items-center gap-1 text-sm text-zinc-600 underline dark:text-zinc-300"><ChevronUp className="h-4 w-4" /> Ocultar detalle</button>}
+                {!plegado && conteo.amarillo > 0 && (
                   <button onClick={() => setRevisadas(new Set(lineasFactura.map(l => l.key)))}
                     className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-emerald-400 text-emerald-700 text-sm"><Check className="h-4 w-4" /> Aceptar todas las sugerencias</button>
                 )}
               </div>
               {/* Resumen en palabras: qué cierra solo y qué hay que mirar */}
-              {(() => {
+              {!plegado && (() => {
                 const cierran = lineasFactura.filter(l => semaforo(l) === "verde").length;
                 const notas: string[] = [];
                 for (const l of lineasFactura) {
                   const sa = sinAsignarPorLinea.get(l.key); const s = semaforo(l);
                   if (sa?.tipo === "de_mas" && manual[l.key] !== "__extra__") notas.push(`${sa.cantidad} de más de "${l.descripcion.slice(0, 40)}" (la ${sa.ocNumero} pedía menos): ${aceptarDeMas.has(l.key) ? "se suman a esa OC (recomendado)" : "van a OC aparte"}`);
+                  else if (manual[l.key] === "__extra__" && fleteAOc[l.key]) notas.push(`Flete: se suma a la ${fleteAOc[l.key].ocNumero}`);
                   else if (manual[l.key] === "__extra__") notas.push(`${esEnvio(l.descripcion) ? "Envío" : `"${l.descripcion.slice(0, 40)}"`}: queda en la factura, fuera de OC`);
+                  else if (sa?.tipo === "sin_oc" && esEnvio(l.descripcion)) notas.push("Flete: respondé arriba si se suma a la OC (si no, va aparte, fuera de OC)");
                   else if (sa?.tipo === "sin_oc") notas.push(`"${l.descripcion.slice(0, 40)}" no está en ninguna OC: ${crearOcExtra ? "va a una OC complementaria" : "queda fuera de OC"}`);
                   else if (s === "amarillo") notas.push(`"${l.descripcion.slice(0, 40)}": revisá la sugerencia`);
                 }
@@ -817,8 +864,49 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
                   </div>
                 );
               })()}
+              {preguntas.length > 0 && (
+                <div className="space-y-2 rounded-lg border border-violet-300 bg-violet-50 p-3 dark:border-violet-800 dark:bg-violet-950/30">
+                  <p className="flex items-center gap-1.5 text-sm font-semibold text-violet-900 dark:text-violet-200"><Sparkles className="h-4 w-4" /> {preguntas.length === 1 ? "Una pregunta" : `${preguntas.length} preguntas`} antes de confirmar</p>
+                  {preguntas.map(q => (
+                    <div key={q.id} className="flex flex-wrap items-center gap-2 rounded-md bg-white px-3 py-2 text-sm dark:bg-zinc-900 dark:text-zinc-200">
+                      <span className="min-w-0 flex-1">{q.texto}</span>
+                      {q.opciones.map((o, i) => (
+                        <button key={o.label} onClick={() => responder(q.keys, o.accion)}
+                          className={`rounded-lg px-3 py-1 text-xs font-medium ${i === 0 ? "bg-violet-600 text-white hover:bg-violet-700" : "border border-zinc-300 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"}`}>{o.label}</button>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {plegado && preguntas.length === 0 && (
+                <p className="flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300"><Check className="h-4 w-4" /> Respondiste todo: podés confirmar.</p>
+              )}
+              {ocsACerrar.length > 0 && (
+                <p className="flex flex-wrap items-center gap-2 px-1 text-xs text-violet-800 dark:text-violet-300">
+                  Al confirmar se cierra{ocsACerrar.length > 1 ? "n" : ""} {ocsACerrar.map(([, v]) => v.ocNumero).join(", ")} (lo que falta no llega; se puede reabrir desde la OC).
+                  <button onClick={() => setFaltantesOc(p => Object.fromEntries(Object.entries(p).filter(([, v]) => !v.cerrar)))} className="flex items-center gap-1 underline"><RotateCcw className="h-3 w-3" /> Deshacer</button>
+                </p>
+              )}
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 rounded-lg border border-violet-300 bg-white px-2 py-1.5 dark:border-violet-800 dark:bg-zinc-900">
+                  <Sparkles className="h-4 w-4 shrink-0 text-violet-500" />
+                  <input value={instruccion} onChange={e => setInstruccion(e.target.value)} onKeyDown={e => { if (e.key === "Enter") void decileALaIA(); }}
+                    placeholder='Decile a la IA: "son todos el mismo botín de la 1252", "el flete no es de ninguna OC", "el precio está bien, actualizá el costo"…'
+                    className="min-w-0 flex-1 bg-transparent text-sm outline-none dark:text-zinc-100" />
+                  <button disabled={pensando || !instruccion.trim()} onClick={() => void decileALaIA()} className="flex items-center gap-1 rounded-lg bg-violet-600 px-3 py-1 text-xs font-medium text-white disabled:opacity-50">
+                    {pensando ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Hacelo
+                  </button>
+                </div>
+                {respuestaIA && (
+                  <p className="flex flex-wrap items-center gap-2 px-1 text-xs text-violet-800 dark:text-violet-300">
+                    {respuestaIA.texto}
+                    {respuestaIA.antes && <button onClick={deshacerIA} className="flex items-center gap-1 underline"><RotateCcw className="h-3 w-3" /> Deshacer</button>}
+                  </p>
+                )}
+              </div>
               {avisoMoneda ? <p className="text-sm text-amber-700 flex items-center gap-1"><AlertTriangle className="h-4 w-4" /> La factura está en {monedaFc.join("/")} y hay OC en {monedaOc.join("/")}: las diferencias de precio no son comparables.</p> : null}
 
+              {!plegado && <>
               <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
                 <table className="w-full text-sm">
                   <thead className="bg-zinc-50 dark:bg-zinc-800 text-xs text-zinc-500">
@@ -858,9 +946,11 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
                               }} />}
                           </td>
                           <td className="px-2 py-2 text-right">{l.cantidad}</td>
-                          <td className="px-2 py-2 text-right">{formatCurrency(l.precio)}</td>
+                          <td className="px-2 py-2 text-right">{formatCurrency(l.precio, facturas[0]?.moneda || "ARS")}</td>
                           <td className="px-2 py-2">
-                            {manual[l.key] === "__extra__" && <span className="text-zinc-500">Fuera de OC: se paga con la factura, no toca ninguna OC ni presupuesto</span>}
+                            {manual[l.key] === "__extra__" && (fleteAOc[l.key]
+                              ? <span className="text-zinc-600">Se suma a la {fleteAOc[l.key].ocNumero} como renglón (no toca el presupuesto) · <button onClick={() => responder([l.key], { tipo: "fuera" })} className="underline">mejor aparte</button></span>
+                              : <span className="text-zinc-500">Fuera de OC: se paga con la factura, no toca ninguna OC ni presupuesto</span>)}
                             {as.map(a => (
                               <div key={a.ocLineId}><span className="font-mono text-xs">{a.ocNumero}</span> · {a.cantidad} × {ocById.get(a.ocLineId)?.descripcion || ""}</div>
                             ))}
@@ -881,7 +971,7 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
                                   const cant = Math.min(sa.cantidad, sg.libre);
                                   return (
                                     <div className="mt-1 text-zinc-700 dark:text-zinc-300">
-                                      ¿Es este? <span className="font-mono text-xs">{sg.o.ocNumero}</span> · {sg.o.descripcion} (libre {sg.libre}, {formatCurrency(sg.o.precio)}) <span className="text-xs text-zinc-500">— {sg.motivos.join(", ")}</span>{" "}
+                                      ¿Es este? <span className="font-mono text-xs">{sg.o.ocNumero}</span> · {sg.o.descripcion} (libre {sg.libre}, {formatCurrency(sg.o.precio, sg.o.moneda === "USD" ? "USD" : "ARS")}) <span className="text-xs text-zinc-500">— {sg.motivos.join(", ")}</span>{" "}
                                       <button onClick={() => {
                                         const actual = manual[l.key];
                                         const previas = Array.isArray(actual) ? actual : (asigPorLinea.get(l.key) || []).map(a => ({ ocLineId: a.ocLineId, cantidad: a.cantidad }));
@@ -894,8 +984,8 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
                               </div>
                             )}
                           </td>
-                          <td className="px-2 py-2 text-right">{as.length ? [...new Set(as.map(a => formatCurrency(a.precioOc)))].join(" / ") : ""}</td>
-                          <td className={`px-2 py-2 text-right ${dif > 0 ? "text-red-600" : dif < 0 ? "text-emerald-600" : "text-zinc-400"}`}>{as.length ? formatCurrency(dif) : ""}</td>
+                          <td className="px-2 py-2 text-right">{as.length ? [...new Set(as.map(a => formatCurrency(a.precioOc, facturas[0]?.moneda || "ARS")))].join(" / ") : ""}</td>
+                          <td className={`px-2 py-2 text-right ${dif > 0 ? "text-red-600" : dif < 0 ? "text-emerald-600" : "text-zinc-400"}`}>{as.length ? formatCurrency(dif, facturas[0]?.moneda || "ARS") : ""}</td>
                           <td className="px-2 py-2 text-right whitespace-nowrap">
                             {s === "amarillo" && <button onClick={() => setRevisadas(p => new Set(p).add(l.key))} className="mr-2 text-xs text-emerald-700 underline">{as.some(a => a.origen === "parecido") ? "Es este, OK" : dif !== 0 ? "Aceptar precio" : "OK"}</button>}
                             {as.length > 0 && dif !== 0 && (s === "amarillo" || reclamar.has(l.key)) && (
@@ -944,7 +1034,7 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
                   {!resultado.ocsCompletas.length && !resultado.ocsParciales.length && <p className="text-zinc-500">Ninguna OC quedó asignada.</p>}
                 </div>
                 <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-3 text-sm space-y-2">
-                  <p className="font-semibold">Diferencia de costo total: <span className={diferenciaTotal > 0 ? "text-red-600" : diferenciaTotal < 0 ? "text-emerald-600" : ""}>{formatCurrency(diferenciaTotal)}</span> <span className="text-xs font-normal text-zinc-500">(sin IVA; positivo = la factura es más cara que la OC)</span></p>
+                  <p className="font-semibold">Diferencia de costo total: <span className={diferenciaTotal > 0 ? "text-red-600" : diferenciaTotal < 0 ? "text-emerald-600" : ""}>{formatCurrency(diferenciaTotal, facturas[0]?.moneda || "ARS")}</span> <span className="text-xs font-normal text-zinc-500">(sin IVA; positivo = la factura es más cara que la OC)</span></p>
                   {(resultado.sinAsignar.length > 0) && (
                     <label className="flex items-start gap-2">
                       <input type="checkbox" className="mt-1" checked={crearOcExtra} onChange={e => setCrearOcExtra(e.target.checked)} />
@@ -958,6 +1048,7 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
                   </label>
                 </div>
               </div>
+              </>}
 
               <div className="flex flex-wrap justify-end gap-3 border-t border-zinc-200 dark:border-zinc-700 pt-4">
                 <button onClick={onClose} className="px-4 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 text-sm">Cancelar</button>
@@ -1013,7 +1104,7 @@ onAplicar: (valor: Manual[string] | null) => void;
           <div key={o.id} className="flex items-center gap-2 py-1">
             <span className="font-mono text-xs w-20 shrink-0">{o.ocNumero}</span>
             <span className={`flex-1 ${mismoTalle ? "" : "text-zinc-500"}`}>{o.descripcion}{o.descripcionOc && o.descripcionOc !== o.descripcion && <span className="block text-[10px] text-zinc-400">En la OC: {o.descripcionOc}</span>}</span>
-            <span className="text-xs text-zinc-500 w-24 text-right">{formatCurrency(o.precio)}</span>
+            <span className="text-xs text-zinc-500 w-24 text-right">{formatCurrency(o.precio, o.moneda === "USD" ? "USD" : "ARS")}</span>
             <span className="text-xs text-zinc-500 w-16 text-right">libre {libre}</span>
             <input value={cant[o.id] || ""} onChange={e => setCant(p => ({ ...p, [o.id]: e.target.value }))} inputMode="decimal"
               className="w-16 rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-900 px-1 py-0.5 text-right" placeholder="0" />

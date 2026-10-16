@@ -16,7 +16,10 @@ import { Header } from "@/components/layout/header";
 import { useToast } from "@/components/ui/toast";
 import { Autocompletar } from "@/components/ui/autocompletar";
 import EnviarOCProveedor from "@/components/enviar-oc-proveedor";
+import ComprasListaOC from "@/components/compras-lista-oc";
+import CargarFacturaSimple from "@/components/cargar-factura-simple";
 import { useUser } from "@/lib/auth-context";
+import { useCargaMasiva } from "@/components/carga-masiva-global";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
@@ -30,7 +33,7 @@ import {
 import { armarRecepcion, estadoPorRecibido, ocDelRemito, seguroParaCargar, type Recepcion } from "@/lib/compras-recepcion";
 import { prepararArchivo } from "@/lib/preparar-foto";
 import { coincideTodas, palabrasBusqueda } from "@/lib/buscar-texto";
-import { AlertTriangle, Camera, Check, ExternalLink, Loader2, Mail, MessageCircle, MoreHorizontal, PackageX, RefreshCw, Search, Send, Sparkles, Undo2, X } from "lucide-react";
+import { AlertTriangle, Camera, Check, ExternalLink, FileUp, Loader2, Mail, MessageCircle, MoreHorizontal, PackageX, RefreshCw, Search, Send, Sparkles, Undo2, X } from "lucide-react";
 
 const db = supabase as any;
 
@@ -89,10 +92,14 @@ async function enTandas<T>(ids: string[], armar: (tanda: string[]) => any): Prom
 
 export default function ComprasNuevaPage() {
   const { profile, sociedadActiva } = useUser();
+  const { abrirCargaMasiva } = useCargaMasiva();
   const { toast } = useToast();
   const sociedadId = sociedadActiva?.id;
 
-  const [tab, setTab] = useState<"pedir" | "esperando" | "preguntas">("pedir");
+  // "oc" = lista de todas las OC (formato Presupuestos, Augusto 16/10). "esperando" quedó sin pestaña (reemplazada por "oc").
+  const [tab, setTab] = useState<"pedir" | "oc" | "esperando" | "preguntas">("pedir");
+  // "Cargar factura" simple (Augusto 16/10): reemplaza a la carga masiva vieja en esta pantalla.
+  const [cargarFactura, setCargarFactura] = useState(false);
   // Buscador (OC, PR, cliente, proveedor, artículo o código) y filtro rápido de Esperando.
   const [busca, setBusca] = useState("");
   const [filtroEsp, setFiltroEsp] = useState<"todas" | "tarde" | "parcial">("todas");
@@ -336,9 +343,10 @@ export default function ComprasNuevaPage() {
     void marcarPedido(o, "whatsapp").then((ok) => ok && toast.info(`${o.numero} quedó como pedida por WhatsApp (si no la mandaste, "Deshacer" en Esperando)`));
   }
 
+  /** Manda por mail solo los pedidos que se ven (si hay búsqueda, los filtrados). */
   async function mandarTodo() {
-    const conMail = paraPedir.filter((o) => contactos[o.proveedor_id || ""]?.email);
-    const sinMail = paraPedir.filter((o) => !contactos[o.proveedor_id || ""]?.email);
+    const conMail = paraPedirVer.filter((o) => contactos[o.proveedor_id || ""]?.email);
+    const sinMail = paraPedirVer.filter((o) => !contactos[o.proveedor_id || ""]?.email);
     if (!conMail.length) { toast.warning("Ningún pedido tiene mail de Ventas: mandalos por WhatsApp o cargá el mail con \"…\""); return; }
     const detalle = conMail.map((o) => `• ${o.numero} → ${nombreProv(o.proveedores)} (${contactos[o.proveedor_id || ""].email})`).join("\n");
     if (!window.confirm(`Se mandan ${conMail.length} pedido(s) por mail con su PDF:\n\n${detalle}${sinMail.length ? `\n\n${sinMail.length} sin mail quedan para WhatsApp.` : ""}\n\n¿Mandar?`)) return;
@@ -611,7 +619,7 @@ export default function ComprasNuevaPage() {
     if (!files?.length || !sociedadId) return;
     const para = fotoPara.current;
     fotoPara.current = null;
-    setTab("esperando");
+    setTab("oc");
     const candidatos = para ? esperando.filter((o) => o.id === para) : esperando;
     if (!candidatos.length) { toast.warning("No hay pedidos esperando para cruzar el remito"); return; }
     for (const file of Array.from(files).slice(0, 10)) {
@@ -837,18 +845,26 @@ export default function ComprasNuevaPage() {
 
         {/* Pestañas */}
         <div className="flex flex-wrap items-center gap-1 border-b border-zinc-200 dark:border-zinc-700">
-          {([["pedir", "Para pedir", paraPedirVer.length], ["esperando", "Esperando", esperandoBusca.length], ["preguntas", "Preguntas", preguntasVer]] as const).map(([k, t, n]) => (
+          {([["pedir", "Para pedir", paraPedirVer.length], ["oc", "OC", ocs.length], ["preguntas", "Preguntas", preguntasVer]] as const).map(([k, t, n]) => (
             <button key={k} onClick={() => setTab(k)} className={`-mb-px border-b-2 px-3 py-1.5 text-sm font-medium ${tab === k ? "border-orange-500 text-orange-600" : "border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"}`}>
-              {t} <span className={`ml-1 rounded-full px-1.5 text-xs ${k === "preguntas" && n ? "bg-amber-100 text-amber-700" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"}`}>{n}</span>
+              {t} {k !== "oc" && <span className={`ml-1 rounded-full px-1.5 text-xs ${k === "preguntas" && n ? "bg-amber-100 text-amber-700" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"}`}>{n}</span>}
             </button>
           ))}
           <div className="ml-auto flex items-center gap-2 pb-1">
-            {tab === "pedir" && paraPedir.length > 0 && (
+            <button onClick={() => setCargarFactura(true)} className={`${btn} bg-emerald-600 text-white hover:bg-emerald-700`} title="Subí la factura del proveedor: la IA la lee, elegís la o las OC y guardás">
+              <FileUp className="h-3.5 w-3.5" /> Cargar factura
+            </button>
+            {tab === "pedir" && paraPedirVer.length > 0 && (
               <button onClick={() => void mandarTodo()} disabled={ocupado === "todo"} className={`${btn} bg-orange-500 text-white hover:bg-orange-600`}>
-                {ocupado === "todo" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />} Mandar todo por mail
+                {ocupado === "todo" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />} {paraPedirVer.length < paraPedir.length ? `Mandar estos ${paraPedirVer.length} por mail` : "Mandar todo por mail"}
               </button>
             )}
-            {tab === "esperando" && esperando.length > 0 && (
+            {tab === "esperando" && (
+              <button onClick={abrirCargaMasiva} className={`${btn} bg-orange-500 text-white hover:bg-orange-600`} title="Subí una o varias facturas de proveedor juntas: la IA las lee, busca su OC, las cruza y te pregunta solo lo que no cierra (sigue en segundo plano)">
+                <FileUp className="h-3.5 w-3.5" /> Cargar facturas
+              </button>
+            )}
+            {(tab === "esperando" || tab === "oc") && esperando.length > 0 && (
               <button onClick={() => elegirFoto(null)} className={`${btn} bg-violet-600 text-white hover:bg-violet-700`} title="Foto o PDF del remito que vino con la mercadería (varias a la vez): la IA lee qué llegó y lo carga en la OC">
                 <Camera className="h-3.5 w-3.5" /> Foto del remito
               </button>
@@ -862,8 +878,8 @@ export default function ComprasNuevaPage() {
           </div>
         </div>
 
-        {/* Buscador y filtros */}
-        <div className="flex flex-wrap items-center gap-2">
+        {/* Buscador y filtros (la pestaña OC tiene los suyos) */}
+        {tab !== "oc" && <div className="flex flex-wrap items-center gap-2">
           <div className="relative w-full max-w-sm">
             <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
             <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar OC, PR, cliente, proveedor o artículo…"
@@ -876,7 +892,7 @@ export default function ComprasNuevaPage() {
             </button>
           ))}
           {palabras.length > 0 && <span className="text-xs text-zinc-500">Las pestañas muestran lo que coincide con la búsqueda.</span>}
-        </div>
+        </div>}
 
         {error && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400">{error}</p>}
         {cargando && !ocs.length && <p className="flex items-center gap-2 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Trayendo las compras…</p>}
@@ -963,12 +979,17 @@ export default function ComprasNuevaPage() {
         )}
 
         {/* FOTOS DEL REMITO DEL PROVEEDOR */}
-        {tab === "esperando" && faltaTablaRemitos && !cargando && (
+        {(tab === "esperando" || tab === "oc") && faltaTablaRemitos && !cargando && (
           <p className="rounded-lg bg-amber-50 px-3 py-1.5 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">Falta correr la migración <b>oc_remitos</b>: la foto del remito se lee y carga lo recibido, pero no queda atada a la OC.</p>
         )}
-        {tab === "esperando" && fotos.length > 0 && <div className="space-y-2">{fotos.map(tarjetaFoto)}</div>}
+        {(tab === "esperando" || tab === "oc") && fotos.length > 0 && <div className="space-y-2">{fotos.map(tarjetaFoto)}</div>}
 
-        {/* ESPERANDO */}
+        {cargarFactura && sociedadId && <CargarFacturaSimple sociedadId={sociedadId} onClose={() => setCargarFactura(false)} onGuardada={() => void cargar()} />}
+
+        {/* OC: todas, con el formato de Presupuestos */}
+        {tab === "oc" && <ComprasListaOC sociedadId={sociedadId} />}
+
+        {/* ESPERANDO (sin pestaña: lo reemplaza "OC") */}
         {tab === "esperando" && !cargando && (
           <div className="rounded-lg border border-zinc-200 dark:border-zinc-700">
             {!esperandoVer.length && <p className="py-6 text-center text-sm text-zinc-500">{esperando.length ? "Ningún pedido esperando coincide con el filtro." : "No hay pedidos esperando."}</p>}

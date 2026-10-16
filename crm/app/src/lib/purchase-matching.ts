@@ -116,6 +116,8 @@ export function parseVariant(descripcion: string): Variant {
     /\btalle\s*:?\s*(\d{1,3}|\d?x{0,3}[sml]|xs)\b/i,
     // "T40", "T 40", "TXL", "T2XL", "T M"
     /\bt\s?(\d{2,3}|\d?x{0,3}l|xs|[sml])\b/i,
+    // "T - XL", "T. 42", "T: 40" (OC armadas desde el catálogo: "MAMELUCO TYVEK 500 XPERT T - XL - BLANCO")
+    /\bt\s*[-.:]\s*(\d{2,3}|\d?x{0,3}l|xs|[sml])\b/i,
     // "XL/MG", "M/M", "2XL/MMG", "S/CH": talle internacional seguido de equivalencia
     /\b(\d?x{0,3}[sml]|xs)\s*\/\s*[a-z0-9]{1,4}\b/i,
     // talle al final: "... Beige 40", "... Arena M"
@@ -203,9 +205,12 @@ export function heuristicEquivalences(invoice: InvoiceLineInput[], ocs: OcLineIn
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
-/** Precio igual si la diferencia es menor a $1 o al 0,1 %. */
+/**
+ * Precio igual si la diferencia es menor a $1 o al 0,1 %. El peso de tolerancia nunca pasa del 1 % del precio:
+ * en precios chicos (ej. USD 5,70 contra 5,95, Segufer 16/10) $1 era un 17 % y pasaba como "mismo precio".
+ */
 export function samePrice(a: number, b: number): boolean {
-  return Math.abs(a - b) < Math.max(1, Math.abs(b) * 0.001);
+  return Math.abs(a - b) < Math.max(Math.min(1, Math.abs(b) * 0.01), Math.abs(b) * 0.001);
 }
 
 /**
@@ -261,6 +266,17 @@ export function mismoCodigo(a: string | null | undefined, talleA: string | null,
   return kb.some(k => ka.includes(k));
 }
 
+/**
+ * ¿El código del proveedor está escrito dentro de la descripción de la OC? (Fujiwara 16/10: factura "4047BNFS24",
+ * OC "BOTIN DE SEGURIDAD FUJIWARA 4047BNFS2400"). Solo códigos con letras y números de 5 o más caracteres,
+ * y la palabra de la OC puede tener hasta 3 caracteres más al final (talle o variante pegada).
+ */
+export function codigoEnDescripcion(codigo: string | null | undefined, descripcion: string): boolean {
+  const k = codeKey(codigo);
+  if (k.length < 5 || !/\d/.test(k) || !/[a-z]/.test(k)) return false;
+  return normalizeText(descripcion).split(" ").some(w => w === k || (w.startsWith(k) && w.length - k.length <= 3));
+}
+
 /** Palabras en común entre dos productos (las de más de 4 letras valen si empiezan igual: "elastizado"/"elastizazdo"). */
 export function palabrasEnComun(a: string, b: string): number {
   const ta = tokens(a), tb = [...tokens(b)];
@@ -272,6 +288,11 @@ export function palabrasEnComun(a: string, b: string): number {
 export interface Parecido { puntaje: number; motivos: string[]; cantidadIgual: boolean }
 /** Puntaje mínimo para proponer un renglón por parecido. */
 export const PUNTAJE_PARECIDO = 40;
+
+/** Renglón de envío / flete: no es un artículo de OC; por defecto queda "fuera de OC" (nunca se lo cruza con un artículo). */
+export function esEnvio(descripcion: string): boolean {
+  return /(env[ií]o|flete|transp(\.|orte)|log[ií]stic|delivery|despacho|acarreo|encomienda|correo argentino|andreani|\boca\b)/i.test(descripcion || "");
+}
 
 /**
  * ¿Qué tan probable es que el renglón de factura sea este renglón de OC, aunque el nombre no coincida?
@@ -376,7 +397,7 @@ export function matchPurchaseLines(
     // Mismo código (tolerante); si los dos dicen talle, tiene que ser el mismo.
     const byCode = ocs.filter(o => {
       const ov = ocVariant.get(o.id)!;
-      if (!mismoCodigo(l.codigo, v.talle, o.codigo, ov.talle)) return false;
+      if (!mismoCodigo(l.codigo, v.talle, o.codigo, ov.talle) && !codigoEnDescripcion(l.codigo, o.descripcion)) return false;
       return !(v.talle && ov.talle && !tallesCompatibles(v.talle, ov.talle, especiales));
     });
     if (byCode.length) return byCode.map(o => ({ o, origen: "codigo" as const }));
@@ -388,6 +409,7 @@ export function matchPurchaseLines(
         if (!tallesCompatibles(v.talle, ov.talle, especiales)) return false; // nunca otro talle (salvo "talle especial")
         if (v.genero && ov.genero && v.genero !== ov.genero) return false;
         if (articleAttributes(o.descripcion).ignifugo !== ign) return false; // otra tela, otro artículo
+        if (esEnvio(l.descripcion) && !esEnvio(o.descripcion)) return false; // el flete nunca es un artículo
         return true;
       })
       .map(o => ({ o, origen: "equivalencia" as const }));
@@ -463,6 +485,37 @@ export function matchPurchaseLines(
     pending.set(l.key, qty);
   }
 
+  // 2b) Desglose por talle (Mariana 16/10): la factura abre por talle ("PRUSIANO NRO 39" x3, "NRO 40" x8…) lo que en la OC
+  //     es un solo renglón sin talle ("PRUSIANO · PVC · Negro" x35). Si un grupo del mismo artículo con 2 talles o más
+  //     entra en UN renglón de OC sin talle (con alguna palabra en común), se atan todos ahí. Verde si la cantidad da justo
+  //     y el precio coincide; si no, amarillo con nota para que alguien lo confirme.
+  const grupos = new Map<string, InvoiceLineInput[]>();
+  for (const l of invoice) {
+    if (pending.get(l.key)! <= 0 || candidates.get(l.key)!.length) continue;
+    const v = parseVariant(l.descripcion);
+    if (!v.talle || !v.producto) continue;
+    grupos.set(v.producto, [...(grupos.get(v.producto) || []), l]);
+  }
+  for (const [producto, lst] of grupos) {
+    if (new Set(lst.map(l => parseVariant(l.descripcion).talle)).size < 2) continue;
+    const total = round2(lst.reduce((t, l) => t + pending.get(l.key)!, 0));
+    const posibles = ocs.filter(o => !ocVariant.get(o.id)!.talle && (remaining.get(o.id) || 0) + 0.0001 >= total
+      && palabrasEnComun(producto, ocVariant.get(o.id)!.producto) > 0);
+    const justos = posibles.filter(o => Math.abs((remaining.get(o.id) || 0) - total) < 0.0001);
+    const o = justos.length === 1 ? justos[0] : !justos.length && posibles.length === 1 ? posibles[0] : null;
+    if (!o) continue;
+    const disp = remaining.get(o.id) || 0;
+    const coincide = Math.abs(disp - total) < 0.0001;
+    const detalle = lst.map(l => `${parseVariant(l.descripcion).talle}×${pending.get(l.key)}`).join(", ");
+    for (const l of lst) {
+      push(l, o, pending.get(l.key)!, "equivalencia");
+      const as = asignaciones[asignaciones.length - 1];
+      as.nota = [`La factura lo abre por talle (${detalle}) y la OC no dice talle: ${coincide ? `la cantidad coincide (${total})` : `vienen ${total} de ${round2(disp)}`}`, as.nota].filter(Boolean).join(" · ");
+      as.semaforo = coincide && precioAceptable(l.precio, o.precio, tol) ? "verde" : "amarillo";
+      pending.set(l.key, 0);
+    }
+  }
+
   // 3) Parecidos: líneas que no encontraron ningún candidato (ni código ni equivalencia).
   //    Se puntúa cada renglón de OC con lugar (nombre + cantidad igual a lo pendiente + precio)
   //    y se asignan de mayor a menor puntaje. Quedan en amarillo para que alguien las mire.
@@ -470,6 +523,7 @@ export function matchPurchaseLines(
   for (const l of invoice) {
     if (pending.get(l.key)! <= 0 || candidates.get(l.key)!.length) continue;
     for (const o of ocs) {
+      if (esEnvio(l.descripcion) && !esEnvio(o.descripcion)) continue;
       const p = puntajeParecido({ ...l, cantidad: pending.get(l.key)! }, o, remaining.get(o.id) || 0, opciones);
       if (p && preferida(l, o.ocId)) { p.puntaje += 15; p.motivos.push("la factura cita esta OC"); }
       if (p && p.puntaje >= PUNTAJE_PARECIDO) pares.push({ l, o, p });
