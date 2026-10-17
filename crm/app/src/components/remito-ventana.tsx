@@ -9,6 +9,7 @@
  *   Si el remito anterior del PR usó otra OC, avisa con un clic para usarla.
  * - Cantidad por artículo: arranca con lo que falta entregar y muestra cuánto llegó del proveedor. Pasarse = aviso, nunca bloquea.
  * - Tipo: Remito R (con CAI) / Sin CAI / Muestra. Valor declarado en 0 con sugerencia (precio de venta sin IVA de lo remitido).
+ * - ¿Quién lo lleva?: domicilio, localidad, transporte y costo del flete (opcional), editables siempre (lib/remito-entrega.ts).
  * - Al terminar: Descargar PDF / Enviar por mail.
  * Lógica pura en lib/remitos-crear.ts y lib/remitos-armado.ts.
  */
@@ -28,6 +29,7 @@ import { renglonesParaEntregar } from "@/lib/remitos-armado";
 import { valorSugerido, excesos, agruparPorSucursal, ocAnteriorDistinta, numeroCAI, nombrePDFRemito, descripcionCorta, type RenglonVentana } from "@/lib/remitos-crear";
 import { buscarCandidatos, type CatalogoCandidato } from "@/lib/catalogo-busqueda";
 import { abrirRemitoPDF, remitoPDFBase64 } from "@/lib/remito-pdf";
+import { entregaInicial, entregaGuardada, filaVigente, difiereDeSucursal, guardarEntrega, FILA_ACTUAL, type Entrega, type ModoEntrega } from "@/lib/remito-entrega";
 import { AlertTriangle, Download, FileText, Loader2, Mail, Plus, Sparkles, Trash2, Truck, X } from "lucide-react";
 
 const db = supabase as any;
@@ -39,7 +41,8 @@ const esUSD = (m: string | null | undefined) => String(m || "").toUpperCase().st
 type Tipo = "cai" | "sincai" | "muestra";
 type Renglon = RenglonVentana & { pedido: number | null; remitido: number | null; disponible: number | null };
 type PRCab = { id: string; numero: string; cliente_id: string; cliente: string; sucursal_id: string | null; modalidad_emision: string | null; oc_cliente: string | null; moneda: string | null; estado: string };
-type Sucursal = { id: string; nombre: string; direccion: string | null; localidad: string | null };
+type Sucursal = { id: string; nombre: string; direccion: string | null; localidad: string | null; transportista_id: string | null };
+const ENTREGA_VACIA: Entrega = { modo: "nose", transportista_id: null, domicilio: "", localidad: "", costo: "" };
 type RemitoEdit = { id: string; numero: string; presupuesto_id: string | null; tipo_remito: string | null; cai_numero: string | null; punto_venta_cai: number | null; nro_comprobante_cai: number | null; cae: string | null };
 type Hecho = { id: string; numero: string; cai: string | null };
 /** Renglón de la lista de PR para elegir (como la lista de Presupuestos). */
@@ -64,6 +67,8 @@ export interface RemitoVentanaProps {
 
 /** Última lista de PR y clientes por sociedad: la ventana abre al instante la próxima vez. */
 const listasGuardadas: Record<string, { prs: PRFila[]; clientes: { id: string; razon_social: string; cuit: string | null }[] }> = {};
+/** Transportistas activos por sociedad (para "¿Quién lo lleva?"). */
+const transportistasGuardados: Record<string, { id: string; nombre: string }[]> = {};
 
 let claveN = 0;
 const nuevaClave = () => `r${++claveN}`;
@@ -139,6 +144,14 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
   const [original, setOriginal] = useState<RemitoEdit | null>(null);
   const [hechos, setHechos] = useState<Hecho[] | null>(null);
   const [mail, setMail] = useState<{ remitoId: string; to: string; subject: string; body: string; filename: string } | null>(null);
+  // ¿Quién lo lleva?
+  const [entrega, setEntrega] = useState<Entrega>(ENTREGA_VACIA);
+  const [transportistas, setTransportistas] = useState<{ id: string; nombre: string }[]>([]);
+  /** Viaje viejo sin transportista del catálogo (se muestra con su nombre). */
+  const [nombreFila, setNombreFila] = useState<string | null>(null);
+  /** Domicilio del cliente (dirección principal) y su último transportista. */
+  const datosCliente = useRef<{ cid: string; direccion: string | null; localidad: string | null; ultimo: string | null } | null>(null);
+  const [enSucursal, setEnSucursal] = useState<"si" | "no">("no");
   // Aparición suave (baja un poco y se aclara)
   const [visible, setVisible] = useState(false);
   useEffect(() => {
@@ -153,7 +166,11 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
     setError(""); setHechos(null); setPr(null); setClienteId(""); setClienteNombre(""); setSucursales([]); setSucursal(""); setRepartir(false);
     setOc(""); setOcInicial(""); setOcAnterior(null); setOcDonde(null); setFecha(todayAR()); setTipo("cai"); setRenglones([]); setObservaciones(""); setValor("0");
     setMoneda("ARS"); setOriginal(null); setModo("pr");
+    setEntrega(ENTREGA_VACIA); setNombreFila(null); setEnSucursal("no"); datosCliente.current = null;
     if (!sociedadId) return;
+    if (transportistasGuardados[sociedadId]) setTransportistas(transportistasGuardados[sociedadId]);
+    db.from("transportistas").select("id, nombre").eq("activo", true).or(`sociedad_id.eq.${sociedadId},sociedad_id.is.null`).order("nombre")
+      .then(({ data }: any) => { if (data) { transportistasGuardados[sociedadId] = data; setTransportistas(data); } });
     (async () => {
       setCargando(true);
       try {
@@ -199,9 +216,34 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
   }
 
   async function cargarSucursales(cid: string) {
-    const { data } = await db.from("cliente_sucursales").select("id, nombre, direccion, localidad").eq("cliente_id", cid).eq("activo", true).order("principal", { ascending: false });
+    const { data } = await db.from("cliente_sucursales").select("id, nombre, direccion, localidad, transportista_id").eq("cliente_id", cid).eq("activo", true).order("principal", { ascending: false });
     setSucursales((data || []) as Sucursal[]);
     return (data || []) as Sucursal[];
+  }
+
+  /** Domicilio del cliente y último transportista que usó (una vez por cliente). */
+  async function cargarDatosCliente(cid: string) {
+    if (datosCliente.current?.cid === cid) return datosCliente.current;
+    const [{ data: c }, { data: t }] = await Promise.all([
+      db.from("clientes").select("direccion, localidad").eq("id", cid).maybeSingle(),
+      db.from("transportes").select("transportista_id").eq("cliente_id", cid).eq("sociedad_id", sociedadId).not("transportista_id", "is", null).neq("estado", "cancelado").order("fecha", { ascending: false }).limit(1),
+    ]);
+    datosCliente.current = { cid, direccion: c?.direccion ?? null, localidad: c?.localidad ?? null, ultimo: t?.[0]?.transportista_id ?? null };
+    return datosCliente.current;
+  }
+
+  /** Domicilio, localidad y transportista por defecto de la sucursal elegida (o del cliente). */
+  async function entregaPorDefecto(cid: string, sucId: string, sucs: Sucursal[]): Promise<Entrega> {
+    const d = await cargarDatosCliente(cid);
+    return entregaInicial(sucs.find((x) => x.id === sucId) || null, d, d.ultimo);
+  }
+  async function aplicarSucursal(sucId: string, sucs: Sucursal[] = sucursales, cid: string = clienteId) {
+    setSucursal(sucId);
+    setEnSucursal("no");
+    if (!cid) return;
+    const e = await entregaPorDefecto(cid, sucId, sucs);
+    // Al editar, el transporte elegido se mantiene; solo cambia el domicilio.
+    setEntrega((prev) => (editando ? { ...prev, domicilio: e.domicilio, localidad: e.localidad } : { ...e, costo: prev.costo }));
   }
 
   /** Carga el PR con lo que falta entregar. Si se edita un remito, sus cantidades no cuentan como ya remitidas. */
@@ -237,7 +279,9 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
     setOcDonde(null);
     setTipo(p.modalidad_emision === "manual" ? "sincai" : "cai");
     const sucs = p.cliente_id ? await cargarSucursales(p.cliente_id) : [];
-    setSucursal(p.sucursal_id && sucs.some((s) => s.id === p.sucursal_id) ? p.sucursal_id : (sucs[0]?.id || ""));
+    const sucId = p.sucursal_id && sucs.some((s) => s.id === p.sucursal_id) ? p.sucursal_id : (sucs[0]?.id || "");
+    setSucursal(sucId);
+    if (p.cliente_id) setEntrega(await entregaPorDefecto(p.cliente_id, sucId, sucs));
     setRenglones(rs);
     if (!rs.some((r) => (r.pendiente || 0) > 0) && !excluirRemito) setError("Este PR ya está todo remitido. Si igual tenés que mandar algo, cargá las cantidades.");
     else setError("");
@@ -246,9 +290,10 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
 
   async function cargarRemito(id: string) {
     const [{ data: r, error: e1 }, { data: its }] = await Promise.all([
-      db.from("remitos").select("id, numero, cliente_id, presupuesto_id, fecha, observaciones, valor_declarado, sucursal_id, oc_cliente, tipo_remito, cai_numero, punto_venta_cai, nro_comprobante_cai, cae, clientes(razon_social)").eq("id", id).eq("sociedad_id", sociedadId).single(),
+      db.from("remitos").select("id, numero, cliente_id, presupuesto_id, fecha, observaciones, valor_declarado, sucursal_id, oc_cliente, tipo_remito, cai_numero, punto_venta_cai, nro_comprobante_cai, cae, direccion_entrega_snapshot, localidad_entrega_snapshot, transportista_id, clientes(razon_social)").eq("id", id).eq("sociedad_id", sociedadId).single(),
       db.from("remito_items").select("descripcion, cantidad, unidad, orden, presupuesto_item_id").eq("remito_id", id).order("orden"),
     ]);
+    const { data: viajes } = await db.from("transportes").select("id, transportista, transportista_id, tipo, estado, destino, costo, created_at").eq("remito_id", id).eq("sociedad_id", sociedadId);
     if (e1 || !r) throw e1 || new Error("No se encontró el remito");
     setOriginal({ id: r.id, numero: r.numero, presupuesto_id: r.presupuesto_id, tipo_remito: r.tipo_remito, cai_numero: r.cai_numero, punto_venta_cai: r.punto_venta_cai, nro_comprobante_cai: r.nro_comprobante_cai, cae: r.cae });
     let rs: Renglon[] = [];
@@ -275,6 +320,12 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
     setOcInicial(r.oc_cliente || "");
     setSucursal(r.sucursal_id || "");
     setTipo(r.tipo_remito === "muestra" ? "muestra" : r.cai_numero ? "cai" : "sincai");
+    // ¿Quién lo lleva? Lo guardado manda; un remito viejo sin nada toma lo de la sucursal.
+    const sucs = r.cliente_id ? await cargarSucursales(r.cliente_id) : [];
+    const vigente = filaVigente(viajes || []);
+    const porDefecto = r.cliente_id ? await entregaPorDefecto(r.cliente_id, r.sucursal_id || "", sucs) : ENTREGA_VACIA;
+    setEntrega(entregaGuardada(r, vigente, porDefecto));
+    setNombreFila(vigente && !vigente.transportista_id && vigente.tipo !== "interno" ? vigente.transportista : null);
     setError("");
   }
 
@@ -282,7 +333,7 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
     const c = clientes.find((x) => x.id === cid);
     setClienteId(cid); setClienteNombre(c?.razon_social || "");
     const sucs = await cargarSucursales(cid);
-    setSucursal(sucs[0]?.id || "");
+    await aplicarSucursal(sucs[0]?.id || "", sucs, cid);
   }
 
   function agregarRenglon() {
@@ -306,7 +357,7 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
   function cambiarModo(m: "pr" | "libre") {
     setModo(m); setPr(null); setClienteId(""); setClienteNombre(""); setSucursales([]); setSucursal(""); setRepartir(false);
     setOc(""); setOcInicial(""); setOcAnterior(null); setOcDonde(null); setTipo("cai"); setObservaciones(""); setValor("0"); setMoneda("ARS"); setError("");
-    setRenglones([]);
+    setRenglones([]); setEntrega(ENTREGA_VACIA); setNombreFila(null); setEnSucursal("no");
     if (m === "libre") agregarRenglon();
   }
 
@@ -319,6 +370,21 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
   const ocCambiada = !!pr && oc.trim() !== (pr.oc_cliente || "").trim() && oc.trim() !== ocInicial.trim();
   const opcionesSucursal = useMemo(() => [{ value: "", label: "Dirección principal" }, ...sucursales.map((s) => ({ value: s.id, label: `${s.nombre}${s.localidad ? ` · ${s.localidad}` : ""}` }))], [sucursales]);
   const cantidadRemitos = repartir && sucursales.length > 1 ? agruparPorSucursal(conCantidad, true, null).length : 1;
+  // ¿Quién lo lleva?
+  const sucElegida = sucursales.find((s) => s.id === sucursal) || null;
+  const difiere = useMemo(() => (repartir ? { domicilio: false, transportista: false } : difiereDeSucursal(entrega, sucElegida)), [repartir, entrega, sucElegida]);
+  const opcionesTransporte = useMemo(() => {
+    const ts = transportistas.map((t) => ({ value: `t:${t.id}`, label: t.nombre }));
+    // Uno que ya no está activo, o un viaje viejo sin transportista del catálogo: se muestra igual.
+    if (entrega.modo === "transporte" && entrega.transportista_id && entrega.transportista_id !== FILA_ACTUAL && !transportistas.some((t) => t.id === entrega.transportista_id)) ts.unshift({ value: `t:${entrega.transportista_id}`, label: "(transportista inactivo)" });
+    if (nombreFila) ts.unshift({ value: `t:${FILA_ACTUAL}`, label: nombreFila });
+    return [{ value: "nose", label: "Todavía no sé" }, { value: "retira", label: "Lo retira el cliente" }, { value: "propio", label: "Lo llevamos nosotros" }, ...ts];
+  }, [transportistas, nombreFila, entrega.modo, entrega.transportista_id]);
+  const valorTransporte = entrega.modo === "transporte" && entrega.transportista_id ? `t:${entrega.transportista_id}` : entrega.modo === "transporte" ? "nose" : entrega.modo;
+  function elegirTransporte(v: string) {
+    if (v.startsWith("t:")) setEntrega((e) => ({ ...e, modo: "transporte", transportista_id: v.slice(2) }));
+    else setEntrega((e) => ({ ...e, modo: v as ModoEntrega, transportista_id: null }));
+  }
 
   // ── Guardar ──────────────────────────────────────────────────────
   async function guardar() {
@@ -347,6 +413,16 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
   const itemsDe = (rs: Renglon[], remito: string) => rs.map((r, i) => ({
     remito_id: remito, descripcion: r.descripcion.trim(), cantidad: Number(r.cantidad), unidad: r.unidad || "UN", orden: r.orden ?? i, presupuesto_item_id: r.presupuesto_item_id,
   }));
+
+  /** Domicilio, transporte y viaje del remito; si algo no queda, solo avisa (el remito ya está hecho). */
+  async function guardarEntregaDe(remito: string, e: Entrega, sucId: string | null, preguntarSucursal: boolean) {
+    if (!sociedadId) return;
+    const aviso = await guardarEntrega(db, e,
+      { sociedad_id: sociedadId, cliente_id: clienteId, remito_id: remito, fecha, created_by: profile?.id || null, sucursal_id: sucId },
+      (id) => transportistas.find((t) => t.id === id)?.nombre || null,
+      preguntarSucursal && enSucursal === "si" ? difiere : null);
+    if (aviso) toast.warning(aviso);
+  }
 
   async function crearRemitos(): Promise<Hecho[] | null> {
     const grupos = agruparPorSucursal(conCantidad, repartir && sucursales.length > 1, sucursal || null);
@@ -377,6 +453,10 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
         setError(`No se pudieron guardar los renglones (${e2.message}); no quedó el remito${cai ? `. El número de CAI ${cai.nro_comprobante} quedó usado` : ""}`);
         break;
       }
+      // Repartido en varias sucursales: cada remito con el domicilio de la suya (el transporte es el mismo).
+      const sucG = grupos.length > 1 ? sucursales.find((s) => s.id === g.sucursal_id) : null;
+      const entregaG = sucG ? { ...entrega, domicilio: sucG.direccion || "", localidad: sucG.localidad || "" } : entrega;
+      await guardarEntregaDe(rem.id, entregaG, g.sucursal_id, grupos.length === 1);
       hechosAhora.push({ id: rem.id, numero: rem.numero || "", cai: cai ? numeroCAI(cai.punto_venta, cai.nro_comprobante) : null });
     }
     if (!hechosAhora.length) return null;
@@ -398,6 +478,7 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
       const { error: e3 } = await db.from("remito_items").delete().in("id", viejos.map((v: any) => v.id));
       if (e3) { setError(`Quedaron renglones repetidos (${e3.message}): avisá a sistemas`); return null; }
     }
+    await guardarEntregaDe(original.id, entrega, sucursal || null, true);
     return [{ id: original.id, numero: original.numero, cai: numeroCAI(original.punto_venta_cai, original.nro_comprobante_cai) }];
   }
 
@@ -529,7 +610,7 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
                         <span className="py-1 text-xs text-zinc-600 dark:text-zinc-300">Elegí la sucursal en cada renglón · salen {cantidadRemitos} remito(s) <button onClick={() => setRepartir(false)} className="text-orange-600 hover:underline">una sola</button></span>
                       ) : (
                         <span className="flex items-center gap-2">
-                          <div className="flex-1"><Select value={sucursal} onChange={(e) => setSucursal(e.target.value)} options={opcionesSucursal} /></div>
+                          <div className="flex-1"><Select value={sucursal} onChange={(e) => aplicarSucursal(e.target.value)} options={opcionesSucursal} /></div>
                           {!editando && sucursales.length > 1 && <button onClick={() => { setRepartir(true); setRenglones((prev) => prev.map((r) => ({ ...r, sucursal_id: r.sucursal_id || sucursal || null }))); }} className="whitespace-nowrap text-[11px] text-orange-600 hover:underline">repartir en varias</button>}
                         </span>
                       )}
@@ -548,6 +629,38 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
                       La OC es distinta a la del PR ({pr?.oc_cliente || "sin OC"}). ¿Dónde va?
                       <label className="flex items-center gap-1"><input type="radio" checked={ocDonde === "remito"} onChange={() => setOcDonde("remito")} /> Solo en este remito</label>
                       <label className="flex items-center gap-1"><input type="radio" checked={ocDonde === "pr"} onChange={() => setOcDonde("pr")} /> También corregir el PR</label>
+                    </div>
+                  )}
+
+                  {/* ¿Quién lo lleva? */}
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-4">
+                    <label className="col-span-2 flex flex-col gap-0.5 text-[11px] text-zinc-500">¿Quién lo lleva?
+                      <Select value={valorTransporte} onChange={(e) => elegirTransporte(e.target.value)} options={opcionesTransporte} />
+                    </label>
+                    {(entrega.modo === "transporte" || entrega.modo === "propio") ? (
+                      <label className="col-span-2 flex flex-col gap-0.5 text-[11px] text-zinc-500 sm:col-span-1">Costo flete $ (opcional)
+                        <input value={entrega.costo} onChange={(e) => setEntrega((x) => ({ ...x, costo: e.target.value }))} inputMode="decimal" placeholder="Con la factura" className={inputCls} />
+                      </label>
+                    ) : <div className="hidden sm:block" />}
+                    <div className="hidden sm:block" />
+                    {entrega.modo === "retira" ? null : repartir && sucursales.length > 1 ? (
+                      <span className="col-span-2 py-1 text-xs text-zinc-500 sm:col-span-4">Cada remito sale con el domicilio de su sucursal.</span>
+                    ) : (
+                      <>
+                        <label className="col-span-2 flex flex-col gap-0.5 text-[11px] text-zinc-500">Domicilio de entrega
+                          <input value={entrega.domicilio} onChange={(e) => setEntrega((x) => ({ ...x, domicilio: e.target.value }))} placeholder="Calle y número" className={inputCls} />
+                        </label>
+                        <label className="col-span-2 flex flex-col gap-0.5 text-[11px] text-zinc-500">Localidad
+                          <input value={entrega.localidad} onChange={(e) => setEntrega((x) => ({ ...x, localidad: e.target.value }))} placeholder="Localidad" className={inputCls} />
+                        </label>
+                      </>
+                    )}
+                  </div>
+                  {sucElegida && (difiere.domicilio || difiere.transportista) && (
+                    <div className="flex flex-wrap items-center gap-2 rounded-md bg-sky-50 px-3 py-1.5 text-xs text-sky-900 dark:bg-sky-950/30 dark:text-sky-200">
+                      {difiere.domicilio && difiere.transportista ? "El domicilio y el transporte" : difiere.domicilio ? "El domicilio" : "El transporte"} no {difiere.domicilio && difiere.transportista ? "son" : "es"} el de siempre de {sucElegida.nombre}. ¿Queda como el de siempre?
+                      <label className="flex items-center gap-1"><input type="radio" checked={enSucursal === "si"} onChange={() => setEnSucursal("si")} /> Sí</label>
+                      <label className="flex items-center gap-1"><input type="radio" checked={enSucursal === "no"} onChange={() => setEnSucursal("no")} /> Solo esta vez</label>
                     </div>
                   )}
 

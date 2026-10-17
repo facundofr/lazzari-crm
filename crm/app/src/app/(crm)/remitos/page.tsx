@@ -10,7 +10,9 @@ import { Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, Clipbo
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { RemitoVentana } from "@/components/remito-ventana";
 import { useToast } from "@/components/ui/toast";
-import { abrirRemitoPDF, remitoPDFBase64 } from "@/lib/remito-pdf";
+import { abrirRemitoPDF, remitoPDFBase64, htmlRemito } from "@/lib/remito-pdf";
+import { filaVigente, entregaGuardada, guardarEntrega, textoTransporte, type Entrega, type ModoEntrega, type FilaTransporte } from "@/lib/remito-entrega";
+import { Select } from "@/components/ui/input";
 import { numeroCAI, descripcionCorta, numeroRemito, nombrePDFRemito } from "@/lib/remitos-crear";
 import { prepararArchivo } from "@/lib/preparar-foto";
 import { useUser } from "@/lib/auth-context";
@@ -93,6 +95,10 @@ interface RemitoRow {
   ocs_numeros?: string[];
   remito_items: { id: string; descripcion?: string | null; orden?: number | null }[];
   transportistas?: string[];
+  /** Valor del desplegable de la columna Transporte: "t:<id>", "propio", "retira" o "nose". */
+  transporte_valor?: string;
+  direccion_entrega_snapshot?: string | null;
+  localidad_entrega_snapshot?: string | null;
   presupuesto_vendedor?: string | null;
   // Entrega (Remitos nueva): foto del remito firmado y quién recibió
   foto_url?: string | null;
@@ -103,6 +109,14 @@ interface RemitoRow {
   cai_numero?: string | null;
   punto_venta_cai?: number | null;
   nro_comprobante_cai?: number | null;
+}
+
+/** Texto y valor de la columna Transporte a partir de los viajes del remito. */
+function columnaTransporte(r: { direccion_entrega_snapshot?: string | null }, filas: FilaTransporte[]) {
+  const texto = textoTransporte(r, filas);
+  const v = filaVigente(filas);
+  const valor = v ? (v.tipo === "interno" ? "propio" : v.transportista_id ? `t:${v.transportista_id}` : "nose") : texto ? "retira" : "nose";
+  return { transportistas: texto ? [texto] : [], transporte_valor: valor };
 }
 
 interface RemitoDetailItem {
@@ -288,7 +302,7 @@ export default function RemitosPage() {
           } catch { /* sin OC: la columna queda vacía */ }
           // Nombre de la sucursal y transportista de cada remito (para la lista y el buscador).
           const sucNombre = new Map<string, string>();
-          const transPorRemito = new Map<string, string[]>();
+          const transPorRemito = new Map<string, any[]>();
           try {
             const sucIds = [...new Set((data as any[]).map(r => r.sucursal_id).filter(Boolean))] as string[];
             const remIds = (data as any[]).map(r => r.id) as string[];
@@ -297,11 +311,11 @@ export default function RemitosPage() {
               for (const s of sucs || []) sucNombre.set(s.id, s.nombre);
             }
             for (let i = 0; i < remIds.length; i += 150) {
-              const { data: ts } = await (supabase as any).from("transportes").select("remito_id, transportista").in("remito_id", remIds.slice(i, i + 150));
-              for (const t of ts || []) if (t.transportista) transPorRemito.set(t.remito_id, [...(transPorRemito.get(t.remito_id) || []), t.transportista]);
+              const { data: ts } = await (supabase as any).from("transportes").select("id, remito_id, transportista, transportista_id, tipo, estado, destino, costo, created_at").in("remito_id", remIds.slice(i, i + 150));
+              for (const t of ts || []) transPorRemito.set(t.remito_id, [...(transPorRemito.get(t.remito_id) || []), t]);
             }
           } catch { /* sin sucursal ni transporte: quedan vacíos */ }
-          setRemitos((data as any[]).map(r => ({ ...r, clienteNombre: r.clientes?.razon_social || "", presupuesto_numero: r.presupuestos?.numero || null, presupuesto_modalidad: r.presupuestos?.modalidad_emision || null, presupuesto_vendedor: r.presupuestos?.vendedor_id || r.presupuestos?.created_by || null, ocs_numeros: ocsPorPR.get(r.presupuesto_id) || [], sucursal_nombre: r.sucursal_id ? sucNombre.get(r.sucursal_id) : undefined, transportistas: transPorRemito.get(r.id) || [] })) as RemitoRow[]);
+          setRemitos((data as any[]).map(r => ({ ...r, clienteNombre: r.clientes?.razon_social || "", presupuesto_numero: r.presupuestos?.numero || null, presupuesto_modalidad: r.presupuestos?.modalidad_emision || null, presupuesto_vendedor: r.presupuestos?.vendedor_id || r.presupuestos?.created_by || null, ocs_numeros: ocsPorPR.get(r.presupuesto_id) || [], sucursal_nombre: r.sucursal_id ? sucNombre.get(r.sucursal_id) : undefined, ...columnaTransporte(r, transPorRemito.get(r.id) || []) })) as RemitoRow[]);
         } else if (error) {
           setRemitos(mockRemitos.map((r) => ({
             id: r.id, numero: r.numero, cliente_id: r.clienteId,
@@ -329,6 +343,32 @@ export default function RemitosPage() {
   }, [sociedadActiva?.id]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Columna Transporte: se cambia con un clic (mismo guardado que la ventana del remito).
+  const [listaTransp, setListaTransp] = useState<{ id: string; nombre: string }[]>([]);
+  const [editTransp, setEditTransp] = useState<string | null>(null);
+  useEffect(() => {
+    if (!sociedadActiva?.id) return;
+    (supabase as any).from("transportistas").select("id, nombre").eq("activo", true).or(`sociedad_id.eq.${sociedadActiva.id},sociedad_id.is.null`).order("nombre")
+      .then(({ data }: any) => setListaTransp(data || []));
+  }, [sociedadActiva?.id]);
+  const opcionesTransp = useMemo(() => [{ value: "nose", label: "Todavía no sé" }, { value: "retira", label: "Lo retira el cliente" }, { value: "propio", label: "Lo llevamos nosotros" }, ...listaTransp.map((t) => ({ value: `t:${t.id}`, label: t.nombre }))], [listaTransp]);
+  async function cambiarTransporte(row: RemitoRow, v: string) {
+    setEditTransp(null);
+    if (!sociedadActiva?.id || v === row.transporte_valor) return;
+    const { data: filas } = await (supabase as any).from("transportes").select("id, transportista, transportista_id, tipo, estado, destino, costo, created_at").eq("remito_id", row.id).eq("sociedad_id", sociedadActiva.id);
+    const vigente = filaVigente(filas || []);
+    const base = entregaGuardada({ direccion_entrega_snapshot: row.direccion_entrega_snapshot ?? null, localidad_entrega_snapshot: row.localidad_entrega_snapshot ?? null, transportista_id: null }, vigente, { modo: "nose", transportista_id: null, domicilio: "", localidad: "", costo: "" });
+    const e: Entrega = v.startsWith("t:") ? { ...base, modo: "transporte", transportista_id: v.slice(2) } : { ...base, modo: v as ModoEntrega, transportista_id: null };
+    // "Retira" pisa el domicilio solo en el remito; si después se elige un transporte y no había domicilio, el PDF usa el de la sucursal.
+    const aviso = await guardarEntrega(supabase, e, { sociedad_id: sociedadActiva.id, cliente_id: row.cliente_id, remito_id: row.id, fecha: row.fecha, created_by: profile?.id || null, sucursal_id: row.sucursal_id || null }, (id) => listaTransp.find((t) => t.id === id)?.nombre || null, null);
+    if (aviso) toast.warning(aviso);
+    const [{ data: r2 }, { data: f2 }] = await Promise.all([
+      (supabase as any).from("remitos").select("direccion_entrega_snapshot, localidad_entrega_snapshot").eq("id", row.id).single(),
+      (supabase as any).from("transportes").select("id, transportista, transportista_id, tipo, estado, destino, costo, created_at").eq("remito_id", row.id),
+    ]);
+    setRemitos((prev) => prev.map((x) => (x.id === row.id ? { ...x, ...(r2 || {}), ...columnaTransporte({ ...x, ...(r2 || {}) }, f2 || []) } : x)));
+  }
 
   /** PDF del remito desde la lista (el mismo que el del detalle). */
   async function pdfDeFila(row: RemitoRow) {
@@ -743,53 +783,11 @@ export default function RemitosPage() {
 
   async function handleDownloadPDF(overrideValorDeclarado?: number) {
     if (!detailRemito || !sociedadActiva) return;
-    const r = detailRemito;
-    const soc = getSociedadPDF(sociedadActiva);
-    // Lookup CAI vencimiento if remito has CAI
-    let caiVencimiento: string | null = null;
-    if (r.cai_numero) {
-      const { data: caiConf } = await (supabase as any)
-        .from("cai_config")
-        .select("fecha_vencimiento")
-        .eq("sociedad_id", sociedadActiva.id)
-        .eq("cai_numero", r.cai_numero)
-        .maybeSingle();
-      caiVencimiento = caiConf?.fecha_vencimiento || null;
-    }
-    const html = generateRemitoPDF({
-      numero: r.numero,
-      fecha: r.fecha,
-      cae: r.cae,
-      cae_vencimiento: r.car_vencimiento,
-      nro_remito_afip: r.nro_remito_afip,
-      oc_cliente: r.oc_cliente,
-      valor_declarado: overrideValorDeclarado ?? r.valor_declarado,
-      observaciones: r.observaciones,
-      cai_numero: r.cai_numero,
-      punto_venta_cai: r.punto_venta_cai,
-      nro_comprobante_cai: r.nro_comprobante_cai,
-      cai_vencimiento: caiVencimiento,
-      cuit_emisor: sociedadActiva.cuit,
-      cliente: r.clientes ? {
-        razon_social: r.clientes.razon_social,
-        cuit: r.clientes.cuit,
-        direccion: r.clientes.direccion,
-      } : null,
-      sucursal_nombre: r.sucursal_nombre,
-      sucursal_direccion: r.sucursal_direccion,
-      items: detailItems.map(it => ({
-        descripcion: it.descripcion,
-        cantidad: it.cantidad,
-        unidad: it.unidad,
-      })),
-      transportes: detailTransportes.map(t => ({
-        transportista: t.transportista,
-        destino: t.destino,
-        costo: t.costo,
-        moneda: t.moneda,
-      })),
-    }, soc);
-    openPDFWindow(html, nombrePDFRemito(numeroRemito(r), r.clientes?.razon_social));
+    // Mismo PDF que la lista y la ventana (domicilio y transporte cargados en el remito).
+    try {
+      const { html, filename } = await htmlRemito(detailRemito.id, sociedadActiva, overrideValorDeclarado);
+      openPDFWindow(html, filename);
+    } catch (err) { toast.error(`No se pudo armar el PDF: ${err instanceof Error ? err.message : "error"}`); }
   }
 
   async function handleCreateTransporteFromRemito() {
@@ -883,7 +881,17 @@ export default function RemitosPage() {
                 if (k === "cai" && cai) return <span className="whitespace-nowrap text-xs font-medium text-emerald-700 dark:text-emerald-400" title={`CAI ${row.cai_numero}`}>Remito R</span>;
                 return <Badge variant={k === "arca" ? "info" : k === "muestra" ? "purple" : k === "manual" ? "orange" : "default"}>{tipoRemitoTexto(row)}</Badge>;
               } },
-              { key: "transportistas", label: "Transporte", sortable: true, sortValue: (row) => (row.transportistas || []).join(" "), render: (row) => (row.transportistas || []).length ? <span className="text-xs">{(row.transportistas || []).join(", ")}</span> : <span className="text-zinc-400">{"—"}</span> },
+              { key: "transportistas", label: "Transporte", sortable: true, sortValue: (row) => (row.transportistas || []).join(" "), render: (row) => (
+                <div onClick={(e) => e.stopPropagation()}>
+                  {editTransp === row.id ? (
+                    <Select autoFocus className="w-[170px] !py-1 !text-xs" value={row.transporte_valor || "nose"} onChange={(e) => cambiarTransporte(row, e.target.value)} onBlur={() => setEditTransp(null)} options={opcionesTransp} />
+                  ) : (
+                    <button onClick={() => setEditTransp(row.id)} title="Cambiar quién lo lleva" className="rounded px-1 py-0.5 text-left text-xs hover:bg-orange-50 hover:text-orange-700 dark:hover:bg-orange-950/30">
+                      {(row.transportistas || []).length ? (row.transportistas || []).join(", ") : <span className="text-zinc-400">{"—"}</span>}
+                    </button>
+                  )}
+                </div>
+              ) },
               { key: "foto_url", label: "Foto", sortable: true, sortValue: (row) => (row.foto_url ? 1 : 0), render: (row) => (
                 <div onClick={(e) => e.stopPropagation()}>
                   {row.foto_url ? (
