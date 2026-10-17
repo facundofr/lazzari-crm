@@ -28,6 +28,7 @@ import {
   Shirt,
   Zap,
   Scissors,
+  Plane,
   FileSearch,
   ListChecks,
   Sparkles,
@@ -42,7 +43,8 @@ import { APP_VERSION_LABEL } from "@/lib/app-version";
 
 // Menú agrupado por lo que hace cada sector. Cada uno ve solo los módulos que su rol permite
 // (los vendedores/compradores no ven Plata). Los grupos sin nada visible no se muestran.
-const navigation: { grupo: string; items: { name: string; href: string; icon: typeof Users; module: string }[] }[] = [
+// `oculto`: no aparece en el menú por ahora (se desarrolla más adelante); la pantalla sigue andando si se entra por el link.
+const navigation: { grupo: string; items: { name: string; href: string; icon: typeof Users; module: string; oculto?: boolean }[] }[] = [
   { grupo: "Inicio", items: [
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, module: "dashboard" },
     { name: "Pendientes", href: "/pendientes", icon: ListChecks, module: "dashboard" },
@@ -50,7 +52,7 @@ const navigation: { grupo: string; items: { name: string; href: string; icon: ty
   ] },
   { grupo: "Vender", items: [
     { name: "Clientes", href: "/clientes", icon: Users, module: "clientes" },
-    { name: "Oportunidades", href: "/oportunidades", icon: Lightbulb, module: "clientes" },
+    { name: "Oportunidades", href: "/oportunidades", icon: Lightbulb, module: "clientes", oculto: true },
     { name: "Presupuestos nuevo", href: "/presupuestos-nuevo", icon: Sparkles, module: "presupuestos_nuevo" },
     { name: "Presupuestos", href: "/presupuestos", icon: FileText, module: "presupuestos" },
     { name: "Muestras", href: "/muestras", icon: Shirt, module: "muestras" },
@@ -61,11 +63,12 @@ const navigation: { grupo: string; items: { name: string; href: string; icon: ty
     { name: "Proveedores", href: "/proveedores", icon: Factory, module: "proveedores" },
     { name: "Compras nueva", href: "/compras-nueva", icon: ShoppingCart, module: "compras_nueva" },
     { name: "Compras", href: "/ordenes-compra", icon: ShoppingCart, module: "ordenes_compra" },
-    { name: "Personalización", href: "/personalizacion", icon: Scissors, module: "ordenes_compra" },
+    { name: "Personalización", href: "/personalizacion", icon: Scissors, module: "ordenes_compra", oculto: true },
+    { name: "Importaciones", href: "/importaciones", icon: Plane, module: "ordenes_compra", oculto: true },
   ] },
   { grupo: "Entregar", items: [
     { name: "Remitos", href: "/remitos", icon: Receipt, module: "remitos" },
-    { name: "Stock", href: "/stock", icon: Package, module: "stock" },
+    { name: "Stock", href: "/stock", icon: Package, module: "stock", oculto: true },
     { name: "Transportes", href: "/transportes", icon: Truck, module: "remitos" },
   ] },
   { grupo: "Plata", items: [
@@ -177,7 +180,7 @@ export function Sidebar() {
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-3 py-2">
         {navigation.map((g) => {
-          const visibles = g.items.filter((item) => item.module === "compras_nueva" ? !!profile?.prueba_compras_nueva : item.module === "presupuestos_nuevo" ? !!profile?.prueba_presupuestos_nuevo : hasModuleAccess(role, item.module));
+          const visibles = g.items.filter((item) => !item.oculto).filter((item) => item.module === "compras_nueva" ? !!profile?.prueba_compras_nueva : item.module === "presupuestos_nuevo" ? !!profile?.prueba_presupuestos_nuevo : hasModuleAccess(role, item.module));
           if (!visibles.length) return null;
           const showLabel = !collapsed || mobileSidebarOpen;
           return (
