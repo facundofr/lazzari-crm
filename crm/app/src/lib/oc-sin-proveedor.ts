@@ -54,14 +54,14 @@ export interface ResultadoAsignar { movidos: number; ocDestino: string[]; avisos
  * Pasa renglones de OC (sin proveedor) a una OC del proveedor real, del mismo PR y moneda: usa una OC sin mandar que ya exista o crea una.
  * La OC que queda vacía se CANCELA (no se borra). No toca el PR. Se salta lo que ya tiene algo recibido.
  */
-export async function asignarRenglonesAProveedor(db: any, args: { sociedadId: string; userId?: string | null; itemIds: string[]; proveedorId: string; proveedorNombre: string; nota?: string }): Promise<ResultadoAsignar> {
+export async function asignarRenglonesAProveedor(db: any, args: { sociedadId: string; userId?: string | null; itemIds: string[]; proveedorId: string; proveedorNombre: string; nota?: string; /** Compras Lazza: mueve también lo que ya tiene algo recibido (lo recibido viaja con el renglón). */ conRecibido?: boolean }): Promise<ResultadoAsignar> {
   const res: ResultadoAsignar = { movidos: 0, ocDestino: [], avisos: [] };
   if (!args.itemIds.length) return res;
   const { data: items, error: e0 } = await db.from("orden_compra_items").select("id, orden_id, cantidad_recibida, descripcion").in("id", args.itemIds);
   if (e0) throw e0;
   const porOrigen = new Map<string, any[]>();
   for (const it of items || []) {
-    if (Number(it.cantidad_recibida) > 0) { res.avisos.push(`"${it.descripcion}" ya tiene algo recibido: no se movió`); continue; }
+    if (Number(it.cantidad_recibida) > 0 && !args.conRecibido) { res.avisos.push(`"${it.descripcion}" ya tiene algo recibido: no se movió`); continue; }
     porOrigen.set(it.orden_id, [...(porOrigen.get(it.orden_id) || []), it]);
   }
   if (!porOrigen.size) return res;

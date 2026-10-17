@@ -5,6 +5,7 @@
  * Columnas: Fecha · OC · PR / Cliente · Proveedor · Descripción · Persona · Estado · Llegó · Factura · Pago · Copiar.
  * "En curso" = falta llegar, facturar o pagar algo. "Terminadas" = llegó todo + facturada + pagada.
  * Copiar: texto para el proveedor sin precios (no abre la OC). Solo lectura: no guarda nada.
+ * Con `lazza` (pantalla Compras Lazza): botón "Llegó" en cada OC, marca 👁 Observar y filtro "Observar".
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
@@ -26,7 +27,7 @@ const db = supabase as any;
 type Fila = {
   id: string; numero: string; fecha: string; fecha_entrega_estimada: string | null; estado: string; pedido: boolean | null; pedido_at: string | null;
   saldo_cerrado: boolean | null; estado_facturacion: string | null; estado_pago: string | null; medio_pago: string | null; total: number | null;
-  proveedor_id: string | null; created_by: string | null;
+  proveedor_id: string | null; created_by: string | null; observar?: boolean | null; observar_nota?: string | null;
   proveedores: { razon_social: string; nombre_fantasia: string | null } | null;
   presupuesto_origen: { id: string; numero: string; cliente_id: string | null; vendedor_id: string | null; clientes: { razon_social: string } | null } | null;
   orden_compra_items: (ItemOC & { orden: number | null })[];
@@ -67,7 +68,13 @@ function IconoEje({ eje, titulo }: { eje: Eje; titulo: string }) {
 }
 const selectCls = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm text-zinc-700 focus:border-orange-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-white";
 
-export default function ComprasListaOC({ sociedadId }: { sociedadId: string | undefined }) {
+export type OcLazza = { id: string; numero: string; observar_nota?: string | null };
+
+export default function ComprasListaOC({ sociedadId, lazza }: {
+  sociedadId: string | undefined;
+  /** Compras Lazza: "Llegó" en cada OC y la marca "Observar" (con su nota). */
+  lazza?: { onLlego: (oc: OcLazza) => void; onObservar: (oc: OcLazza) => void };
+}) {
   const { toast } = useToast();
   const [filas, setFilas] = useState<Vista[]>([]);
   const [cargando, setCargando] = useState(true);
@@ -81,13 +88,17 @@ export default function ComprasListaOC({ sociedadId }: { sociedadId: string | un
   const [soloAtrasadas, setSoloAtrasadas] = useState(false);
   const [periodo, setPeriodo] = useState<"" | "mes" | "mes_pasado" | "90">("");
   const [copiada, setCopiada] = useState<string | null>(null);
+  const [soloObservar, setSoloObservar] = useState(false);
+  const conLazza = !!lazza;
 
   const cargar = useCallback(async () => {
     if (!sociedadId) return;
     setCargando(true);
     setError("");
     try {
-      const ocs = await traerTodo<Fila>(() => db.from("ordenes_compra").select(SEL).eq("sociedad_id", sociedadId).neq("estado", "cancelada").order("id"));
+      const traer = (sel: string) => traerTodo<Fila>(() => db.from("ordenes_compra").select(sel).eq("sociedad_id", sociedadId).neq("estado", "cancelada").order("id"));
+      // "Observar" existe recién cuando se corre la migración 20261016200000: si falta, la lista anda igual sin la marca.
+      const ocs = conLazza ? await traer(`${SEL}, observar, observar_nota`).catch(() => traer(SEL)) : await traer(SEL);
       const ids = ocs.map(o => o.id);
       const [links, viejas, perfiles] = await Promise.all([
         enTandas<{ orden_compra_id: string; facturas_compra: FacturaOC | FacturaOC[] | null }>(ids, t => db.from("factura_compra_ocs").select("orden_compra_id, facturas_compra(id, estado, tipo_comprobante, total)").in("orden_compra_id", t)),
@@ -120,7 +131,7 @@ export default function ComprasListaOC({ sociedadId }: { sociedadId: string | un
     } finally {
       setCargando(false);
     }
-  }, [sociedadId]);
+  }, [sociedadId, conLazza]);
   useEffect(() => { void cargar(); }, [cargar]);
   // Al guardar una factura (Cargar factura) se refresca la lista.
   useEffect(() => {
@@ -161,12 +172,14 @@ export default function ComprasListaOC({ sociedadId }: { sociedadId: string | un
     if (estado && f.estadoVista !== estado) return false;
     if (soloAtrasadas && !f.atrasada) return false;
     if (desde && !((f.fecha || "") >= desde.d && (f.fecha || "") < desde.h)) return false;
+    if (soloObservar && !f.observar) return false;
     return true;
-  }), [filas, vista, palabras, persona, proveedor, cliente, estado, soloAtrasadas, desde]);
+  }), [filas, vista, palabras, persona, proveedor, cliente, estado, soloAtrasadas, desde, soloObservar]);
 
   const enCurso = useMemo(() => filas.filter(f => !f.terminada).length, [filas]);
   const atrasadas = useMemo(() => filas.filter(f => !f.terminada && f.atrasada).length, [filas]);
-  const hayFiltros = !!(busca || persona || proveedor || cliente || estado || soloAtrasadas || periodo);
+  const observadas = useMemo(() => filas.filter(f => f.observar).length, [filas]);
+  const hayFiltros = !!(busca || persona || proveedor || cliente || estado || soloAtrasadas || periodo || soloObservar);
 
   async function copiar(f: Vista) {
     const texto = textoCopiarOC(f, f.proveedores?.razon_social || f.proveedorNombre);
@@ -223,7 +236,12 @@ export default function ComprasListaOC({ sociedadId }: { sociedadId: string | un
         <button onClick={() => setSoloAtrasadas(v => !v)} className={`h-8 rounded-lg border px-2 text-sm ${soloAtrasadas ? "border-red-400 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300" : "border-zinc-200 text-zinc-600 dark:border-zinc-700 dark:text-zinc-300"}`}>
           Atrasadas <span className="text-xs opacity-70">{atrasadas}</span>
         </button>
-        {hayFiltros && <button onClick={() => { setBusca(""); setPersona(""); setProveedor(""); setCliente(""); setEstado(""); setSoloAtrasadas(false); setPeriodo(""); }} className="text-xs text-zinc-500 underline">Limpiar filtros</button>}
+        {conLazza && (
+          <button onClick={() => setSoloObservar(v => !v)} className={`h-8 rounded-lg border px-2 text-sm ${soloObservar ? "border-amber-400 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300" : "border-zinc-200 text-zinc-600 dark:border-zinc-700 dark:text-zinc-300"}`}>
+            Observar <span className="text-xs opacity-70">{observadas}</span>
+          </button>
+        )}
+        {hayFiltros && <button onClick={() => { setBusca(""); setPersona(""); setProveedor(""); setCliente(""); setEstado(""); setSoloAtrasadas(false); setPeriodo(""); setSoloObservar(false); }} className="text-xs text-zinc-500 underline">Limpiar filtros</button>}
       </div>
 
       {error && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400">{error}</p>}
@@ -245,8 +263,19 @@ export default function ComprasListaOC({ sociedadId }: { sociedadId: string | un
             { key: "personaNombre", label: "Persona", render: f => f.personaNombre
               ? <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-orange-100 text-[10px] font-bold text-orange-600 dark:bg-orange-900/40 dark:text-orange-300" title={f.personaNombre}>{iniciales(f.personaNombre)}</span>
               : <span className="text-xs text-zinc-400">—</span> },
-            { key: "estadoVista", label: "Estado", sortValue: f => ["por_enviar", "enviada", "parcial", "completo"].indexOf(f.estadoVista), render: f => <span className={`inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${ESTILO_ESTADO[f.estadoVista]}`}>{ESTADO_OC_LABEL[f.estadoVista]}</span> },
-            { key: "recibido", label: "Llegó", className: "text-right", sortValue: f => (f.pedidoCant ? f.recibido / f.pedidoCant : 0), render: f => <span className="whitespace-nowrap font-mono text-xs">{fmt(f.recibido)} / {fmt(f.pedidoCant)}</span> },
+            { key: "estadoVista", label: "Estado", sortValue: f => ["por_enviar", "enviada", "parcial", "completo"].indexOf(f.estadoVista), render: f => (
+              <span className="inline-flex items-center gap-1">
+                <span className={`inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${ESTILO_ESTADO[f.estadoVista]}`}>{ESTADO_OC_LABEL[f.estadoVista]}</span>
+                {lazza && f.observar && (
+                  <button onClick={e => { e.stopPropagation(); lazza.onObservar(f); }} title={f.observar_nota || "Observar"}
+                    className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 hover:bg-amber-200 dark:bg-amber-900/40 dark:text-amber-300">👁 Observar</button>
+                )}
+              </span>
+            ) },
+            { key: "recibido", label: "Llegó", className: "text-right", sortValue: f => (f.pedidoCant ? f.recibido / f.pedidoCant : 0), render: f => lazza
+              ? <button onClick={e => { e.stopPropagation(); lazza.onLlego(f); }} title="Marcar lo que llegó (Completo o Parcial)"
+                  className="whitespace-nowrap rounded-md border border-zinc-200 px-1.5 py-0.5 font-mono text-xs hover:border-orange-400 hover:bg-orange-50 dark:border-zinc-700 dark:hover:bg-orange-950/30">{fmt(f.recibido)} / {fmt(f.pedidoCant)} <span className="font-sans text-orange-600">Llegó</span></button>
+              : <span className="whitespace-nowrap font-mono text-xs">{fmt(f.recibido)} / {fmt(f.pedidoCant)}</span> },
             { key: "factura", label: "Factura", className: "text-center", render: f => <IconoEje eje={f.factura} titulo={f.factura === "ok" ? "Facturada" : f.factura === "parcial" ? "Facturada en parte" : "Falta la factura"} /> },
             { key: "pago", label: "Pago", className: "text-center", render: f => <IconoEje eje={f.pago} titulo={f.pago === "ok" ? (f.medio_pago === "tarjeta" ? "Pagada con tarjeta" : "Pagada") : f.pago === "parcial" ? "Pagada en parte" : "Falta pagar"} /> },
             { key: "copiar", label: "", sortable: false, render: f => (
