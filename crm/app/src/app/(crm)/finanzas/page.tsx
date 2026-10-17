@@ -2353,7 +2353,7 @@ export default function FinanzasPage() {
       const fc = elegidas.find(f => f.id === q.id);
       return `${fc?.numero || "S/N"} queda debiendo ${formatCurrency(roundPaymentMoney((fc?.saldo_pendiente || 0) - (res.montos[q.id] || 0)), opMonedaDocs)}`;
     }).join(" · ");
-    setOpAviso(`Pago parcial: ${detalle}. La retención se recalculó sobre lo que pagás (${formatCurrency(roundPaymentMoney(res.retencion * tc), opForm.moneda)}). Revisá y apretá «Crear Orden de Pago».`);
+    setOpAviso(`Pago parcial: ${detalle}. La retención se recalculó sobre lo que pagás (${formatCurrency(roundPaymentMoney(res.retencion * tc), opForm.moneda)}). Revisá y apretá «Crear Orden de pago».`);
     return true;
   }
 
@@ -5519,7 +5519,7 @@ export default function FinanzasPage() {
             <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setEcheqModalOpen(false)} />
             <div className={`fixed z-50 overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900 transition-all ${echeqFullscreen ? "inset-2 max-h-[calc(100vh-1rem)]" : "inset-4 m-auto h-fit max-h-[85vh] w-full max-w-lg"}`}>
               <div className="flex items-center justify-between mb-6">
-                <h2 className="text-lg font-bold dark:text-white">Registrar Cheque</h2>
+                <h2 className="text-lg font-bold dark:text-white">Registrar cheque</h2>
                 <div className="flex items-center gap-1">
                   <button onClick={() => setEcheqFullscreen(f => !f)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800" title={echeqFullscreen ? "Reducir" : "Maximizar"}>{echeqFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button>
                   <button onClick={() => setEcheqModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
@@ -6227,8 +6227,8 @@ export default function FinanzasPage() {
                         Numero: r.numero,
                         Proveedor: r.proveedor_nombre,
                         CUIT: (r as any).proveedor_cuit || "",
-                        "Monto Bruto": (r as any).monto_bruto || 0,
-                        "Base Retención": (r as any).base_retencion_ganancias || 0,
+                        "Monto bruto": (r as any).monto_bruto || 0,
+                        "Base retención": (r as any).base_retencion_ganancias || 0,
                         "% Ganancias": (r as any).retencion_ganancias_pct,
                         "Retención Ganancias": (r as any).retencion_ganancias_monto,
                         Neto: (r as any).neto || 0,
@@ -6466,7 +6466,7 @@ export default function FinanzasPage() {
         </>
       )}
 
-      {/* Nueva Orden de Pago modal */}
+      {/* Nueva Orden de pago modal */}
       {opModalOpen && (
         <>
           <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setOpModalOpen(false)} />
@@ -6474,7 +6474,7 @@ export default function FinanzasPage() {
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
                 <FileText className="h-4 w-4 text-orange-500" />
-                <h2 className="text-base font-bold dark:text-white">{pagoParcialDirecto ? "Registrar pago parcial" : "Nueva Orden de Pago"}</h2>
+                <h2 className="text-base font-bold dark:text-white">{pagoParcialDirecto ? "Registrar pago parcial" : "Nueva Orden de pago"}</h2>
               </div>
               <div className="flex items-center gap-1">
                 <button onClick={() => setOpModalFullscreen(f => !f)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800" title={opModalFullscreen ? "Reducir" : "Maximizar"}>{opModalFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button>
@@ -6484,7 +6484,7 @@ export default function FinanzasPage() {
             {opError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{opError}</div>}
             {opAviso && <div className="mb-2 flex items-start justify-between gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-1.5 text-xs text-amber-800 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-300"><span>⚠️ {opAviso}</span><button type="button" onClick={() => setOpAviso("")} className="shrink-0 text-amber-500 hover:text-amber-700"><X className="h-3 w-3" /></button></div>}
             {opDatosError && <div role="alert" className="mb-4 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-300">{opDatosError}</div>}
-            {pagoParcialDirecto && <div className="mb-4 rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-800 dark:bg-blue-900/20 dark:border-blue-800 dark:text-blue-300">Este pago se registra como movimiento directo contra una sola factura y no crea una Orden de Pago. Si corresponde, la retención RG 830 se calcula sobre este pago y queda registrada junto al movimiento.</div>}
+            {pagoParcialDirecto && <div className="mb-4 rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-800 dark:bg-blue-900/20 dark:border-blue-800 dark:text-blue-300">Este pago se registra como movimiento directo contra una sola factura y no crea una orden de pago. Si corresponde, la retención RG 830 se calcula sobre este pago y queda registrada junto al movimiento.</div>}
             <div className="space-y-2.5">
               {/* Proveedor + Fecha */}
               <div className="grid grid-cols-4 gap-3">
@@ -6966,7 +6966,7 @@ export default function FinanzasPage() {
               <button onClick={pagoParcialDirecto ? handleRegistrarPagoParcialDirecto : handleCreateOP} disabled={opSaving || !opForm.proveedor_id || (opMontoBruto <= 0)}
                 className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
                 {opSaving && <Loader2 className="h-4 w-4 animate-spin" />}
-                {pagoParcialDirecto ? "Registrar pago parcial" : "Crear Orden de Pago"}
+                {pagoParcialDirecto ? "Registrar pago parcial" : "Crear Orden de pago"}
               </button>
             </div>
           </div>
@@ -7295,7 +7295,7 @@ export default function FinanzasPage() {
             <div className="sticky top-0 z-10 flex items-center justify-between bg-white dark:bg-zinc-900 px-4 py-2.5 border-b border-zinc-200 dark:border-zinc-700">
               <div className="flex items-center gap-2">
                 <FileText className="h-4 w-4 text-orange-500" />
-                <h2 className="text-base font-bold dark:text-white">Orden de Pago</h2>
+                <h2 className="text-base font-bold dark:text-white">Orden de pago</h2>
                 {selectedOP.numero && <span className="font-mono text-sm text-zinc-500">{selectedOP.numero}</span>}
                 <Badge variant={selectedOP.estado === "pagada" ? "success" : selectedOP.estado === "anulada" ? "danger" : "warning"}>
                   {selectedOP.estado === "pagada" ? "Pagada" : selectedOP.estado === "anulada" ? "Anulada" : "Pendiente"}

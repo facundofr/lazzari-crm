@@ -961,7 +961,7 @@ export default function CalendarioPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <Card className="w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold dark:text-white">{editingEventoId ? "Editar Evento" : "Nuevo Evento"}</h2>
+              <h2 className="text-lg font-semibold dark:text-white">{editingEventoId ? "Editar evento" : "Nuevo evento"}</h2>
               <button onClick={() => { setCreateModalOpen(false); setEditingEventoId(null); }} className="text-zinc-400 hover:text-zinc-600">
                 <X className="h-5 w-5" />
               </button>
@@ -1131,7 +1131,7 @@ export default function CalendarioPage() {
                 disabled={creating || !createForm.titulo || !createForm.fecha_inicio}
                 className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50"
               >
-                {creating ? "Guardando..." : editingEventoId ? "Guardar cambios" : "Crear Evento"}
+                {creating ? "Guardando..." : editingEventoId ? "Guardar cambios" : "Crear evento"}
               </button>
             </div>
           </Card>

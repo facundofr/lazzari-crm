@@ -2310,7 +2310,7 @@ Salió a: ${real}` : ""}`);
           <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700 sticky top-0 bg-white dark:bg-zinc-900 z-10">
               <div>
-                <h2 className="text-lg font-bold dark:text-white">Nota de Crédito</h2>
+                <h2 className="text-lg font-bold dark:text-white">Nota de crédito</h2>
                 <p className="text-sm text-zinc-400">
                   Para {formatComprobante(ncFactura.tipo, ncFactura.punto_venta, ncFactura.numero)} — {ncFactura.clientes?.razon_social}
                 </p>

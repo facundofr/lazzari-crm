@@ -1497,8 +1497,8 @@ export default function ReportesPage() {
             onClick={() => {
               const isVentas = libroIVASubtab === "ventas";
               const headers = isVentas
-                ? ["Fecha", "Tipo", "PV", "Numero", "CUIT", "Razon Social", "Neto Gravado", "IVA", "Total", "Moneda", "Tipo de cambio", "Estado"]
-                : ["Fecha", "Tipo", "N Factura", "CUIT", "Razon Social", "Neto Gravado", "IVA", "Percepciones", "Total", "Moneda"];
+                ? ["Fecha", "Tipo", "PV", "Numero", "CUIT", "Razón social", "Neto gravado", "IVA", "Total", "Moneda", "Tipo de cambio", "Estado"]
+                : ["Fecha", "Tipo", "N Factura", "CUIT", "Razón social", "Neto gravado", "IVA", "Percepciones", "Total", "Moneda"];
               const rows = isVentas
                 ? libroIVAVentas.map((r) => [r.fecha, r.tipo, String(r.punto_venta), String(r.numero), r.cuit, r.razon_social, r.neto_gravado.toFixed(2), r.iva.toFixed(2), r.total.toFixed(2), r.moneda, r.tipo_cambio ? String(r.tipo_cambio) : "", r.anulada ? "Anulada por NC" : ""])
                 : libroIVACompras.map((r) => [r.fecha, r.tipo, r.numero_factura, r.cuit, r.razon_social, r.neto_gravado.toFixed(2), r.iva.toFixed(2), r.percepciones.toFixed(2), r.total.toFixed(2), r.moneda]);
@@ -1530,7 +1530,7 @@ export default function ReportesPage() {
                         <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">Tipo</th>
                         <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">Comprobante</th>
                         <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">CUIT</th>
-                        <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">Razón Social</th>
+                        <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">Razón social</th>
                         <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">Neto</th>
                         <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">IVA</th>
                         <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">Total</th>
@@ -1581,7 +1581,7 @@ export default function ReportesPage() {
                         <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">Tipo</th>
                         <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">N° Factura</th>
                         <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">CUIT</th>
-                        <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">Razón Social</th>
+                        <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">Razón social</th>
                         <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">Neto</th>
                         <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">IVA</th>
                         <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">Percep.</th>

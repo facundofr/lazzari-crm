@@ -2,19 +2,68 @@
 
 // Ayuda del CRM (botón flotante). Primero la guía, gratis y sin IA: lo de la pantalla donde estás + buscador.
 // Si no alcanza, "Preguntarle a la IA" (solo consulta, con los permisos del usuario y tope mensual: /api/ai).
+// Augusto (super_admin) además puede PEDIRLE cosas: la IA propone ANTES → DESPUÉS, él aprieta "Hacer"
+// y queda en "Lo que hizo la IA" con Deshacer (/api/ai/acciones). Etapa 1 del asistente, 17/10/2026.
 
 import { useState, useRef, useEffect, useMemo, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LifeBuoy, X, Send, Loader2, Search, ArrowRight, Sparkles, ChevronDown, ChevronUp, ArrowLeft } from "lucide-react";
+import { LifeBuoy, X, Send, Loader2, Search, ArrowRight, Sparkles, ChevronDown, ChevronUp, ArrowLeft, Check, Undo2, History, AlertTriangle } from "lucide-react";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { buscarEnGuia, seccionesDePantalla, seccionesParaRol, rolPuedeVer, type SeccionGuia } from "@/lib/ayuda-busqueda";
 import { FINANZAS_GRUPOS } from "@/lib/finanzas-grupos";
+import { NOMBRE_TABLA, type Propuesta } from "@/lib/ia-acciones";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
+  propuestas?: Propuesta[];
+}
+
+type EstadoPropuesta = { estado: "haciendo" | "hecha" | "descartada" | "error"; mensaje?: string; accionId?: string };
+type AccionIA = { id: string; created_at: string; resumen: string; pedido: string | null; estado: "hecha" | "deshecha"; nota_deshacer: string | null };
+
+const verValor = (v: unknown) => (v === null || v === undefined || v === "" ? "(vacío)" : String(v));
+
+/** Vista previa ANTES → DESPUÉS con "Hacer" (y "Deshacer" una vez hecha). */
+function TarjetaPropuesta({ p, est, onHacer, onDescartar, onDeshacer }: {
+  p: Propuesta; est?: EstadoPropuesta; onHacer: () => void; onDescartar: () => void; onDeshacer: (id: string) => void;
+}) {
+  const hecha = est?.estado === "hecha";
+  return (
+    <div className={`rounded-lg border p-2.5 text-xs ${hecha ? "border-emerald-300 bg-emerald-50/60 dark:border-emerald-800 dark:bg-emerald-950/20" : est?.estado === "descartada" ? "border-zinc-200 opacity-60 dark:border-zinc-700" : "border-violet-300 bg-white dark:border-violet-800 dark:bg-zinc-900"}`}>
+      <p className="font-semibold text-zinc-800 dark:text-zinc-100">{p.tipo === "crear" ? "Agregar contacto" : NOMBRE_TABLA[p.tabla]} {p.titulo}</p>
+      <div className="mt-1 space-y-0.5">
+        {p.cambios.map((c) => (
+          <div key={c.campo} className="grid grid-cols-[auto_1fr] gap-x-2">
+            <span className="text-zinc-500">{c.etiqueta}</span>
+            <span className="min-w-0 break-words">
+              {p.tipo === "editar" && <><span className="text-zinc-400 line-through">{verValor(c.antes)}</span> → </>}
+              <b className="text-zinc-800 dark:text-zinc-100">{verValor(c.despues)}</b>
+            </span>
+          </div>
+        ))}
+      </div>
+      {p.avisos.map((a, i) => <p key={i} className="mt-1 flex items-start gap-1 text-amber-700 dark:text-amber-400"><AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />{a}</p>)}
+      <div className="mt-2 flex items-center gap-2">
+        {!est || est.estado === "error" ? (
+          <>
+            <button onClick={onHacer} className="flex items-center gap-1 rounded-md bg-violet-600 px-2.5 py-1 font-medium text-white hover:bg-violet-700"><Check className="h-3.5 w-3.5" /> Hacer</button>
+            <button onClick={onDescartar} className="rounded-md px-2 py-1 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800">Descartar</button>
+          </>
+        ) : est.estado === "haciendo" ? (
+          <span className="flex items-center gap-1 text-zinc-500"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Guardando…</span>
+        ) : hecha ? (
+          <>
+            <span className="font-medium text-emerald-700 dark:text-emerald-400">✓ {est.mensaje || "Hecho"}</span>
+            {est.accionId && <button onClick={() => onDeshacer(est.accionId!)} className="flex items-center gap-1 rounded-md px-2 py-0.5 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"><Undo2 className="h-3 w-3" /> Deshacer</button>}
+          </>
+        ) : <span className="text-zinc-500">{est.mensaje || "Descartada"}</span>}
+      </div>
+      {est?.estado === "error" && <p className="mt-1 text-red-600">{est.mensaje}</p>}
+    </div>
+  );
 }
 
 /** Negrita (**texto**) y renglones, sin librerías. */
@@ -80,7 +129,13 @@ export function AIWidget() {
   const [dato, setDato] = useState<{ titulo: string; lineas: string[] } | null>(null);
   const [cargandoDato, setCargandoDato] = useState(false);
   const [pestana, setPestana] = useState<string | null>(null);
+  const [estados, setEstados] = useState<Record<string, EstadoPropuesta>>({});
+  const [verHistorial, setVerHistorial] = useState(false);
+  const [historial, setHistorial] = useState<AccionIA[] | null>(null);
+  const [avisoHistorial, setAvisoHistorial] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // Etapa 1: solo Augusto le puede pedir cosas a la IA.
+  const puedeHacer = role === "super_admin";
 
   const misSecciones = useMemo(() => seccionesParaRol(role), [role]);
   const deEstaPantalla = useMemo(() => seccionesDePantalla(pathname, misSecciones, pestana), [pathname, misSecciones, pestana]);
@@ -108,7 +163,10 @@ export function AIWidget() {
       const res = await fetch("/api/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: newMessages, pantalla, sociedadId: sociedadActiva?.id }),
+        body: JSON.stringify({
+          messages: newMessages.map(({ role: r, content: c }) => ({ role: r, content: c })),
+          pantalla, sociedadId: sociedadActiva?.id, modo: puedeHacer ? "hacer" : undefined,
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -116,12 +174,40 @@ export function AIWidget() {
         return;
       }
       if (typeof data.gastoMes === "number") setGasto({ gastoMes: data.gastoMes, topeMes: data.topeMes });
-      setMessages([...newMessages, { role: "assistant", content: data.response }]);
+      setMessages([...newMessages, { role: "assistant", content: data.response, propuestas: Array.isArray(data.propuestas) && data.propuestas.length ? data.propuestas : undefined }]);
     } catch {
       setError("Error de conexión.");
     } finally {
       setLoading(false);
     }
+  }
+
+  async function acciones(body: Record<string, unknown>) {
+    const res = await fetch("/api/ai/acciones", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, sociedadId: sociedadActiva?.id }) });
+    return res.json().catch(() => ({ ok: false, mensaje: "Error de conexión." }));
+  }
+
+  async function hacer(p: Propuesta) {
+    setEstados((e) => ({ ...e, [p.key]: { estado: "haciendo" } }));
+    const r = await acciones({ op: "hacer", propuesta: p });
+    setEstados((e) => ({ ...e, [p.key]: r.ok ? { estado: "hecha", mensaje: r.mensaje, accionId: r.accionId } : { estado: "error", mensaje: r.mensaje || r.error || "No se pudo." } }));
+    if (r.ok) setHistorial(null);
+  }
+
+  async function deshacer(accionId: string) {
+    const r = await acciones({ op: "deshacer", id: accionId });
+    setEstados((e) => {
+      const k = Object.keys(e).find((x) => e[x].accionId === accionId);
+      return k ? { ...e, [k]: { estado: "descartada", mensaje: r.ok ? `↩ ${r.mensaje}` : r.mensaje } } : e;
+    });
+    if (!r.ok) setError(r.mensaje || "No se pudo deshacer.");
+    await cargarHistorial();
+  }
+
+  async function cargarHistorial() {
+    const r = await acciones({ op: "lista" });
+    setHistorial(r.acciones || []);
+    setAvisoHistorial(r.aviso || r.error || "");
   }
 
   // Atajos de datos SIN IA: consultas fijas con la sesión del usuario (ve solo lo que puede ver).
@@ -182,8 +268,14 @@ export function AIWidget() {
           {modoIA ? (
             <button onClick={() => setModoIA(false)} className="rounded p-0.5 text-white/80 hover:bg-white/20" title="Volver a la Ayuda"><ArrowLeft className="h-4 w-4" /></button>
           ) : <LifeBuoy className="h-5 w-5 text-white" />}
-          <span className="font-semibold text-white">{modoIA ? "Preguntarle a la IA" : "Ayuda"}</span>
+          <span className="font-semibold text-white">{modoIA ? (verHistorial ? "Lo que hizo la IA" : puedeHacer ? "Preguntale o pedile algo" : "Preguntarle a la IA") : "Ayuda"}</span>
         </div>
+        {modoIA && puedeHacer && (
+          <button onClick={() => { const v = !verHistorial; setVerHistorial(v); if (v) void cargarHistorial(); }}
+            className="ml-auto mr-1 flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-white/80 hover:bg-white/20 hover:text-white" title="Lo que hizo la IA (con Deshacer)">
+            <History className="h-3.5 w-3.5" /> {verHistorial ? "Volver" : "Historial"}
+          </button>
+        )}
         <button onClick={cerrarYReset} className="rounded-md p-1 text-white/70 hover:bg-white/20 hover:text-white"><X className="h-4 w-4" /></button>
       </div>
 
@@ -234,23 +326,54 @@ export function AIWidget() {
           <div className="border-t border-zinc-100 pt-2 dark:border-zinc-800">
             <button onClick={() => (busqueda.trim() ? preguntarIA(busqueda) : setModoIA(true))}
               className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-violet-300 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-50 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-950/30">
-              <Sparkles className="h-3.5 w-3.5" /> ¿No alcanza? Preguntarle a la IA{busqueda.trim() ? " esto" : ""}
+              <Sparkles className="h-3.5 w-3.5" /> {puedeHacer ? "Preguntale o pedile algo a la IA" : "¿No alcanza? Preguntarle a la IA"}{busqueda.trim() ? " esto" : ""}
             </button>
-            <p className="mt-1 text-center text-[10px] text-zinc-400">La IA solo consulta (no carga nada) y ve lo mismo que vos. Tiene un tope de gasto por mes.</p>
+            <p className="mt-1 text-center text-[10px] text-zinc-400">{puedeHacer ? "Te muestra antes → después: nada se guarda hasta que apretás Hacer, y todo tiene Deshacer." : "La IA solo consulta (no carga nada) y ve lo mismo que vos. Tiene un tope de gasto por mes."}</p>
           </div>
+        </div>
+      ) : verHistorial ? (
+        <div className="flex-1 overflow-y-auto p-3 space-y-2 min-h-0">
+          {historial === null && <Loader2 className="h-4 w-4 animate-spin text-violet-500" />}
+          {avisoHistorial && <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">{avisoHistorial}</p>}
+          {historial?.length === 0 && !avisoHistorial && <p className="text-xs text-zinc-500">Todavía no hizo nada.</p>}
+          {historial?.map((a) => (
+            <div key={a.id} className={`rounded-lg border border-zinc-200 p-2 text-xs dark:border-zinc-700 ${a.estado === "deshecha" ? "opacity-60" : ""}`}>
+              <div className="flex items-start gap-2">
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] text-zinc-400">{new Date(a.created_at).toLocaleString("es-AR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}{a.estado === "deshecha" ? " · deshecha" : ""}</p>
+                  <p className={`text-zinc-700 dark:text-zinc-200 ${a.estado === "deshecha" ? "line-through" : ""}`}>{a.resumen}</p>
+                  {a.pedido && <p className="mt-0.5 line-clamp-1 text-zinc-400" title={a.pedido}>Pedido: {a.pedido}</p>}
+                  {a.nota_deshacer && <p className="mt-0.5 text-amber-700 dark:text-amber-400">{a.nota_deshacer}</p>}
+                </div>
+                {a.estado === "hecha" && (
+                  <button onClick={() => void deshacer(a.id)} className="flex shrink-0 items-center gap-1 rounded-md border border-zinc-200 px-2 py-0.5 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"><Undo2 className="h-3 w-3" /> Deshacer</button>
+                )}
+              </div>
+            </div>
+          ))}
         </div>
       ) : (
         <>
           <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
             {messages.length === 0 && (
               <p className="text-sm text-zinc-600 dark:text-zinc-300">
-                Hola{profile?.full_name ? ` ${profile.full_name.split(" ")[0]}` : ""}. Preguntame cómo se hace algo o pedime un dato (ej. &quot;¿cuánto nos debe Del Sol?&quot;). Solo consulto: no cargo ni cambio nada.
+                Hola{profile?.full_name ? ` ${profile.full_name.split(" ")[0]}` : ""}. {puedeHacer
+                  ? <>Preguntame algo o pedime que cambie algo (ej. &quot;cargale a Nexo el mail compras@nexo.com&quot; o &quot;en la OC-1229 llegó la mesa&quot;). Te muestro antes → después y lo guardás con <b>Hacer</b>.</>
+                  : <>Preguntame cómo se hace algo o pedime un dato (ej. &quot;¿cuánto nos debe Del Sol?&quot;). Solo consulto: no cargo ni cambio nada.</>}
               </p>
             )}
             {messages.map((msg, i) => (
               <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : ""}`}>
                 <div className={`rounded-lg p-3 max-w-[340px] text-sm whitespace-pre-wrap ${msg.role === "user" ? "bg-violet-600 text-white" : "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"}`}>
                   {msg.role === "assistant" ? <TextoGuia texto={msg.content} /> : msg.content}
+                  {msg.propuestas && (
+                    <div className="mt-2 space-y-2">
+                      {msg.propuestas.map((p) => (
+                        <TarjetaPropuesta key={p.key} p={p} est={estados[p.key]} onHacer={() => void hacer(p)}
+                          onDescartar={() => setEstados((e) => ({ ...e, [p.key]: { estado: "descartada" } }))} onDeshacer={(id) => void deshacer(id)} />
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -264,7 +387,7 @@ export function AIWidget() {
           </div>
           <div className="border-t border-zinc-200 p-3 dark:border-zinc-700 shrink-0">
             <form onSubmit={(e) => { e.preventDefault(); preguntarIA(input); }} className="flex items-center gap-2">
-              <input type="text" placeholder="Preguntá algo..." value={input} onChange={(e) => setInput(e.target.value)} disabled={loading}
+              <input type="text" placeholder={puedeHacer ? "Preguntá o pedí algo..." : "Preguntá algo..."} value={input} onChange={(e) => setInput(e.target.value)} disabled={loading}
                 className="flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 focus:border-violet-300 focus:outline-none focus:ring-2 focus:ring-violet-100 dark:border-zinc-700 dark:bg-zinc-800 disabled:opacity-50" />
               <button type="submit" disabled={loading || !input.trim()} className="rounded-lg bg-violet-600 p-2 text-white hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed">
                 <Send className="h-4 w-4" />
@@ -272,7 +395,7 @@ export function AIWidget() {
             </form>
             <div className="mt-1 flex justify-between text-[10px] text-zinc-400">
               {messages.length > 0 ? <button onClick={() => { setMessages([]); setError(""); }} className="hover:underline">Limpiar</button> : <span />}
-              {gasto && <span>IA este mes: US$ {gasto.gastoMes.toFixed(2)} de {gasto.topeMes}</span>}
+              {gasto && !puedeHacer && <span>IA este mes: US$ {gasto.gastoMes.toFixed(2)} de {gasto.topeMes}</span>}
             </div>
           </div>
         </>

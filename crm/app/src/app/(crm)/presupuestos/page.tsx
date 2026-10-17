@@ -3524,7 +3524,7 @@ export default function PresupuestosPage() {
       <Modal
         open={showNewPR}
         onClose={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, tipo_cambio_divisas: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", costo_envio_interno: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
-        title={editingPRId && esSolicitud ? "Convertir Solicitud en Presupuesto" : editingPRId ? "Editar Presupuesto" : esSolicitud ? "Nueva Solicitud" : "Nuevo Presupuesto"}
+        title={editingPRId && esSolicitud ? "Convertir solicitud en presupuesto" : editingPRId ? "Editar presupuesto" : esSolicitud ? "Nueva solicitud" : "Nuevo presupuesto"}
         description={editingPRId && esSolicitud ? "Completa la cotización. La solicitud se convertirá en PR sin crear un registro duplicado." : editingPRId ? "Modifica los datos del presupuesto existente" : esSolicitud ? "Registra un pedido de cliente para convertirlo luego en presupuesto" : "Completa los datos para crear un nuevo presupuesto"}
         size="2xl"
         allowFullscreen
@@ -3559,7 +3559,7 @@ export default function PresupuestosPage() {
               }`}
             >
               {newPRSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : editingPRId && esSolicitud ? <ArrowRight className="h-4 w-4" /> : editingPRId ? <Check className="h-4 w-4" /> : esSolicitud ? <Inbox className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
-              {editingPRId && esSolicitud ? "Convertir en Presupuesto" : editingPRId ? "Guardar cambios" : esSolicitud ? "Crear Solicitud" : "Crear Presupuesto"}
+              {editingPRId && esSolicitud ? "Convertir en presupuesto" : editingPRId ? "Guardar cambios" : esSolicitud ? "Crear solicitud" : "Crear presupuesto"}
             </button>
           </>
         }

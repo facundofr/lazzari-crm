@@ -1000,7 +1000,7 @@ export default function ClientesPage() {
 
   // CSV Export
   function exportCSV() {
-    const headers = ["Razon Social", "CUIT", "Condicion IVA", "Email", "Telefono", "Localidad", "Provincia", "Lista Precio", "Saldo CC", "Limite Credito", "Estado"];
+    const headers = ["Razón social", "CUIT", "Condición IVA", "Email", "Teléfono", "Localidad", "Provincia", "Lista de precios", "Saldo CC", "Límite de crédito", "Estado"];
     const rows = filtered.map((c) => [
       c.razonSocial, c.cuit, condicionLabels[c.condicionIva] || c.condicionIva,
       c.email, c.telefono, c.localidad, c.provincia, c.listaPrecio,

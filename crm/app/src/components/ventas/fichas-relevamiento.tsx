@@ -166,7 +166,7 @@ export function FichasRelevamiento() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <ClipboardList className="h-5 w-5 text-orange-500" />
-          <h2 className="text-lg font-semibold dark:text-white">Fichas de Relevamiento</h2>
+          <h2 className="text-lg font-semibold dark:text-white">Fichas de relevamiento</h2>
           <Badge variant="outline">{fichas.length}</Badge>
         </div>
         <button

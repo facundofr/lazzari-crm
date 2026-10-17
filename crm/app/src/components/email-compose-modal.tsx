@@ -44,8 +44,8 @@ const DOC_LABELS: Record<EmailDocumentType, string> = {
   presupuesto: "Presupuesto",
   factura: "Factura",
   remito: "Remito",
-  orden_compra: "Orden de Compra",
-  orden_pago: "Orden de Pago",
+  orden_compra: "Orden de compra",
+  orden_pago: "Orden de pago",
 };
 
 export function EmailComposeModal({

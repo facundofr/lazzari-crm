@@ -688,7 +688,7 @@ export default function ProveedoresPage() {
   }
 
   function exportCSV() {
-    const headers = ["Razon Social", "Nombre de fantasia", "CUIT", "Email", "Celular", "Localidad", "Provincia", "Saldo a pagar ARS", "Saldo a pagar USD", "Ultima compra"];
+    const headers = ["Razón social", "Nombre de fantasía", "CUIT", "Email", "Celular", "Localidad", "Provincia", "Saldo a pagar ARS", "Saldo a pagar USD", "Ultima compra"];
     const rows = filteredProveedores.map((p) => [
       p.razonSocial, (p as any).nombreFantasia, p.cuit, p.email, p.telefono, p.localidad, p.provincia,
       saldoDe(p.id).ARS.toFixed(2), saldoDe(p.id).USD.toFixed(2), ultimaCompra[p.id] || "",

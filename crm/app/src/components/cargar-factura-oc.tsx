@@ -1112,7 +1112,7 @@ export default function CargarFacturaOC({
     // La OC es opcional: si no se eligió ninguna, se avisa pero se puede guardar igual.
     if (!isCreditNote && tipoFC === "mercaderia" && selectedOCIds.size === 0 && !crearOCNueva && ocsPendientes.length > 0
       && !window.confirm("No elegiste ninguna orden de compra ni marcaste «Crear una OC nueva con los artículos de esta factura». ¿Guardar la factura igual, sin OC?")) return;
-    // La NC puede quedar sin factura: el total queda como crédito disponible para usar en una Orden de Pago.
+    // La NC puede quedar sin factura: el total queda como crédito disponible para usar en una orden de pago.
     if (isCreditNote && facturaOrigenId && (!Number.isFinite(creditoAplicado) || creditoAplicado < 0 || !selectedCreditOrigin || creditoAplicado > selectedCreditOrigin.saldo_acreditable + 0.005 || creditoAplicado > total + 0.005)) {
       setError("El monto aplicado no puede superar el total de la nota ni el saldo de la factura elegida"); return;
     }
@@ -2033,7 +2033,7 @@ export default function CargarFacturaOC({
               <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50/70 p-4 dark:border-blue-900 dark:bg-blue-950/20">
                 <div className="mb-3">
                   <p className="text-sm font-semibold text-blue-900 dark:text-blue-200">Aplicación de la nota de crédito</p>
-                  <p className="text-xs text-blue-700 dark:text-blue-300">Podés aplicarla a una factura con saldo, o dejarla sin factura: el total (o lo que no apliques) queda como <b>crédito disponible</b> del proveedor y lo usás al hacer la Orden de Pago.</p>
+                  <p className="text-xs text-blue-700 dark:text-blue-300">Podés aplicarla a una factura con saldo, o dejarla sin factura: el total (o lo que no apliques) queda como <b>crédito disponible</b> del proveedor y lo usás al hacer la orden de pago.</p>
                 </div>
                 {creditOriginsError && <p className="mb-3 text-xs text-red-600">{creditOriginsError}</p>}
                 <div className="grid gap-3 md:grid-cols-2">

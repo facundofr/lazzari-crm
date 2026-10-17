@@ -75,12 +75,12 @@ const DEFAULT_TEMPLATES: Record<TemplateTipo, EmailTemplate> = {
   orden_compra: {
     tipo: "orden_compra",
     asunto: "{{numero}} — {{sociedad}}",
-    cuerpo: "Estimado/a,\n\nAdjuntamos la Orden de Compra N° {{numero}} por un total de {{total}}.\n\nQuedamos a disposición ante cualquier consulta.\n\nSaludos,\n{{sociedad}}",
+    cuerpo: "Estimado/a,\n\nAdjuntamos la orden de compra N° {{numero}} por un total de {{total}}.\n\nQuedamos a disposición ante cualquier consulta.\n\nSaludos,\n{{sociedad}}",
   },
   orden_pago: {
     tipo: "orden_pago",
-    asunto: "Orden de Pago {{numero}} — {{sociedad}}",
-    cuerpo: "Estimado/a,\n\nAdjuntamos la Orden de Pago {{numero}} por un total de {{total}}.\n\nSaludos,\n{{sociedad}}",
+    asunto: "Orden de pago {{numero}} — {{sociedad}}",
+    cuerpo: "Estimado/a,\n\nAdjuntamos la orden de pago {{numero}} por un total de {{total}}.\n\nSaludos,\n{{sociedad}}",
   },
   cuenta_corriente: {
     tipo: "cuenta_corriente",
@@ -665,7 +665,7 @@ export default function ConfiguracionPage() {
     { id: "empresa" as const, label: "Empresa", icon: Building2 },
     { id: "integraciones" as const, label: "Integraciones", icon: Plug },
     { id: "notificaciones" as const, label: "Notificaciones", icon: Bell },
-    { id: "plantillas" as const, label: "Plantillas de Email", icon: Mail },
+    { id: "plantillas" as const, label: "Plantillas de email", icon: Mail },
     // Comisiones: solo super_admin y admin (el rol administrativo no las ve).
     ...(profile?.role === "super_admin" || profile?.role === "admin" ? [{ id: "comisiones" as const, label: "Comisiones", icon: Percent }] : []),
     { id: "retenciones" as const, label: "Retenciones", icon: ShieldCheck },
@@ -1028,7 +1028,7 @@ export default function ConfiguracionPage() {
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="font-semibold text-zinc-900 dark:text-white">Reglas de Comisiones</h3>
+                <h3 className="font-semibold text-zinc-900 dark:text-white">Reglas de comisiones</h3>
                 <p className="text-sm text-zinc-500">
                   Configurá las reglas de comisión para los vendedores.
                   {sociedadActiva && <span className="ml-1 font-medium text-zinc-700 dark:text-zinc-300">Sociedad: {sociedadActiva.nombre}</span>}
@@ -1231,7 +1231,7 @@ export default function ConfiguracionPage() {
         {tab === "retenciones" && (
           <div className="space-y-3 max-w-5xl">
             <div>
-              <h3 className="font-semibold text-zinc-900 dark:text-white">Configuración de Retenciones</h3>
+              <h3 className="font-semibold text-zinc-900 dark:text-white">Configuración de retenciones</h3>
               <p className="text-sm text-zinc-500 mt-1">
                 Definí los montos mínimos y tasas para el cálculo automático de retenciones en Órdenes de Pago.
                 {sociedadActiva && <span className="ml-1 font-medium text-zinc-700 dark:text-zinc-300">Sociedad: {sociedadActiva.nombre}</span>}
@@ -1374,7 +1374,7 @@ export default function ConfiguracionPage() {
 
             <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 px-3 py-2 text-sm text-zinc-500 space-y-1">
               <p className="font-medium text-zinc-700 dark:text-zinc-300">¿Cómo funciona?</p>
-              <p>Al crear una Orden de Pago y seleccionar el proveedor, el sistema consulta automáticamente el padrón de AFIP para determinar su condición (RI, Monotributo, etc.) y pre-completa las retenciones según esta configuración.</p>
+              <p>Al crear una orden de pago y seleccionar el proveedor, el sistema consulta automáticamente el padrón de AFIP para determinar su condición (RI, Monotributo, etc.) y pre-completa las retenciones según esta configuración.</p>
               <p className="mt-1">El usuario puede editar los valores antes de confirmar.</p>
             </div>
           </div>
@@ -1383,7 +1383,7 @@ export default function ConfiguracionPage() {
         {tab === "plantillas" && (
           <div className="space-y-3">
             <div>
-              <h3 className="font-semibold text-zinc-900 dark:text-white">Plantillas de Email</h3>
+              <h3 className="font-semibold text-zinc-900 dark:text-white">Plantillas de email</h3>
               <p className="text-sm text-zinc-500">
                 Editá las leyendas que se usan al enviar documentos por email.
                 {sociedadActiva && <span className="ml-1 font-medium text-zinc-700 dark:text-zinc-300">Sociedad: {sociedadActiva.nombre}</span>}
@@ -1393,7 +1393,7 @@ export default function ConfiguracionPage() {
             <div className="grid gap-3 lg:grid-cols-2">
             {(["presupuesto", "factura", "remito", "orden_compra", "orden_pago", "cuenta_corriente"] as TemplateTipo[]).map((tipo) => {
               const template = templates[tipo];
-              const label = tipo === "presupuesto" ? "Presupuesto" : tipo === "factura" ? "Factura" : tipo === "remito" ? "Remito" : tipo === "orden_compra" ? "Orden de Compra" : tipo === "orden_pago" ? "Orden de Pago" : "Cuenta corriente";
+              const label = tipo === "presupuesto" ? "Presupuesto" : tipo === "factura" ? "Factura" : tipo === "remito" ? "Remito" : tipo === "orden_compra" ? "Orden de compra" : tipo === "orden_pago" ? "Orden de pago" : "Cuenta corriente";
               const isSaving = templateSaving === tipo;
               const isSaved = templateSaved === tipo;
 

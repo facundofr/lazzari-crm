@@ -27,11 +27,11 @@ const DEFAULTS: Record<EmailTemplateTipo, EmailTemplate> = {
   },
   orden_compra: {
     asunto: "{{numero}} — {{sociedad}}",
-    cuerpo: "Estimado/a,\n\nAdjuntamos la Orden de Compra N° {{numero}} por un total de {{total}}.\n\nQuedamos a disposición ante cualquier consulta.\n\nSaludos,\n{{sociedad}}",
+    cuerpo: "Estimado/a,\n\nAdjuntamos la orden de compra N° {{numero}} por un total de {{total}}.\n\nQuedamos a disposición ante cualquier consulta.\n\nSaludos,\n{{sociedad}}",
   },
   orden_pago: {
-    asunto: "Orden de Pago {{numero}} — {{sociedad}}",
-    cuerpo: "Estimado/a,\n\nAdjuntamos la Orden de Pago {{numero}} por un total de {{total}}.\n\nSaludos,\n{{sociedad}}",
+    asunto: "Orden de pago {{numero}} — {{sociedad}}",
+    cuerpo: "Estimado/a,\n\nAdjuntamos la orden de pago {{numero}} por un total de {{total}}.\n\nSaludos,\n{{sociedad}}",
   },
 };
 

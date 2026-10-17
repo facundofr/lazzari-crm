@@ -2626,7 +2626,7 @@ export default function OrdenesCompraPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-3xl mx-4 max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700">
-              <h2 className="text-lg font-semibold dark:text-white">Nueva Orden de Compra</h2>
+              <h2 className="text-lg font-semibold dark:text-white">Nueva Orden de compra</h2>
               <button onClick={() => setCreateOpen(false)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
                 <X className="h-5 w-5" />
               </button>

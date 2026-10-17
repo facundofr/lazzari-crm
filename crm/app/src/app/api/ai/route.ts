@@ -4,12 +4,18 @@ import { NextRequest } from "next/server";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { guiaComoTexto, rolPuedeVer, seccionesParaRol } from "@/lib/ayuda-busqueda";
 import { FUNCION_CHAT_IA, TOPE_MENSUAL_IA_USD, costoUSD, inicioDeMesAR, tokensEntradaEquivalentes } from "@/lib/ia-tope";
+import { HERRAMIENTAS_HACER, PROMPT_HACER, armarPropuestaCambio, armarPropuestaContacto } from "@/lib/ia-acciones-server";
+import type { Propuesta } from "@/lib/ia-acciones";
 
 // Botón "Preguntarle a la IA" de la Ayuda. SOLO CONSULTA: no crea ni modifica nada.
 // Lee la base con la sesión del usuario (mismos permisos que en el CRM) y conoce la guía de uso de su rol.
 // Tiene tope mensual de gasto (lib/ia-tope.ts): al llegar, responde que se usa la Ayuda sin IA.
+// Modo "hacer" (Etapa 1 del asistente, 17/10/2026, solo super_admin): con Opus 5.5 PROPONE cambios (antes → después);
+// no guarda nada acá: el usuario aprieta "Hacer" y eso va por /api/ai/acciones. Sin tope.
 
 const MODELO = "claude-haiku-4-5-20251001";
+const MODELOS_HACER = ["claude-opus-5-5", "claude-sonnet-5-5"];
+const FUNCION_HACER = "asistente_hacer";
 
 // Tablas con sociedad_id: las consultas se filtran por la sociedad activa (o las del usuario).
 const TABLES_WITH_SOCIEDAD = new Set([
@@ -115,7 +121,7 @@ ${guiaComoTexto(seccionesParaRol(role))}`;
 
 export async function POST(request: NextRequest) {
   try {
-    const { messages, pantalla, sociedadId } = await request.json();
+    const { messages, pantalla, sociedadId, modo } = await request.json();
 
     if (!messages || !Array.isArray(messages)) {
       return Response.json({ error: "Se requiere un array de mensajes" }, { status: 400 });
@@ -135,13 +141,14 @@ export async function POST(request: NextRequest) {
     const { data: profile } = await supabase.from("profiles").select("role, full_name").eq("id", authUser.id).single();
     const role = profile?.role || "viewer";
     const name = profile?.full_name || "Usuario";
+    const hacer = modo === "hacer" && role === "super_admin";
 
     // Tope mensual de gasto.
     const { data: usos } = await (supabase as any).from("ia_uso").select("tokens_entrada, tokens_salida")
       .eq("funcion", FUNCION_CHAT_IA).gte("created_at", `${inicioDeMesAR()}T03:00:00Z`);
     const gastoMes = ((usos as { tokens_entrada: number; tokens_salida: number }[]) || [])
       .reduce((s, u) => s + costoUSD(Number(u.tokens_entrada) || 0, Number(u.tokens_salida) || 0), 0);
-    if (gastoMes >= TOPE_MENSUAL_IA_USD) {
+    if (!hacer && gastoMes >= TOPE_MENSUAL_IA_USD) {
       return Response.json({
         response: `Este mes ya se usó el tope de la IA (US$ ${TOPE_MENSUAL_IA_USD}). Mientras tanto usá la búsqueda de la Ayuda, que es gratis. Si hace falta más, avisale a Augusto.`,
         tope: true, gastoMes, topeMes: TOPE_MENSUAL_IA_USD,
@@ -156,6 +163,8 @@ export async function POST(request: NextRequest) {
     const client = new Anthropic({ apiKey });
     const system: Anthropic.Messages.TextBlockParam[] = [
       { type: "text", text: promptFijo(role), cache_control: { type: "ephemeral" } },
+      ...(hacer ? [{ type: "text" as const, text: `${PROMPT_HACER}
+En este modo la regla "SOLO CONSULTA" de arriba no corre: podés proponer cambios (nunca guardarlos vos).` }] : []),
       { type: "text", text: `Usuario: ${name}. Hoy: ${new Date().toLocaleDateString("es-AR", { timeZone: "America/Argentina/Buenos_Aires" })}.${pantalla ? ` Está en la pantalla: ${String(pantalla).slice(0, 120)}.` : ""}` },
     ];
 
@@ -165,18 +174,27 @@ export async function POST(request: NextRequest) {
       .map((m: { role: string; content: string }) => ({ role: m.role as "user" | "assistant", content: m.content }));
 
     let finalText = "";
-    const MAX_ITERATIONS = 6;
+    const MAX_ITERATIONS = hacer ? 10 : 6;
+    const propuestas: Propuesta[] = [];
+    const ultimoPedido = [...currentMessages].reverse().find((m) => m.role === "user");
+    const pedido = typeof ultimoPedido?.content === "string" ? ultimoPedido.content.slice(0, 500) : "";
+    const tools = hacer ? [...TOOLS, ...HERRAMIENTAS_HACER] : TOOLS;
+    let modeloUsado = hacer ? MODELOS_HACER[0] : MODELO;
 
     for (let i = 0; i < MAX_ITERATIONS; i++) {
-      const response = await client.messages.create({
-        model: MODELO,
-        max_tokens: 2048,
-        system,
-        tools: TOOLS,
-        messages: currentMessages,
-      });
+      let response: Anthropic.Messages.Message | null = null;
+      for (const modelo of hacer ? MODELOS_HACER.slice(MODELOS_HACER.indexOf(modeloUsado)) : [MODELO]) {
+        try {
+          response = await client.messages.create({ model: modelo, max_tokens: hacer ? 4096 : 2048, system, tools, messages: currentMessages });
+          modeloUsado = modelo;
+          break;
+        } catch (e) {
+          if (modelo === (hacer ? MODELOS_HACER[MODELOS_HACER.length - 1] : MODELO)) throw e;
+        }
+      }
+      if (!response) break;
 
-      await registrarUsoIA(FUNCION_CHAT_IA, MODELO, {
+      await registrarUsoIA(hacer ? FUNCION_HACER : FUNCION_CHAT_IA, modeloUsado, {
         input_tokens: tokensEntradaEquivalentes(response.usage),
         output_tokens: response.usage.output_tokens,
       });
@@ -193,7 +211,13 @@ export async function POST(request: NextRequest) {
         let result: string;
         try {
           const table = String(input.table || "");
-          if (!canRead(role, table)) {
+          if (hacer && (toolUse.name === "proponer_cambio" || toolUse.name === "proponer_contacto")) {
+            const r = toolUse.name === "proponer_cambio"
+              ? await armarPropuestaCambio(supabase, input, sociedadesConsulta, pedido)
+              : await armarPropuestaContacto(supabase, input, sociedadesConsulta, pedido);
+            if (r.propuesta) propuestas.push(r.propuesta);
+            result = r.resultado;
+          } else if (!canRead(role, table)) {
             result = JSON.stringify({ error: `Tu rol (${role}) no tiene acceso a ${table || "esa tabla"}.` });
           } else if (toolUse.name === "query_database") {
             let query = (supabase as any).from(table).select((input.select as string) || "*");
@@ -232,8 +256,8 @@ export async function POST(request: NextRequest) {
       ];
     }
 
-    if (!finalText) finalText = "No llegué a una respuesta. Probá preguntarlo de otra forma o usá la búsqueda de la Ayuda.";
-    return Response.json({ response: finalText, gastoMes, topeMes: TOPE_MENSUAL_IA_USD });
+    if (!finalText) finalText = propuestas.length ? "Te dejé la propuesta abajo: revisala y apretá Hacer." : "No llegué a una respuesta. Probá preguntarlo de otra forma o usá la búsqueda de la Ayuda.";
+    return Response.json({ response: finalText, gastoMes, topeMes: TOPE_MENSUAL_IA_USD, propuestas });
   } catch (error: unknown) {
     console.error("Error en API de IA:", error);
     const message = error instanceof Error ? error.message : "Error interno del servidor";
