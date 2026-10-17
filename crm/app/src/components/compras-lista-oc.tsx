@@ -73,7 +73,7 @@ export type OcLazza = { id: string; numero: string; observar_nota?: string | nul
 export default function ComprasListaOC({ sociedadId, lazza }: {
   sociedadId: string | undefined;
   /** Compras Lazza: "Llegó" en cada OC y la marca "Observar" (con su nota). */
-  lazza?: { onLlego: (oc: OcLazza) => void; onObservar: (oc: OcLazza) => void };
+  lazza?: { onLlego: (oc: OcLazza) => void; onObservar: (oc: OcLazza) => void; onFactura: (oc: OcLazza) => void; onFacturas: (oc: OcLazza) => void };
 }) {
   const { toast } = useToast();
   const [filas, setFilas] = useState<Vista[]>([]);
@@ -276,7 +276,20 @@ export default function ComprasListaOC({ sociedadId, lazza }: {
               ? <button onClick={e => { e.stopPropagation(); lazza.onLlego(f); }} title="Marcar lo que llegó (Completo o Parcial)"
                   className="whitespace-nowrap rounded-md border border-zinc-200 px-1.5 py-0.5 font-mono text-xs hover:border-orange-400 hover:bg-orange-50 dark:border-zinc-700 dark:hover:bg-orange-950/30">{fmt(f.recibido)} / {fmt(f.pedidoCant)} <span className="font-sans text-orange-600">Llegó</span></button>
               : <span className="whitespace-nowrap font-mono text-xs">{fmt(f.recibido)} / {fmt(f.pedidoCant)}</span> },
-            { key: "factura", label: "Factura", className: "text-center", render: f => <IconoEje eje={f.factura} titulo={f.factura === "ok" ? "Facturada" : f.factura === "parcial" ? "Facturada en parte" : "Falta la factura"} /> },
+            { key: "factura", label: "Factura", className: "text-center", render: f => lazza
+              ? (
+                <span className="inline-flex items-center gap-1">
+                  {/* Una OC puede tener varias facturas: ✔ / ½ abre la lista (y "Sacar" si se cargó por error); "+" carga otra. */}
+                  {f.factura !== "falta" && (
+                    <button onClick={e => { e.stopPropagation(); lazza.onFacturas(f); }} title="Ver las facturas de esta OC (o sacar una cargada por error)" className="rounded-full hover:ring-2 hover:ring-emerald-300">
+                      <IconoEje eje={f.factura} titulo={f.factura === "ok" ? "Facturada" : "Facturada en parte"} />
+                    </button>
+                  )}
+                  <button onClick={e => { e.stopPropagation(); lazza.onFactura(f); }} title={f.factura === "falta" ? "Cargar la factura de esta OC" : "Cargar otra factura en esta OC"}
+                    className="inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-emerald-400 px-1 text-[13px] font-bold leading-none text-emerald-600 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-950/30">+</button>
+                </span>
+              )
+              : <IconoEje eje={f.factura} titulo={f.factura === "ok" ? "Facturada" : f.factura === "parcial" ? "Facturada en parte" : "Falta la factura"} /> },
             { key: "pago", label: "Pago", className: "text-center", render: f => <IconoEje eje={f.pago} titulo={f.pago === "ok" ? (f.medio_pago === "tarjeta" ? "Pagada con tarjeta" : "Pagada") : f.pago === "parcial" ? "Pagada en parte" : "Falta pagar"} /> },
             { key: "copiar", label: "", sortable: false, render: f => (
               <button onClick={e => { e.stopPropagation(); void copiar(f); }} title="Copiar los artículos y cantidades (sin precios) con el mensaje para el proveedor"

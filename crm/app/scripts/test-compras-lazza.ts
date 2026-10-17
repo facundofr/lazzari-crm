@@ -1,7 +1,7 @@
 // Compras Lazza: comparación factura vs OC, neto estimado y cruces seguros de precio.
 // Uso (desde crm/app): npx tsx scripts/test-compras-lazza.ts
 import assert from "node:assert/strict";
-import { comparar, netoFactura, netoPorOc, crucesSeguros, notaObservar, aFacturarPorRenglon } from "../src/lib/compras-lazza";
+import { comparar, netoFactura, netoPorOc, crucesSeguros, notaObservar, aFacturarPorRenglon, costoPrAnterior } from "../src/lib/compras-lazza";
 import { repartirEnvio } from "../src/lib/cargar-factura";
 
 // Neto
@@ -68,5 +68,13 @@ assert.equal(p3.porLlegado, false); assert.equal(p3.cantidades.get("a"), 20); as
 // Llegó todo y ya está facturado lo que llegó: vuelve a "todo lo pendiente".
 const p4 = aFacturarPorRenglon([{ id: "a", cantidad: 20, recibida: 18, pendiente: 2 }]);
 assert.equal(p4.porLlegado, false); assert.equal(p4.cantidades.get("a"), 2);
+
+// Sacar factura: el costo del PR vuelve al anterior (precio de venta igual, margen recalculado).
+const base = { costoMoneda: "ARS", precioFactura: 110, precioAnterior: 100, prMoneda: "ARS", tc: null, tcDivisas: null, precioVenta: 150, precioLista: null, markupActual: 36.36 };
+assert.deepEqual(costoPrAnterior({ ...base, costoActual: 110 }), { precio_costo: 100, markup_porcentaje: 50 });
+assert.equal(costoPrAnterior({ ...base, costoActual: 120 }), null);                       // lo cambiaron después: no se pisa
+assert.deepEqual(costoPrAnterior({ ...base, costoActual: 110, precioLista: 200 }), { precio_costo: 100, markup_porcentaje: 100 }); // con descuento: sobre lista
+// PR en dólares, factura en pesos (tc 1000): costo anterior 100.000 $ = 100 US$; venta 150 US$ → 50 %.
+assert.deepEqual(costoPrAnterior({ ...base, costoActual: 110000, precioFactura: 110000, precioAnterior: 100000, prMoneda: "USD", tc: 1000 }), { precio_costo: 100000, markup_porcentaje: 50 });
 
 console.log("test-compras-lazza OK");

@@ -16,6 +16,7 @@ import { supabase } from "@/lib/supabase/client";
 import ComprasListaOC, { type OcLazza } from "@/components/compras-lista-oc";
 import ComprasLazzaLlego from "@/components/compras-lazza-llego";
 import ComprasLazzaFactura from "@/components/compras-lazza-factura";
+import ComprasLazzaFacturasOc from "@/components/compras-lazza-facturas-oc";
 import { EVENTO_FACTURAS_COMPRA } from "@/components/carga-masiva-global";
 import { Check, FileUp, Loader2, X } from "lucide-react";
 
@@ -26,6 +27,10 @@ export default function ComprasLazzaPage() {
   const { toast } = useToast();
   const sociedadId = sociedadActiva?.id;
   const [factura, setFactura] = useState(false);
+  // "+" en la columna Factura: se abre Cargar factura con esa OC ya elegida.
+  const [facturaOc, setFacturaOc] = useState<OcLazza | null>(null);
+  // ✔ / ½ en la columna Factura: las facturas de esa OC (para sacar una cargada por error).
+  const [facturasDe, setFacturasDe] = useState<OcLazza | null>(null);
   const [llego, setLlego] = useState<OcLazza | null>(null);
   const [observar, setObservar] = useState<OcLazza | null>(null);
   const [sacando, setSacando] = useState(false);
@@ -55,16 +60,20 @@ export default function ComprasLazzaPage() {
       <Header title="Compras Lazza" subtitle="Las OC se arman solas al aprobar un PR. Marcás lo que llegó y cargás la factura." />
       <div className="space-y-3 p-4 md:p-6">
         <div className="flex justify-end">
-          <button onClick={() => setFactura(true)} disabled={!sociedadId}
+          <button onClick={() => { setFacturaOc(null); setFactura(true); }} disabled={!sociedadId}
             className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-40"
             title="Subí la factura del proveedor, elegí la o las OC y guardá">
             <FileUp className="h-4 w-4" /> Cargar factura
           </button>
         </div>
-        <ComprasListaOC sociedadId={sociedadId} lazza={{ onLlego: setLlego, onObservar: setObservar }} />
+        <ComprasListaOC sociedadId={sociedadId} lazza={{ onLlego: setLlego, onObservar: setObservar, onFactura: oc => { setFacturaOc(oc); setFactura(true); }, onFacturas: setFacturasDe }} />
       </div>
 
-      {factura && sociedadId && <ComprasLazzaFactura sociedadId={sociedadId} onClose={() => setFactura(false)} />}
+      {factura && sociedadId && <ComprasLazzaFactura sociedadId={sociedadId} ocInicial={facturaOc} onClose={() => { setFactura(false); setFacturaOc(null); }} />}
+      {facturasDe && sociedadId && (
+        <ComprasLazzaFacturasOc sociedadId={sociedadId} oc={facturasDe} onClose={() => setFacturasDe(null)}
+          onCargar={() => { setFacturaOc(facturasDe); setFacturasDe(null); setFactura(true); }} />
+      )}
       {llego && sociedadId && <ComprasLazzaLlego sociedadId={sociedadId} oc={llego} onClose={() => setLlego(null)} />}
       {observar && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4" onClick={() => { if (!sacando) setObservar(null); }}>

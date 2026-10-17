@@ -109,3 +109,25 @@ export function notaObservar(args: { numeroFc: string; comp: Comparacion; varias
   const txt = partes.join(", ");
   return args.nota.trim() ? `${txt}. Nota: ${args.nota.trim()}` : txt;
 }
+
+/**
+ * "Sacar" una factura (Compras Lazza): el costo del artículo del PR vuelve al de antes de la factura.
+ * Misma cuenta que guardar_conciliacion_compra: el costo queda en la moneda de la factura, el precio de venta no cambia
+ * y el margen se recalcula sobre el precio de lista. Solo si el PR todavía tiene el costo que puso esa factura
+ * (si alguien lo cambió después, no se pisa) → null.
+ */
+export function costoPrAnterior(a: {
+  costoActual: number; costoMoneda: string | null; precioFactura: number; precioAnterior: number;
+  prMoneda: string | null; tc: number | null; tcDivisas: number | null; precioVenta: number | null; precioLista: number | null; markupActual: number | null;
+}): { precio_costo: number; markup_porcentaje: number } | null {
+  if (Math.abs(Number(a.costoActual) - Number(a.precioFactura)) >= 0.005) return null;
+  const base = (m: string | null) => String(m || "ARS").replace(/\s*divisa/i, "").toUpperCase();
+  const moneda = base(a.costoMoneda), pr = base(a.prMoneda);
+  const rate = Number(a.tc) > 0 ? Number(a.tc) : Number(a.tcDivisas) || 0;
+  const conv = pr === moneda ? a.precioAnterior
+    : rate > 0 && moneda.startsWith("USD") && pr === "ARS" ? a.precioAnterior * rate
+    : rate > 0 && moneda === "ARS" && pr.startsWith("USD") ? a.precioAnterior / rate : null;
+  const venta = a.precioVenta ?? null;
+  if (!conv || conv <= 0 || venta == null) return null;
+  return { precio_costo: a.precioAnterior, markup_porcentaje: round2((((a.precioLista ?? venta) / conv) - 1) * 100) };
+}

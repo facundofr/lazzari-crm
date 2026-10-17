@@ -61,13 +61,23 @@ const elegido = "ring-2 ring-violet-400";
 const inputCls = "w-28 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-right text-sm dark:border-zinc-600 dark:bg-zinc-900";
 
 /** OC abiertas con algo pendiente de facturar, con su detalle (cuánto pidió, cuánto llegó y precio). */
-async function traerOcs(sociedadId: string, fuente: Fuente, proveedorId: string): Promise<Oc[]> {
+async function traerOcs(sociedadId: string, fuente: Fuente, proveedorId: string, soloId?: string): Promise<Oc[]> {
+  // soloId: una OC puntual (el "+" de la lista), aunque ya esté facturada entera: una OC puede tener varias facturas.
+  if (soloId) {
+    const { data, error } = await db.from("ordenes_compra").select("id, numero, fecha, moneda, proveedor_id, medio_pago, observaciones, proveedores(razon_social, nombre_fantasia), presupuesto_origen:presupuesto_origen_id(numero, clientes(razon_social))").eq("id", soloId).eq("sociedad_id", sociedadId);
+    if (error) throw error;
+    return armarOcs((data || []) as any[], fuente, false);
+  }
   let q = db.from("ordenes_compra").select("id, numero, fecha, moneda, proveedor_id, medio_pago, observaciones, proveedores(razon_social, nombre_fantasia), presupuesto_origen:presupuesto_origen_id(numero, clientes(razon_social))")
     .eq("sociedad_id", sociedadId).neq("estado", "cancelada").not("saldo_cerrado", "is", true).or("estado_facturacion.is.null,estado_facturacion.neq.facturada");
   q = fuente === "prov" ? q.eq("proveedor_id", proveedorId) : fuente === "sin" ? q.is("proveedor_id", null) : q.neq("proveedor_id", proveedorId);
   const { data: ocs, error } = await q.order("fecha", { ascending: false }).limit(fuente === "otros" ? 400 : 1000);
   if (error) throw error;
-  const lista = ((ocs || []) as any[]).filter(o => !(!o.proveedor_id && /stock propio/i.test(o.observaciones || "")));
+  return armarOcs(((ocs || []) as any[]).filter(o => !(!o.proveedor_id && /stock propio/i.test(o.observaciones || ""))), fuente, true);
+}
+
+/** OC con sus renglones (pedido, llegado, pendiente de facturar y precio). soloPendientes: sin las que no tienen nada por facturar. */
+async function armarOcs(lista: any[], fuente: Fuente, soloPendientes: boolean): Promise<Oc[]> {
   const ids = lista.map(o => o.id);
   const pend: any[] = [], rec: any[] = [];
   for (let i = 0; i < ids.length; i += 100) {
@@ -94,10 +104,15 @@ async function traerOcs(sociedadId: string, fuente: Fuente, proveedorId: string)
       esML: esMercadoLibre(provNombre) || esMercadoLibre(o.proveedores?.razon_social) || esMercadoLibre(o.observaciones), fuente, lineas,
       texto: normalizarTexto([o.numero, o.presupuesto_origen?.numero, o.presupuesto_origen?.clientes?.razon_social, provNombre, ...lineas.map(l => `${l.codigo || ""} ${l.descripcion}`)].join(" ")),
     };
-  }).filter(o => o.lineas.some(l => l.pendiente > 0));
+  }).filter(o => !soloPendientes || o.lineas.some(l => l.pendiente > 0));
 }
 
-export default function ComprasLazzaFactura({ sociedadId, onClose }: { sociedadId: string; onClose: () => void }) {
+export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: {
+  sociedadId: string;
+  /** "+" en la columna Factura de la lista: la factura es de esta OC (viene elegida). */
+  ocInicial?: { id: string; numero: string } | null;
+  onClose: () => void;
+}) {
   const { toast } = useToast();
   const { profile } = useUser();
   const [leyendo, setLeyendo] = useState(false);
@@ -193,6 +208,32 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: { sociedadI
     setProveedor(p); // después del chequeo de duplicada: el aviso sale junto con el proveedor
     const propias = await cargarFuente("prov", p.id, true);
     const citadas = propias.filter(o => (f.ocRefs || []).some(r => citaOc(r, o.numero)));
+    // Desde el "+" de una OC: esa OC viene elegida. Si es de otro proveedor o sin proveedor, pregunta "¿seguro?".
+    if (ocInicial) {
+      let propia = propias.find(o => o.id === ocInicial.id);
+      if (!propia) {
+        const { data: ocP } = await db.from("ordenes_compra").select("proveedor_id").eq("id", ocInicial.id).single();
+        if (ocP?.proveedor_id === p.id) {
+          // Del mismo proveedor pero ya facturada entera: se trae igual (factura extra, ej. un flete).
+          propia = (await traerOcs(sociedadId, "prov", p.id, ocInicial.id).catch(() => []))[0];
+          if (propia) { const o = propia; setOcs(prev => [...prev.filter(x => x.id !== o.id), o]); }
+        }
+      }
+      if (propia) { setElegidas(new Map([[propia.id, { modo: "propia", itemIds: new Set() }]])); return; }
+      setElegidas(new Map());
+      const { data: oc } = await db.from("ordenes_compra").select("proveedor_id").eq("id", ocInicial.id).single();
+      const fuente: Fuente = oc?.proveedor_id ? "otros" : "sin";
+      setVer(fuente);
+      let otra = (await cargarFuente(fuente, p.id, true)).find(o => o.id === ocInicial.id);
+      if (!otra) {
+        // Ya facturada entera (o fuera de la lista): se trae sola. Una OC puede tener más de una factura.
+        otra = (await traerOcs(sociedadId, fuente, p.id, ocInicial.id).catch(() => []))[0];
+        if (otra) { const o = otra; setOcs(prev => [...prev.filter(x => x.id !== o.id), o]); }
+      }
+      if (otra) setPreguntar({ oc: otra, articulos: null });
+      else toast.warning(`No se encontró la ${ocInicial.numero}: elegí la OC de la lista.`);
+      return;
+    }
     const inicial = citadas.length ? citadas : propias.length === 1 ? propias : [];
     setElegidas(new Map(inicial.map(o => [o.id, { modo: "propia", itemIds: new Set() }])));
     if (!propias.length) { setVer("sin"); void cargarFuente("sin", p.id, true); }
@@ -327,8 +368,15 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: { sociedadI
       const extras: Array<{ id: string; precio: number; origen: string }> = [];
       const envioDesc = factura.items.find(it => esEnvio(it.descripcion))?.descripcion || "Envío / logística";
       for (const p of reparto.filter(p => p.monto > 0)) extras.push({ id: await nuevoRenglon(ocFinal.get(p.ocId)!, `${envioDesc} (FC ${numero})`, p.monto), precio: p.monto, origen: "envio" });
+      // OC elegida sin nada pendiente ni envío/diferencia (ej. ya facturada entera y "Pasar igual"):
+      // un renglón en $0 para que la factura quede atada a esa OC (una OC puede tener varias facturas).
+      const conAlgo = new Set([...lineas.map(l => ocFinal.get(l.ocId) || l.ocId), ...conRenglonNuevo]);
       const sumaDif = !otraMoneda && !comp.coincide && !varias && sumarDif && ocsElegidas.length === 1;
       if (sumaDif) extras.push({ id: await nuevoRenglon(ocFinal.get(ocsElegidas[0].id)!, `Diferencia FC ${numero}`, comp.diferencia), precio: comp.diferencia, origen: "diferencia" });
+      for (const o of ocsElegidas) {
+        const destino = ocFinal.get(o.id)!;
+        if (!conAlgo.has(destino) && !conRenglonNuevo.has(destino)) extras.push({ id: await nuevoRenglon(destino, `FC ${numero} (sin renglones pendientes)`, 0), precio: 0, origen: "vinculo" });
+      }
       for (const ocId of conRenglonNuevo) {
         const { data: its } = await db.from("orden_compra_items").select("cantidad, precio_unitario, iva_porcentaje").eq("orden_id", ocId);
         if (!its?.length) continue;
@@ -422,7 +470,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: { sociedadI
       onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer?.files?.[0]; if (f && !leyendo && !guardando) void leer(f); }}>
       <div className="w-full max-w-4xl rounded-xl bg-white p-4 shadow-2xl dark:bg-zinc-900 dark:text-zinc-100">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-bold">Cargar factura <span className="text-sm font-normal text-zinc-500">· Compras Lazza</span></h2>
+          <h2 className="text-lg font-bold">Cargar factura <span className="text-sm font-normal text-zinc-500">· {ocInicial ? <>de la <span className="font-mono">{ocInicial.numero}</span></> : "Compras Lazza"}</span></h2>
           <button onClick={onClose} disabled={guardando} className="rounded p-1 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-5 w-5" /></button>
         </div>
 
