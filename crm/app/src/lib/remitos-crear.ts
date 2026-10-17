@@ -26,6 +26,14 @@ export function valorSugerido(renglones: Pick<RenglonVentana, "cantidad" | "prec
   return redondo(renglones.reduce((s, r) => s + (r.precio != null && n(r.cantidad) > 0 ? n(r.cantidad) * n(r.precio) : 0), 0));
 }
 
+/** Valor declarado siempre en pesos (Augusto 17/10): si el PR es en dólares, el sugerido se pasa con el dólar del día.
+ *  Sin dólar devuelve 0 (no sugiere). Redondeado a pesos enteros. */
+export function sugeridoEnPesos(sugerido: number, moneda: "ARS" | "USD", dolar: number | null | undefined): number {
+  if (!(sugerido > 0)) return 0;
+  if (moneda === "ARS") return sugerido;
+  return dolar && dolar > 0 ? Math.round(sugerido * dolar) : 0;
+}
+
 /** Renglones donde se remite más de lo que falta entregar (solo aviso). */
 export function excesos(renglones: Pick<RenglonVentana, "key" | "descripcion" | "cantidad" | "pendiente">[]): { key: string; descripcion: string; cantidad: number; pendiente: number }[] {
   return renglones

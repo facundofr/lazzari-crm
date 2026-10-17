@@ -18,10 +18,12 @@ Una sola pantalla de Remitos (mejorando la vieja) y una sola ventana para crear/
 - Antes: "¿Quién lo lleva?" en V1.1.514/515 (commits 64fcf95 y 86129e2).
 
 ## A medias / próximo paso exacto
-- Nada de código a medias. Falta solo la prueba en producción del PDF con "Retira el cliente": el 17/10 no había ningún remito así (el buscador de Remitos con "retira" no encuentra nada). Probar con el primero real que se cargue así o, con el OK de Augusto, con un remito de prueba Sin CAI en un PR suyo (guardar a propósito, bajar el PDF y borrarlo después). Debe decir "Entrega: Retira el cliente — <sucursal>" o solo "Retira el cliente".
-- Prompt para chat nuevo: "Lee docs/ESTADO.md y docs/traspaso/remitos.md. Sos el chat de Remitos. Tarea: probar en producción el PDF de un remito Sin CAI con 'Retira el cliente' (buscar uno real; si no hay, pedirme OK para uno de prueba en un PR mío y borrarlo después)."
+- Nada a medias. La prueba del PDF con "Retira el cliente" se DESCARTÓ (17/10, Augusto: "Retira el cliente y entregado es lo mismo, solo quiero que quede el registro del remito hecho y nada más, y la posibilidad de poner foto"). No hacer remitos de prueba para eso.
+
+- **VALOR DECLARADO SIEMPRE EN PESOS — HECHO, SIN PUBLICAR (17/10/2026, chat Remitos; tsc 0, hooks OK, `scripts/test-remitos-crear.ts` OK):** en PR en dólares la ventana decía "Valor declarado (US$)" y el ✨ sugería en US$, pero el PDF imprime siempre "$": 9 remitos quedaron con el valor en dólares (ej. R-2026-1087 decía "$ 3.349,13"). Ahora la etiqueta es siempre "$" y el sugerido se pasa a pesos con el dólar BNA guardado del día (billete; si no hay, divisa), mostrando "(US$ X × billete $ Y)"; sin dólar no sugiere (no frena). Lógica `sugeridoEnPesos()` en lib/remitos-crear.ts. Datos viejos: `supabase/migrations/20261017150000_remitos_valor_declarado_pesos.sql` (+ rollback) pasa esos 9 remitos (valor < 10.000 en PR USD) a pesos con el BNA del día del remito. Migración CORRIDA el 17/10 con OK de Augusto y verificada (los 9 en pesos; quedan 0 en US$). **Falta: publicar el cambio de la ventana.**
 
 ## Decisiones de Augusto / lo que NO quiere
+- Remito = registro de lo entregado + foto opcional. "Retira el cliente" es lo mismo que entregado; no es un detalle que necesite (17/10).
 - Nada de botón "Parcial" de remito (el caso "salió 10, recibió 3 por el transporte" no le interesa). Parcial = PR pidió 10, remitimos 5.
 - El remito se hace para entregar: no hay estado "sin entregar" ni avisos por días (16/10).
 - Sin columnas Items, Entregado, Llegó, Falta; sin botones "Todo lo que falta / Solo lo que llegó / Todo en 0". Sin amarillo por días sin foto.

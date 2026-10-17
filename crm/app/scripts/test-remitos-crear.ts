@@ -1,10 +1,16 @@
 // Prueba rápida de lib/remitos-crear.ts. Correr: npx tsx scripts/test-remitos-crear.ts
 import assert from "node:assert/strict";
-import { valorSugerido, excesos, agruparPorSucursal, ocAnteriorDistinta, numeroCAI, descripcionCorta } from "../src/lib/remitos-crear";
+import { valorSugerido, sugeridoEnPesos, excesos, agruparPorSucursal, ocAnteriorDistinta, numeroCAI, descripcionCorta } from "../src/lib/remitos-crear";
 
 // Valor sugerido: cantidad × precio sin IVA; sin precio no suma; cantidad 0 no suma.
 assert.equal(valorSugerido([{ cantidad: 5, precio: 1000 }, { cantidad: 2, precio: 250.5 }, { cantidad: 3, precio: null }, { cantidad: 0, precio: 99 }]), 5501);
 assert.equal(valorSugerido([]), 0);
+
+// Valor declarado en pesos: PR en dólares × dólar del día; sin dólar no sugiere.
+assert.equal(sugeridoEnPesos(5501, "ARS", null), 5501);
+assert.equal(sugeridoEnPesos(210.34, "USD", 1450), 304993);
+assert.equal(sugeridoEnPesos(210.34, "USD", null), 0);
+assert.equal(sugeridoEnPesos(0, "USD", 1450), 0);
 
 // Excesos: solo aviso para los que se pasan; renglón libre (pendiente null) nunca.
 const ex = excesos([

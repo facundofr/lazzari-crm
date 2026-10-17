@@ -26,9 +26,10 @@ import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { renglonesParaEntregar } from "@/lib/remitos-armado";
-import { valorSugerido, excesos, agruparPorSucursal, ocAnteriorDistinta, numeroCAI, nombrePDFRemito, descripcionCorta, type RenglonVentana } from "@/lib/remitos-crear";
+import { valorSugerido, sugeridoEnPesos, excesos, agruparPorSucursal, ocAnteriorDistinta, numeroCAI, nombrePDFRemito, descripcionCorta, type RenglonVentana } from "@/lib/remitos-crear";
 import { buscarCandidatos, type CatalogoCandidato } from "@/lib/catalogo-busqueda";
 import { abrirRemitoPDF, remitoPDFBase64 } from "@/lib/remito-pdf";
+import { leerDolaresGuardados, hoyAR } from "@/lib/dolar-presupuesto";
 import { entregaInicial, entregaGuardada, filaVigente, difiereDeSucursal, guardarEntrega, FILA_ACTUAL, type Entrega, type ModoEntrega } from "@/lib/remito-entrega";
 import { AlertTriangle, Download, FileText, Loader2, Mail, Plus, Sparkles, Trash2, Truck, X } from "lucide-react";
 
@@ -159,6 +160,17 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
     const t = requestAnimationFrame(() => setVisible(true));
     return () => cancelAnimationFrame(t);
   }, [open]);
+
+  // Valor declarado siempre en pesos: con PR en dólares, el sugerido se pasa con el dólar BNA guardado del día.
+  const [dolar, setDolar] = useState<{ valor: number; tipo: string } | null>(null);
+  useEffect(() => {
+    if (!open || moneda !== "USD") { setDolar(null); return; }
+    let vivo = true;
+    leerDolaresGuardados(db, hoyAR())
+      .then((d) => { if (!vivo) return; const x = d.billete ? { valor: d.billete.valor, tipo: "billete" } : d.divisa ? { valor: d.divisa.valor, tipo: "divisa" } : null; setDolar(x); })
+      .catch(() => { if (vivo) setDolar(null); });
+    return () => { vivo = false; };
+  }, [open, moneda]);
 
   // ── Carga al abrir ───────────────────────────────────────────────
   useEffect(() => {
@@ -364,6 +376,7 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
   // ── Cuentas (lib/remitos-crear) ──────────────────────────────────
   const conCantidad = useMemo(() => renglones.filter((r) => Number(r.cantidad) > 0 && r.descripcion.trim()), [renglones]);
   const sugerido = useMemo(() => valorSugerido(conCantidad), [conCantidad]);
+  const sugeridoPesos = sugeridoEnPesos(sugerido, moneda, dolar?.valor);
   const sinPrecio = conCantidad.some((r) => r.precio == null);
   const avisosExceso = useMemo(() => excesos(renglones), [renglones]);
   const avisoExceso = new Set(avisosExceso.map((e) => e.key));
@@ -713,11 +726,11 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
                     <label className="flex flex-col gap-0.5 text-[11px] text-zinc-500 sm:col-span-2">Observaciones
                       <textarea value={observaciones} onChange={(e) => setObservaciones(e.target.value)} rows={2} placeholder="Sale impreso en el remito" className={inputCls} />
                     </label>
-                    <label className="flex flex-col gap-0.5 text-[11px] text-zinc-500">Valor declarado ({moneda === "USD" ? "US$" : "$"})
+                    <label className="flex flex-col gap-0.5 text-[11px] text-zinc-500">Valor declarado ($)
                       <input type="number" min={0} step="any" value={valor} onChange={(e) => setValor(e.target.value)} className={`${inputCls} text-right`} />
-                      {sugerido > 0 && Number(valor) !== sugerido && (
-                        <button onClick={() => setValor(String(sugerido))} className="flex items-center gap-1 self-end text-[11px] text-orange-600 hover:underline" title="Precio de venta sin IVA de lo que se remite">
-                          <Sparkles className="h-3 w-3" /> Sugerido {formatCurrency(sugerido, moneda)} sin IVA{sinPrecio ? " (algún renglón sin precio)" : ""}
+                      {sugeridoPesos > 0 && Number(valor) !== sugeridoPesos && (
+                        <button onClick={() => setValor(String(sugeridoPesos))} className="flex items-center gap-1 self-end text-right text-[11px] text-orange-600 hover:underline" title="Precio de venta sin IVA de lo que se remite">
+                          <Sparkles className="h-3 w-3 shrink-0" /> Sugerido {formatCurrency(sugeridoPesos, "ARS")} sin IVA{moneda === "USD" && dolar ? ` (${formatCurrency(sugerido, "USD")} × ${dolar.tipo} ${formatCurrency(dolar.valor, "ARS")})` : ""}{sinPrecio ? " (algún renglón sin precio)" : ""}
                         </button>
                       )}
                     </label>
