@@ -135,6 +135,26 @@ export function planViaje(
   };
 }
 
+/**
+ * Línea "Entrega" del PDF (el PDF la arma como "nombre — direccion").
+ * Manda lo cargado en el remito ("¿Quién lo lleva?"); si no hay nada, el domicilio de la sucursal.
+ * - Retira el cliente: "Retira el cliente" (+ la sucursal, si tiene).
+ * - Domicilio cambiado: "Sucursal — domicilio, localidad", o solo "domicilio, localidad" si no hay sucursal.
+ * - null en los dos = el PDF usa el domicilio del cliente.
+ */
+export function entregaPDF(
+  remito: { direccion_entrega_snapshot?: string | null; localidad_entrega_snapshot?: string | null },
+  suc: { nombre?: string | null; direccion?: string | null; localidad?: string | null; provincia?: string | null } | null,
+): { nombre: string | null; direccion: string | null } {
+  const nombreSuc = limpio(suc?.nombre) || null;
+  if (mismo(remito.direccion_entrega_snapshot, RETIRA_TEXTO)) return { nombre: RETIRA_TEXTO, direccion: nombreSuc };
+  const cargado = [limpio(remito.direccion_entrega_snapshot), limpio(remito.localidad_entrega_snapshot)].filter(Boolean).join(", ");
+  if (cargado) return nombreSuc ? { nombre: nombreSuc, direccion: cargado } : { nombre: cargado, direccion: null };
+  if (!suc) return { nombre: null, direccion: null };
+  const dirSuc = [limpio(suc.direccion), limpio(suc.localidad), limpio(suc.provincia)].filter(Boolean).join(", ") || null;
+  return nombreSuc ? { nombre: nombreSuc, direccion: dirSuc } : { nombre: dirSuc, direccion: null };
+}
+
 /** Texto corto para la columna Transporte de la lista. */
 export function textoTransporte(remito: { direccion_entrega_snapshot?: string | null }, filas: Pick<FilaTransporte, "transportista" | "estado" | "tipo">[]): string {
   const vivas = filas.filter((f) => f.estado !== "cancelado" && f.transportista);

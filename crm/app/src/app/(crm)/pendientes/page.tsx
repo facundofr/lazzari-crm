@@ -95,7 +95,7 @@ export default function PendientesPage() {
         .then((n) => ({ id: "fc", label: "Facturas de compra vencidas sin pagar", count: n, href: "/finanzas?tab=facturas_compra" })));
       tareas.push(contar(db.from("facturas").select("id", { count: "exact", head: true }).eq("sociedad_id", sociedadId)
         .in("estado", ["emitida", "parcial", "vencida"]).lt("fecha_vencimiento", hoy))
-        .then((n) => ({ id: "fv", label: "Facturas de venta vencidas sin cobrar", count: n, href: "/finanzas?tab=vencimientos&grupo=cobrar" })));
+        .then((n) => ({ id: "fv", label: "Facturas de venta vencidas sin cobrar", count: n, href: "/finanzas?tab=cc_clientes" })));
     }
     if (puede(role, "ordenes_compra")) {
       tareas.push(contar(db.from("ordenes_compra").select("id", { count: "exact", head: true }).eq("sociedad_id", sociedadId)

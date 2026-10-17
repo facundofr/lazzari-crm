@@ -3,7 +3,7 @@
 import { supabase } from "@/lib/supabase/client";
 import { generateRemitoPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
 import { numeroRemito, nombrePDFRemito } from "@/lib/remitos-crear";
-import { RETIRA_TEXTO } from "@/lib/remito-entrega";
+import { RETIRA_TEXTO, entregaPDF } from "@/lib/remito-entrega";
 
 type SociedadPDF = Parameters<typeof getSociedadPDF>[0] & { id: string };
 
@@ -24,20 +24,15 @@ export async function htmlRemito(remitoId: string, sociedad: SociedadPDF, valorD
     const { data: cc } = await db.from("cai_config").select("fecha_vencimiento").eq("sociedad_id", sociedad.id).eq("cai_numero", r.cai_numero).maybeSingle();
     caiVencimiento = cc?.fecha_vencimiento || null;
   }
-  let sucursalNombre: string | null = null;
-  let sucursalDireccion: string | null = null;
+  let suc: { nombre: string | null; direccion: string | null; localidad: string | null; provincia: string | null } | null = null;
   const sucId = r.sucursal_id || r.presupuestos?.sucursal_id || null;
   if (sucId) {
     const { data: s } = await db.from("cliente_sucursales").select("nombre, direccion, localidad, provincia").eq("id", sucId).maybeSingle();
-    if (s) { sucursalNombre = s.nombre; sucursalDireccion = [s.nombre, s.direccion, s.localidad, s.provincia].filter(Boolean).join(", "); }
+    suc = s || null;
   }
   // Domicilio cargado en el remito ("¿Quién lo lleva?"): manda sobre el de la sucursal.
   const retira = (r.direccion_entrega_snapshot || "").trim().toLowerCase() === RETIRA_TEXTO.toLowerCase();
-  if (retira) { sucursalDireccion = RETIRA_TEXTO; sucursalNombre = sucursalNombre || "Entrega"; }
-  else if (r.direccion_entrega_snapshot || r.localidad_entrega_snapshot) {
-    const resto = [r.direccion_entrega_snapshot, r.localidad_entrega_snapshot].filter(Boolean).join(", ");
-    if (sucursalNombre) sucursalDireccion = resto; else { sucursalNombre = r.direccion_entrega_snapshot || r.localidad_entrega_snapshot; sucursalDireccion = r.direccion_entrega_snapshot ? r.localidad_entrega_snapshot : null; }
-  }
+  const entrega = entregaPDF(r, suc);
   const viajes = (transportes || []).map((t: any) => ({ transportista: t.transportista, destino: t.destino, costo: t.costo, moneda: t.moneda }));
   if (!viajes.length && retira) viajes.push({ transportista: RETIRA_TEXTO, destino: null, costo: null, moneda: "ARS" });
   const html = generateRemitoPDF({
@@ -55,8 +50,8 @@ export async function htmlRemito(remitoId: string, sociedad: SociedadPDF, valorD
     cai_vencimiento: caiVencimiento,
     cuit_emisor: sociedad.cuit,
     cliente: r.clientes ? { razon_social: r.clientes.razon_social, cuit: r.clientes.cuit, direccion: r.clientes.direccion } : null,
-    sucursal_nombre: sucursalNombre,
-    sucursal_direccion: sucursalDireccion,
+    sucursal_nombre: entrega.nombre,
+    sucursal_direccion: entrega.direccion,
     items: (items || []).map((it: any) => ({ descripcion: it.descripcion, cantidad: Number(it.cantidad), unidad: it.unidad })),
     transportes: viajes,
   }, getSociedadPDF(sociedad));

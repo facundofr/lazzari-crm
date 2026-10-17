@@ -6,7 +6,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { proyectarCaja, clientesACobrar, pagosPorSemana, type MovCaja, type ClienteACobrar, type DeudaCliente } from "@/lib/caja-proyectada";
+import { proyectarCaja, pagosPorSemana, type MovCaja } from "@/lib/caja-proyectada";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Landmark } from "lucide-react";
 
 export interface CuotaPrestamo { id: string; numero: number; fecha_pago: string; capital: number | null; interes: number | null; cargos: number | null; total: number; estado: "pendiente" | "pagada" | "a_confirmar"; notas: string | null }
@@ -155,7 +155,7 @@ export function CajaProyectadaPanel({ hoy, saldoInicial, entradas, salidas, sinD
           <p className="text-amber-700 dark:text-amber-300">
             Vencido sin cobrar (no se cuenta porque no se sabe cuándo entra): <b>{formatCurrency(caja.vencidoSinCobrar.total)}</b>.{" "}
             <button onClick={() => setVerVencido((v) => !v)} className="underline">{verVencido ? "Ocultar" : "Ver"}</button>
-            {onIr && <> · <button onClick={() => onIr("cobrar_clientes")} className="underline">Cobrar por cliente</button></>}
+            {onIr && <> · <button onClick={() => onIr("cc_clientes")} className="underline">Clientes</button></>}
           </p>
         )}
         {verVencido && caja.vencidoSinCobrar.items.slice(0, 15).map((i, k) => (
@@ -174,71 +174,7 @@ export function CajaProyectadaPanel({ hoy, saldoInicial, entradas, salidas, sinD
   );
 }
 
-// ─── Cobrar por cliente ─────────────────────────────────────────────────────
-export function ClientesACobrarPanel({ hoy, deudas, ultimosCobros, tc, listo, onIr }: {
-  hoy: string; deudas: DeudaCliente[]; ultimosCobros: Map<string, { fecha: string; monto: number }>; tc: number | null; listo?: boolean; onIr?: (tab: string) => void;
-}) {
-  const filas = useMemo(() => clientesACobrar(deudas, hoy, ultimosCobros, tc), [deudas, hoy, ultimosCobros, tc]);
-  const [abierto, setAbierto] = useState<string | null>(null);
-  const [buscar, setBuscar] = useState("");
-  const visibles = filas.filter((f) => !buscar.trim() || f.nombre.toLowerCase().includes(buscar.trim().toLowerCase()));
-  const total = (k: "total" | "vencido", m: "ARS" | "USD") => filas.reduce((s, f) => s + f[m][k], 0);
-  const montos = (c: ClienteACobrar, k: "total" | "vencido") => [c.ARS[k] ? formatCurrency(c.ARS[k]) : "", c.USD[k] ? formatCurrency(c.USD[k], "USD") : ""].filter(Boolean).join(" + ") || "—";
-
-  if (listo === false) return <div className="rounded-xl border border-zinc-200 bg-white p-3 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900">Calculando… (esperando cheques, facturas y gastos)</div>;
-  return (
-    <div className="space-y-2 text-sm">
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="flex flex-wrap gap-x-5 gap-y-1">
-          <span><b className="text-lg">{filas.length}</b> clientes con saldo</span>
-          <span>Nos deben <b>{formatCurrency(total("total", "ARS"))}</b>{total("total", "USD") ? ` + ${formatCurrency(total("total", "USD"), "USD")}` : ""}</span>
-          <span className="text-red-600">Vencido <b>{formatCurrency(total("vencido", "ARS"))}</b>{total("vencido", "USD") ? ` + ${formatCurrency(total("vencido", "USD"), "USD")}` : ""}</span>
-        </div>
-        <input value={buscar} onChange={(e) => setBuscar(e.target.value)} placeholder="Buscar cliente" className="rounded-lg border border-zinc-200 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800" />
-      </div>
-      <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="border-b border-zinc-100 text-left text-zinc-500 dark:border-zinc-800">
-              <th className="px-3 py-2 font-medium">Cliente</th>
-              <th className="px-3 py-2 text-right font-medium">Debe</th>
-              <th className="px-3 py-2 text-right font-medium">Vencido</th>
-              <th className="px-3 py-2 font-medium">Próx. vencimiento</th>
-              <th className="px-3 py-2 font-medium">Último cobro</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-            {visibles.map((c) => (
-              <Fragment key={c.cliente_id}>
-                <tr className="cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50" onClick={() => setAbierto(abierto === c.cliente_id ? null : c.cliente_id)}>
-                  <td className="px-3 py-1.5 font-medium text-zinc-900 dark:text-white">
-                    <span className="flex items-center gap-1">{abierto === c.cliente_id ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}{c.nombre}
-                      <span className="font-normal text-zinc-500">· {c.facturas} fact.</span></span>
-                  </td>
-                  <td className="px-3 py-1.5 text-right font-mono">{montos(c, "total")}</td>
-                  <td className={`px-3 py-1.5 text-right font-mono ${c.ARS.vencido || c.USD.vencido ? "font-semibold text-red-600" : "text-zinc-400"}`}>
-                    {montos(c, "vencido")}{c.diasMasVencida ? <span className="ml-1 font-normal">({c.diasMasVencida} d)</span> : null}
-                  </td>
-                  <td className="px-3 py-1.5">{c.proximoVencimiento ? formatDate(c.proximoVencimiento) : "—"}</td>
-                  <td className="px-3 py-1.5 text-zinc-600 dark:text-zinc-300">{c.ultimoCobro ? `${formatDate(c.ultimoCobro.fecha)} · ${formatCurrency(c.ultimoCobro.monto)}` : "—"}</td>
-                </tr>
-                {abierto === c.cliente_id && c.documentos.map((d, k) => (
-                  <tr key={k} className="bg-zinc-50/60 dark:bg-zinc-800/30">
-                    <td className="px-3 py-1 pl-8 text-zinc-600 dark:text-zinc-300">{d.documento}</td>
-                    <td className="px-3 py-1 text-right font-mono">{formatCurrency(d.saldo, d.moneda)}</td>
-                    <td className={`px-3 py-1 ${d.vencimiento.slice(0, 10) < hoy ? "text-red-600" : "text-zinc-500"}`} colSpan={3}>vence {formatDate(d.vencimiento)}{d.vencimiento.slice(0, 10) < hoy ? " (vencida)" : ""}</td>
-                  </tr>
-                ))}
-              </Fragment>
-            ))}
-            {!visibles.length && <tr><td colSpan={5} className="px-3 py-3 text-zinc-500">Ningún cliente con saldo.</td></tr>}
-          </tbody>
-        </table>
-      </div>
-      {onIr && <p className="text-xs text-zinc-500">Para cargar un cobro: <button onClick={() => onIr("facturacion")} className="text-orange-600 hover:underline">Facturas de venta</button> · el detalle completo en <button onClick={() => onIr("cc_clientes")} className="text-orange-600 hover:underline">CC Clientes</button>.</p>}
-    </div>
-  );
-}
+// (16/10/2026: "Cobrar por cliente" pasó a ser la pestaña Clientes de Finanzas, dentro de finanzas/page.tsx.)
 
 // ─── Pagar por semana ───────────────────────────────────────────────────────
 export function PagarPorSemanaPanel({ hoy, salidas, prestamos, faltaTablaPrestamos, listo, onIr }: {

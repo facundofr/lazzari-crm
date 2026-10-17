@@ -5,7 +5,9 @@ cd /c/Users/lazza/lazzari || exit 1
 MSG="$1"; shift
 git fetch -q
 WT=/c/Users/lazza/lz-pub-auto
-git worktree remove --force $WT >/dev/null 2>&1; rm -rf $WT
+# Saca el enlace a node_modules ANTES de borrar la copia: rm -rf / worktree remove pueden seguir el enlace y borrar el node_modules real (aviso 16/10/2026).
+sacar_enlace() { [ -e "$WT/crm/app/node_modules" ] && cmd //c "rmdir C:\Users\lazza\lz-pub-auto\crm\app\node_modules" >/dev/null 2>&1; }
+sacar_enlace; git worktree remove --force $WT >/dev/null 2>&1; rm -rf $WT
 git worktree add --detach $WT origin/main >/dev/null 2>&1 || { echo "no se pudo crear la copia"; exit 1; }
 for f in "$@"; do mkdir -p "$WT/$(dirname "$f")"; cp "$f" "$WT/$f"; done
 ACT=$(grep -o '"1\.1\.[0-9]*"' $WT/crm/app/src/lib/app-version.ts | tr -d '"')
@@ -27,7 +29,7 @@ git log --oneline -1 | cut -c1-80
 git fetch -q
 if ! git merge-base --is-ancestor HEAD origin/main; then
   echo "NO SE PUBLICO: otro chat subio algo en el medio (el push fue rechazado). Volve a correr el script."
-  cd /c/Users/lazza/lazzari; git worktree remove --force $WT >/dev/null 2>&1; exit 1
+  cd /c/Users/lazza/lazzari; sacar_enlace; git worktree remove --force $WT >/dev/null 2>&1; exit 1
 fi
 cd crm/app
 vercel.cmd --prod --yes > /tmp/vauto.txt 2>&1
@@ -38,4 +40,4 @@ echo "V$NUEVA $s"
 cd /c/Users/lazza/lazzari
 git fetch -q
 if git merge-base --is-ancestor main origin/main; then git update-ref refs/heads/main origin/main; git reset -q; fi
-git worktree remove --force $WT >/dev/null 2>&1
+sacar_enlace; git worktree remove --force $WT >/dev/null 2>&1

@@ -764,8 +764,9 @@ export default function ClientesPage() {
               tipo: "remito",
               fecha: r.fecha,
               titulo: `Remito ${r.numero || ""}`,
-              detalle: (r.estado === "entregado" ? "Entregado" : r.estado === "parcial" ? "Entrega parcial" : "Pendiente") + ((r as any).recibio ? ` · recibió ${(r as any).recibio}` : ""),
-              estado: r.estado,
+              // El remito se hace para entregar: siempre figura entregado.
+              detalle: "Entregado" + ((r as any).recibio ? ` · recibió ${(r as any).recibio}` : ""),
+              estado: "entregado",
               url: (r as any).foto_url || null,
             });
           }

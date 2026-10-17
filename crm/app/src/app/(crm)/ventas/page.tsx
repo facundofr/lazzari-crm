@@ -332,13 +332,6 @@ export default function VentasPage() {
     finally { setDownloadingFacturaId(null); }
   }
 
-  async function handleMarcarEntregado(remitoId: string) {
-    if (!sociedadActiva?.id) return;
-    const { error } = await supabase.from("remitos").update({ estado: "entregado" } as any).eq("id", remitoId).eq("sociedad_id" as any, sociedadActiva.id);
-    if (error) { alert("Error al marcar como entregado: " + error.message); return; }
-    await fetchData();
-  }
-
   async function handleCancelarVenta(prId: string) {
     if (!sociedadActiva?.id) return;
     if (!confirm("¿Cancelar esta venta? El presupuesto pasará a estado «rechazado» y saldrá de Ventas.")) return;
@@ -525,7 +518,6 @@ export default function VentasPage() {
                 onClose={() => setSelectedVentaId(null)}
                 onFacturar={() => abrirFacturar(selectedVenta)}
                 onDescargar={descargarFactura}
-                onMarcarEntregado={handleMarcarEntregado}
                 onCancelar={() => handleCancelarVenta(selectedVenta.presupuesto.id)}
               />
             </div>
@@ -594,11 +586,11 @@ const btnPrimario = "inline-flex items-center gap-1 rounded-md bg-orange-600 px-
 const btnSecundario = "inline-flex items-center gap-1 rounded-md border border-zinc-300 dark:border-zinc-700 px-2 py-1 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 disabled:opacity-60";
 
 function DetalleVenta({
-  v, e, superaLimite, puedeFacturar, puedeCobrar, downloadingFacturaId, onClose, onFacturar, onDescargar, onMarcarEntregado, onCancelar,
+  v, e, superaLimite, puedeFacturar, puedeCobrar, downloadingFacturaId, onClose, onFacturar, onDescargar, onCancelar,
 }: {
   v: Venta; e: VentaEtapa; superaLimite: boolean; puedeFacturar: boolean; puedeCobrar: boolean; downloadingFacturaId: string | null;
   onClose: () => void; onFacturar: () => void; onDescargar: (id: string, preview?: boolean) => void;
-  onMarcarEntregado: (remitoId: string) => void; onCancelar: () => void;
+  onCancelar: () => void;
 }) {
   const p = v.presupuesto;
   const factura = v.facturas.find(f => f.id === e.facturaVigenteId) || null;
@@ -639,8 +631,6 @@ function DetalleVenta({
               <span className="font-mono font-semibold">{r.numero || "Sin número"}</span>
               <span className="text-zinc-400">{formatDate(r.fecha)}</span>
               {r.foto_url && <a href={r.foto_url} target="_blank" rel="noreferrer" className={linkClass} title={r.recibio ? `Recibió ${r.recibio}` : "Remito firmado"}>📷 firmado</a>}
-              <span className={`ml-auto rounded px-1.5 text-[10px] font-medium ${r.estado === "entregado" ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400" : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400"}`}>{r.estado}</span>
-              {r.estado !== "entregado" && <button onClick={() => onMarcarEntregado(r.id)} className="text-green-600 hover:text-green-700 font-medium">Entregado</button>}
             </div>
           )) : (
             <p className="text-zinc-500">Sin remito · <Link href={`/presupuestos?selected=${p.id}`} className={linkClass}>Remitar desde el PR</Link></p>

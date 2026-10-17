@@ -1,4 +1,4 @@
-// Finanzas ordenada en grupos (12/10/2026; desde el 16/10: Hoy / Cobrar / Pagar / Cheques y créditos).
+// Finanzas ordenada en grupos (12/10/2026; desde el 16/10/2026: Hoy / Cobros / Pagos / Tesorería / Informes).
 // Solo navegación: cada pestaña sigue siendo la misma pantalla de antes.
 
 export type FinanzasTab =
@@ -7,90 +7,95 @@ export type FinanzasTab =
   | "lineas_credito" | "gastos_fijos" | "objetivos" | "facturacion" | "retenciones" | "revisar" | "informes"
   | "cobrar_clientes" | "pagar_semana";
 
-export type FinanzasGrupo = "hoy" | "cobrar" | "pagar" | "bancos";
+export type FinanzasGrupo = "hoy" | "cobrar" | "pagar" | "bancos" | "informes";
+
+/** Una pestaña del menú. `vistas`: pantallas que se juntaron en esta pestaña (botones chicos adentro); la primera es la propia. */
+export interface FinanzasTabDef { id: FinanzasTab; label: string; mas?: boolean; vistas?: { id: FinanzasTab; label: string }[] }
 
 export interface FinanzasGrupoDef {
   id: FinanzasGrupo;
   label: string;
   descripcion: string;
-  /** `mas`: va dentro del botón "Más" del grupo (menos pestañas a la vista; orden 16/10/2026). */
-  tabs: { id: FinanzasTab; label: string; mas?: boolean }[];
+  tabs: FinanzasTabDef[];
 }
 
-// Orden de la pantalla (16/10/2026, segunda vuelta pedida por Augusto: "muestra todo junto, no se entiende nada").
-// 4 preguntas: Hoy (¿qué hago hoy?), Cobrar (¿quién me debe?), Pagar (¿qué pago?), Bancos (¿cuadra con el banco?).
-// El correo de administración vive en Hoy (antes era la pantalla suelta "Mail y cobros"). Lo de consulta va en "Más".
+// Orden de la pantalla (16/10/2026, unificación pedida por Augusto: "muchas pestañas y varias muestran lo mismo").
+// 5 botones: Hoy · Cobros · Pagos · Tesorería · Informes. De 23 pestañas quedan 13; ninguna pantalla se perdió:
+// las que mostraban lo mismo se juntaron (Clientes, Proveedores) y el resto quedó como "vista" dentro de otra.
 export const FINANZAS_GRUPOS: FinanzasGrupoDef[] = [
   {
-    id: "hoy", label: "Hoy", descripcion: "Qué hacer hoy: plata, cruces del banco para confirmar y correo",
+    id: "hoy", label: "Hoy", descripcion: "Plata de hoy y lo que hay que hacer",
     tabs: [
       { id: "cuentas", label: "Resumen" },
-      { id: "para_confirmar", label: "Para confirmar" },
-      { id: "correo", label: "Correo" },
-      { id: "revisar", label: "Revisar", mas: true },
-      { id: "informes", label: "Informes", mas: true },
-      { id: "objetivos", label: "Objetivos", mas: true },
+      { id: "revisar", label: "Para hacer", vistas: [{ id: "revisar", label: "Revisar" }, { id: "correo", label: "Correo" }] },
     ],
   },
   {
-    id: "cobrar", label: "Cobrar", descripcion: "Facturas de venta, clientes y recibos",
+    id: "cobrar", label: "Cobros", descripcion: "Quién nos debe y facturas de venta",
     tabs: [
-      // 16/10/2026: un renglón por cliente (cuánto debe, vencido, próximo vencimiento, último cobro).
-      { id: "cobrar_clientes", label: "Por cliente" },
+      // "Clientes" junta Por cliente + CC Clientes + Vencimientos de venta (botón "Por vencimiento"; clic = ficha).
+      { id: "cc_clientes", label: "Clientes" },
       { id: "facturacion", label: "Facturas de venta" },
-      { id: "recibos", label: "Recibos" },
-      { id: "cc_clientes", label: "CC Clientes", mas: true },
-      { id: "vencimientos", label: "Vencimientos", mas: true },
     ],
   },
   {
-    id: "pagar", label: "Pagar", descripcion: "Cheques, facturas de compra, órdenes de pago y gastos",
+    id: "pagar", label: "Pagos", descripcion: "A quién le debemos, facturas de compra, órdenes de pago y gastos",
     tabs: [
-      // 16/10/2026: línea de tiempo por semana (cheques, facturas de compra, gastos fijos y cuotas aparte).
-      { id: "pagar_semana", label: "Por semana" },
-      { id: "echeqs", label: "Cheques" },
+      // "Proveedores" junta CC Proveedores + Vencimientos de compra.
+      { id: "cc_proveedores", label: "Proveedores" },
       { id: "facturas_compra", label: "Facturas de compra" },
       { id: "ordenes_pago", label: "Órdenes de pago" },
-      { id: "gastos_manuales", label: "Gastos" },
-      { id: "cc_proveedores", label: "CC Proveedores", mas: true },
-      { id: "vencimientos", label: "Vencimientos", mas: true },
-      { id: "gastos_fijos", label: "Gastos fijos", mas: true },
-      { id: "retenciones", label: "Retenciones", mas: true },
-      { id: "lineas_credito", label: "Créditos y préstamos", mas: true },
-      { id: "cheques_tercero", label: "Cheques Martín F.", mas: true },
+      { id: "gastos_manuales", label: "Gastos", vistas: [{ id: "gastos_manuales", label: "Gastos" }, { id: "gastos_fijos", label: "Gastos fijos" }] },
+      { id: "pagar_semana", label: "Próximas semanas" },
     ],
   },
   {
-    id: "bancos", label: "Bancos", descripcion: "Extractos del banco y movimientos",
+    id: "bancos", label: "Tesorería", descripcion: "Banco, cheques y movimientos",
     tabs: [
-      { id: "extractos", label: "Extractos" },
-      { id: "movimientos", label: "Movimientos" },
+      { id: "para_confirmar", label: "Banco", vistas: [{ id: "para_confirmar", label: "Para confirmar" }, { id: "extractos", label: "Extracto y reglas" }] },
+      { id: "echeqs", label: "Cheques", vistas: [{ id: "echeqs", label: "Todos" }, { id: "cheques_tercero", label: "Martín F." }] },
+      { id: "movimientos", label: "Movimientos", vistas: [{ id: "movimientos", label: "Todos" }, { id: "recibos", label: "Recibos de cobro" }] },
+    ],
+  },
+  {
+    id: "informes", label: "Informes", descripcion: "Riesgo BCRA, retenciones, objetivos y créditos",
+    tabs: [
+      { id: "informes", label: "Informes", vistas: [{ id: "informes", label: "Riesgo BCRA" }, { id: "retenciones", label: "Retenciones" }, { id: "objetivos", label: "Objetivos" }, { id: "lineas_credito", label: "Créditos y préstamos" }] },
     ],
   },
 ];
 
-const TODAS: FinanzasTab[] = Array.from(new Set(FINANZAS_GRUPOS.flatMap((g) => g.tabs.map((t) => t.id))));
+/** La pestaña del menú que muestra esta pantalla (la propia o la que la contiene como vista). */
+export function entradaDeTab(tab: FinanzasTab): FinanzasTabDef | undefined {
+  for (const g of FINANZAS_GRUPOS) for (const t of g.tabs) if (t.id === tab || t.vistas?.some((v) => v.id === tab)) return t;
+  return undefined;
+}
 
+/** Pestañas que se unificaron (16/10/2026): el link, botón o lo guardado viejo abre la nueva. */
+const UNIFICADAS: Partial<Record<string, FinanzasTab>> = { cobrar_clientes: "cc_clientes", vencimientos: "cc_proveedores" };
+
+/** La pestaña que se muestra de verdad (si la pedida se unificó con otra). */
+export function tabReal(tab: FinanzasTab): FinanzasTab {
+  return UNIFICADAS[tab] ?? tab;
+}
+
+const TODAS: FinanzasTab[] = Array.from(new Set(FINANZAS_GRUPOS.flatMap((g) => g.tabs.flatMap((t) => [t.id, ...(t.vistas ?? []).map((v) => v.id)]))));
+
+/** Pestaña válida (incluye los nombres viejos de las unificadas; usar tabReal para mostrarla). */
 export function esFinanzasTab(valor: unknown): valor is FinanzasTab {
-  return typeof valor === "string" && (TODAS as string[]).includes(valor);
+  return typeof valor === "string" && ((TODAS as string[]).includes(valor) || valor in UNIFICADAS);
 }
 
 export function esFinanzasGrupo(valor: unknown): valor is FinanzasGrupo {
   return typeof valor === "string" && FINANZAS_GRUPOS.some((g) => g.id === valor);
 }
 
-/** Grupo de una pestaña. Si está en dos grupos (Vencimientos), respeta el preferido. */
+/** Grupo de una pestaña. Si está en dos grupos, respeta el preferido. */
 export function grupoDeTab(tab: FinanzasTab, preferido?: FinanzasGrupo | null): FinanzasGrupo {
-  const grupos = FINANZAS_GRUPOS.filter((g) => g.tabs.some((t) => t.id === tab));
+  tab = tabReal(tab);
+  const grupos = FINANZAS_GRUPOS.filter((g) => g.tabs.some((t) => t.id === tab || t.vistas?.some((v) => v.id === tab)));
   if (preferido && grupos.some((g) => g.id === preferido)) return preferido;
   return grupos[0]?.id ?? "hoy";
-}
-
-/** Qué operaciones muestra Vencimientos según el grupo desde el que se abre. */
-export function operacionVencimientos(grupo: FinanzasGrupo): "" | "venta" | "compra" {
-  if (grupo === "cobrar") return "venta";
-  if (grupo === "pagar") return "compra";
-  return "";
 }
 
 /**
@@ -102,6 +107,9 @@ export function pestanaInicial(
   guardado?: { grupo?: unknown; tab?: unknown } | null,
 ): { grupo: FinanzasGrupo; tab: FinanzasTab } {
   if (params.factura) return { grupo: "cobrar", tab: "facturacion" };
+  const nueva = (t: unknown) => (typeof t === "string" && UNIFICADAS[t]) || t;
+  params = { ...params, tab: nueva(params.tab) as string | null | undefined };
+  if (guardado) guardado = { ...guardado, tab: nueva(guardado.tab) };
   if (esFinanzasTab(params.tab)) {
     return { grupo: grupoDeTab(params.tab, esFinanzasGrupo(params.grupo) ? params.grupo : null), tab: params.tab };
   }

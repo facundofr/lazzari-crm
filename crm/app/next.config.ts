@@ -14,6 +14,9 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // Cada chat puede correr su servidor local con su propia carpeta (NEXT_DIST_DIR=.next-xxx) para no pisarse.
+  // En Vercel no está definida: queda ".next" como siempre.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   eslint: {
     ignoreDuringBuilds: true,
   },

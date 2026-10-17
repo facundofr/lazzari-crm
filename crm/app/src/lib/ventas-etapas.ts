@@ -60,8 +60,9 @@ export function etapaVenta(v: VentaEtapaInput, cobradoPorFactura: Record<string,
   const vigente = facturasOrdenadas.find(f => f.estado !== "anulada") || null;
   const facturada = !!vigente;
   const refacturar = !facturada && facturasOrdenadas.length > 0;
-  const entregado = v.remitos.some(r => r.estado === "entregado");
-  const enEntrega = !entregado && v.remitos.length > 0;
+  // El remito se hace para entregar: con un remito ya cuenta como entregado (el estado del remito no se usa).
+  const entregado = v.remitos.length > 0;
+  const enEntrega = false;
   const esperandoOc = !facturada && v.clientePideOc && !(v.ocCliente || "").trim();
 
   let saldo: number | null = null;

@@ -16,7 +16,7 @@ import { Autocompletar } from "@/components/ui/autocompletar";
 import { facturaDelMes, pagoDelMes, sugerirGastoFijo, montoSicore } from "@/lib/gasto-fijo-factura";
 import { plazoCheque, rangoPlazo, resumenPlazos, type PlazoCheque } from "@/lib/cheques-plazo";
 import { descripcionVep, type DatosVep } from "@/lib/vep";
-import { FINANZAS_GRUPOS, esFinanzasTab, grupoDeTab, operacionVencimientos, pestanaInicial, type FinanzasGrupo, type FinanzasTab } from "@/lib/finanzas-grupos";
+import { FINANZAS_GRUPOS, entradaDeTab, esFinanzasTab, grupoDeTab, pestanaInicial, tabReal, type FinanzasGrupo, type FinanzasTab } from "@/lib/finanzas-grupos";
 import { clasificarMovimiento, esCobroDeCliente, sentidoAjuste, resumirCaja, TIPOS_RETENCION } from "@/lib/tipos-movimiento";
 import { filtrarCheques, MOTIVOS_RECHAZO_CHEQUE, ESTADOS_PENDIENTES } from "@/lib/cheques-filtro";
 import { estadoVisibleFactura } from "@/lib/estado-factura-venta";
@@ -35,8 +35,8 @@ import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factur
 import { useCargaMasiva, EVENTO_FACTURAS_COMPRA } from "@/components/carga-masiva-global";
 import PlanPagos from "@/components/plan-pagos";
 import CuentasFinancieras from "@/components/cuentas-financieras";
-import { CajaProyectadaPanel, ClientesACobrarPanel, PagarPorSemanaPanel, PrestamosPanel, useDolarDivisa, usePrestamos, usePagosGastosFijos } from "@/components/finanzas/caja-proyectada";
-import { gastosFijosEnVentana, type MovCaja } from "@/lib/caja-proyectada";
+import { CajaProyectadaPanel, PagarPorSemanaPanel, PrestamosPanel, useDolarDivisa, usePrestamos, usePagosGastosFijos } from "@/components/finanzas/caja-proyectada";
+import { clientesACobrar, gastosFijosEnVentana, type MovCaja } from "@/lib/caja-proyectada";
 import CoberturaFijos from "@/components/cobertura-fijos";
 import ExtractoBbva from "@/components/extracto-bbva";
 import FinanzasParaConfirmar from "@/components/finanzas-para-confirmar";
@@ -671,14 +671,16 @@ export default function FinanzasPage() {
   const [recibosClientes, setRecibosClientes] = useState<ReciboClienteRow[]>([]);
   const [reciboSearch, setReciboSearch] = useState("");
   const [deudasVenta, setDeudasVenta] = useState<VencimientoDeudaRow[]>([]);
-  const [vencOperacion, setVencOperacion] = useState<"" | "venta" | "compra">(() => inicioFinanzas.tab === "vencimientos" ? operacionVencimientos(inicioFinanzas.grupo) : "");
+  // Vista de Proveedores (16/10/2026): "Vencimientos" se unificó y abre Proveedores → Por vencimiento.
+  const [ccProvVista, setCcProvVista] = useState<"proveedor" | "vencimiento">(() => inicioFinanzas.tab === "cc_proveedores" && new URLSearchParams(typeof window === "undefined" ? "" : window.location.search).get("tab") === "vencimientos" ? "vencimiento" : "proveedor");
 
-  /** Cambia de pestaña y, si hace falta, de grupo. Vencimientos abre filtrado según el grupo (a cobrar / a pagar). */
-  function setTab(nueva: FinanzasTab, grupoElegido?: FinanzasGrupo) {
-    const nuevoGrupo = grupoElegido ?? grupoDeTab(nueva, grupo);
+  /** Cambia de pestaña y, si hace falta, de grupo. Los nombres viejos (pestañas unificadas) abren la nueva. */
+  function setTab(pedida: FinanzasTab, grupoElegido?: FinanzasGrupo) {
+    const nueva = tabReal(pedida);
+    const nuevoGrupo = grupoElegido && FINANZAS_GRUPOS.find((g) => g.id === grupoElegido)?.tabs.some((t) => t.id === nueva) ? grupoElegido : grupoDeTab(nueva, grupo);
     setGrupo(nuevoGrupo);
     setTabActual(nueva);
-    if (nueva === "vencimientos") setVencOperacion(operacionVencimientos(nuevoGrupo));
+    if (pedida === "vencimientos") setCcProvVista("vencimiento");
   }
 
   // Al llegar desde otra pantalla sin recargar (links de Ventas, Proveedores, Facturación), en el primer render
@@ -693,9 +695,6 @@ export default function FinanzasPage() {
     try { window.localStorage.setItem(FINANZAS_ULTIMA_PESTANA, JSON.stringify({ grupo, tab })); } catch { /* sin almacenamiento: no pasa nada */ }
   }, [grupo, tab]);
 
-  const [vencEntidadTipo, setVencEntidadTipo] = useState<"" | "cliente" | "proveedor">("");
-  const [vencMoneda, setVencMoneda] = useState<"" | "ARS" | "USD">("");
-  const [vencEntidad, setVencEntidad] = useState("");
   const [ccClientes, setCcClientes] = useState<CCRow[]>([]);
   const [ccProveedores, setCcProveedores] = useState<CCRow[]>([]);
   const [ccClienteSearch, setCcClienteSearch] = useState("");
@@ -3505,7 +3504,7 @@ export default function FinanzasPage() {
         });
         if (cobros) (cobros as any[]).filter((m: any) => !m.anulado && !movimientosAplicados.has(m.id)).forEach((m: any) => { cobradoMap[m.factura_id] = (cobradoMap[m.factura_id] || 0) + Number(m.monto); });
       }
-      setCcDetailFacturas(facturasPositivas.map((f: any) => ({ id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, vencimiento: f.fecha_vencimiento ?? null, total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), cobrado: cobradoMap[f.id] || 0, moneda: f.moneda ?? "ARS", estado: estadoVisibleFactura(f, f.fecha_vencimiento, todayAR()) })));
+      setCcDetailFacturas(facturasPositivas.map((f: any) => ({ id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, vencimiento: f.fecha_vencimiento ?? f.fecha ?? null, total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), cobrado: cobradoMap[f.id] || 0, moneda: f.moneda ?? "ARS", estado: estadoVisibleFactura(f, f.fecha_vencimiento, todayAR()) })));
       let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, factura_id, conciliado, anulado, cliente_id, proveedor_id, clientes(razon_social), proveedores(razon_social)").eq("cliente_id" as any, cliente.id).order("fecha", { ascending: false });
       if (sociedadActiva?.id) qM = qM.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: mData, error: mError } = await qM;
@@ -3930,23 +3929,18 @@ export default function FinanzasPage() {
     }))
     .filter((deuda) => deuda.saldo > 0.01), [facturasCompra]);
 
-  const vencimientosFiltrados = useMemo(() => [...deudasVenta, ...deudasCompra]
-    .filter((deuda) => !vencOperacion || deuda.operacion === vencOperacion)
-    .filter((deuda) => !vencEntidadTipo || deuda.entidad_tipo === vencEntidadTipo)
-    .filter((deuda) => !vencMoneda || deuda.moneda === vencMoneda)
-    .filter((deuda) => !vencEntidad.trim() || deuda.entidad_nombre.toLocaleLowerCase().includes(vencEntidad.trim().toLocaleLowerCase()))
-    .sort((a, b) => a.vencimiento.localeCompare(b.vencimiento)), [deudasVenta, deudasCompra, vencOperacion, vencEntidadTipo, vencMoneda, vencEntidad]);
-
   const recibosFiltrados = useMemo(() => recibosClientes.filter((recibo) => {
     const query = reciboSearch.trim().toLocaleLowerCase();
     return !query || recibo.cliente_nombre.toLocaleLowerCase().includes(query) || recibo.descripcion.toLocaleLowerCase().includes(query);
   }), [recibosClientes, reciboSearch]);
 
   const tabsDelGrupo = FINANZAS_GRUPOS.find((g) => g.id === grupo)?.tabs ?? FINANZAS_GRUPOS[0].tabs;
-  const iconoGrupo: Record<FinanzasGrupo, typeof Wallet> = { hoy: CalendarDays, cobrar: ArrowDownLeft, pagar: ArrowUpRight, bancos: Wallet };
+  const iconoGrupo: Record<FinanzasGrupo, typeof Wallet> = { hoy: CalendarDays, cobrar: ArrowDownLeft, pagar: ArrowUpRight, bancos: Landmark, informes: FileText };
+  // Pestaña del menú activa (la propia o la que contiene esta pantalla como vista) y sus vistas.
+  const entradaActiva = entradaDeTab(tab);
   const tabsALaVista = tabsDelGrupo.filter((t) => !t.mas);
   const tabsEnMas = tabsDelGrupo.filter((t) => t.mas);
-  const tabEnMas = tabsEnMas.find((t) => t.id === tab);
+  const tabEnMas = tabsEnMas.find((t) => t === entradaActiva);
   // Finanzas → Hoy: facturas de compra que vencen hasta el domingo (incluye vencidas), para "Pagos de esta semana".
   const pagosSemana = useMemo(() => {
     const hoyStr = todayAR();
@@ -4003,6 +3997,25 @@ export default function FinanzasPage() {
     }
     return m;
   }, [movimientos]);
+  // Clientes (16/10/2026): una sola lista que junta Por cliente + CC Clientes + Vencimientos de venta.
+  const aCobrarPorCliente = useMemo(() => new Map(clientesACobrar(deudasVenta, flujoCaja.hoy, ultimosCobros, tcDivisa).map((c) => [c.cliente_id, c])), [deudasVenta, flujoCaja.hoy, ultimosCobros, tcDivisa]);
+  const [ccVista, setCcVista] = useState<"cliente" | "vencimiento">("cliente");
+  const [ccSoloConSaldo, setCcSoloConSaldo] = useState(true);
+  const [ccVencMoneda, setCcVencMoneda] = useState<"" | "ARS" | "USD">("");
+  // Proveedores (16/10/2026): CC Proveedores + Vencimientos de compra.
+  const ultimosPagos = useMemo(() => {
+    const m = new Map<string, { fecha: string; monto: number }>();
+    for (const mv of movimientos) {
+      if (mv.anulado || !mv.proveedor_id || !["pago", "cheque_emitido", "transferencia", "efectivo"].includes(String(mv.tipo))) continue;
+      const prev = m.get(mv.proveedor_id);
+      if (!prev || mv.fecha > prev.fecha) m.set(mv.proveedor_id, { fecha: mv.fecha, monto: Number(mv.monto) });
+      else if (mv.fecha === prev.fecha) prev.monto += Number(mv.monto);
+    }
+    return m;
+  }, [movimientos]);
+  const aPagarPorProveedor = useMemo(() => new Map(clientesACobrar(deudasCompra, flujoCaja.hoy, ultimosPagos, tcDivisa).map((c) => [c.cliente_id, c])), [deudasCompra, flujoCaja.hoy, ultimosPagos, tcDivisa]);
+  const [ccProvSoloConSaldo, setCcProvSoloConSaldo] = useState(true);
+  const [ccProvVencMoneda, setCcProvVencMoneda] = useState<"" | "ARS" | "USD">("");
 
   // Filtros de retenciones
   const [retFilterDesde, setRetFilterDesde] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`; });
@@ -4105,9 +4118,9 @@ export default function FinanzasPage() {
         {cargaLentaAviso}
         {errorCargaAviso}
 
-        {/* Grupos (Hoy / Cobrar / Pagar / Cheques…) y sus pestañas, en una sola fila */}
+        {/* Grupos (Hoy / Cobros / Pagos / Tesorería / Informes), sus pestañas y, si la pestaña junta varias pantallas, sus vistas */}
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex gap-1 overflow-x-auto rounded-lg border border-zinc-200 bg-white p-0.5 dark:border-zinc-700 dark:bg-zinc-900">
+          <div data-menu="grupos" className="flex gap-1 overflow-x-auto rounded-lg border border-zinc-200 bg-white p-0.5 dark:border-zinc-700 dark:bg-zinc-900">
             {FINANZAS_GRUPOS.map((g) => {
               const Icono = iconoGrupo[g.id];
               const activo = grupo === g.id;
@@ -4122,11 +4135,11 @@ export default function FinanzasPage() {
             })}
           </div>
           {tabsDelGrupo.length > 1 && (
-            <div className="flex items-center gap-0.5 rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800">
+            <div data-menu="pestanas" className="flex items-center gap-0.5 rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800">
               {tabsALaVista.map((t) => (
                 <button key={t.id} onClick={() => { setTab(t.id, grupo); setCcDetailCliente(null); setCcDetailProveedor(null); fetchData(); }}
                   className={`rounded-md px-2.5 py-1 text-[13px] font-medium transition-colors whitespace-nowrap ${
-                    tab === t.id ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                    t === entradaActiva ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
                   }`}>
                   {t.label}
                 </button>
@@ -4149,6 +4162,16 @@ export default function FinanzasPage() {
                   </div>
                 </details>
               )}
+            </div>
+          )}
+          {entradaActiva?.vistas && (
+            <div data-menu="vistas" className="flex items-center gap-0.5 rounded-lg border border-zinc-200 p-0.5 dark:border-zinc-700">
+              {entradaActiva.vistas.map((v) => (
+                <button key={v.id} type="button" onClick={() => { setTab(v.id, grupo); setCcDetailCliente(null); setCcDetailProveedor(null); }}
+                  className={`rounded-md px-2 py-0.5 text-xs font-medium whitespace-nowrap ${tab === v.id ? "bg-orange-50 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"}`}>
+                  {v.label}
+                </button>
+              ))}
             </div>
           )}
         </div>
@@ -4196,9 +4219,6 @@ export default function FinanzasPage() {
           />
         )}
         {tab === "cheques_tercero" && <ChequesTercero />}
-        {tab === "cobrar_clientes" && (
-          <ClientesACobrarPanel listo={datosCompletos} hoy={flujoCaja.hoy} deudas={deudasVenta} ultimosCobros={ultimosCobros} tc={tcDivisa} onIr={(x) => { if (esFinanzasTab(x)) setTab(x); }} />
-        )}
         {tab === "pagar_semana" && (
           <PagarPorSemanaPanel listo={datosCompletos} hoy={flujoCaja.hoy} salidas={flujoCaja.salidas} prestamos={prestamos} faltaTablaPrestamos={faltaTablaPrestamos} onIr={(x) => { if (esFinanzasTab(x)) setTab(x, x === "vencimientos" ? "pagar" : undefined); }} />
         )}
@@ -4318,50 +4338,6 @@ export default function FinanzasPage() {
         )}
 
         {/* ── Vencimientos de deuda ── */}
-        {tab === "vencimientos" && (
-          <>
-            <div>
-              <h2 className="text-lg font-semibold text-zinc-900 dark:text-white">Vencimientos de deuda</h2>
-              <p className="text-sm text-zinc-500">Saldos abiertos calculados desde facturas, notas de crédito, cobros y pagos reales.</p>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-4">
-              <select value={vencOperacion} onChange={(event) => setVencOperacion(event.target.value as "" | "venta" | "compra")} className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                <option value="">Compra y venta</option><option value="venta">Venta / a cobrar</option><option value="compra">Compra / a pagar</option>
-              </select>
-              <select value={vencEntidadTipo} onChange={(event) => setVencEntidadTipo(event.target.value as "" | "cliente" | "proveedor")} className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                <option value="">Clientes y proveedores</option><option value="cliente">Clientes</option><option value="proveedor">Proveedores</option>
-              </select>
-              <select value={vencMoneda} onChange={(event) => setVencMoneda(event.target.value as "" | "ARS" | "USD")} className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                <option value="">ARS y USD</option><option value="ARS">ARS</option><option value="USD">USD</option>
-              </select>
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-                <input value={vencEntidad} onChange={(event) => setVencEntidad(event.target.value)} placeholder="Cliente o proveedor..." className="w-full rounded-lg border border-zinc-200 py-2 pl-9 pr-3 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-              </div>
-            </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <StatCard title="A cobrar ARS" value={formatCurrency(vencimientosFiltrados.filter((item) => item.operacion === "venta" && item.moneda === "ARS").reduce((sum, item) => sum + item.saldo, 0))} icon={ArrowDownLeft} iconColor="text-emerald-600" />
-              <StatCard title="A pagar ARS" value={formatCurrency(vencimientosFiltrados.filter((item) => item.operacion === "compra" && item.moneda === "ARS").reduce((sum, item) => sum + item.saldo, 0))} icon={ArrowUpRight} iconColor="text-red-600" />
-              <StatCard title="Documentos vencidos" value={String(vencimientosFiltrados.filter((item) => item.vencimiento < todayAR()).length)} icon={AlertTriangle} iconColor="text-amber-600" />
-            </div>
-            <Card className="overflow-hidden p-0">
-              <DataTable<VencimientoDeudaRow>
-                columns={[
-                  { key: "vencimiento", label: "Vencimiento", sortable: true, render: (row) => <span className={row.vencimiento < todayAR() ? "font-semibold text-red-600" : ""}>{formatDate(row.vencimiento)}</span> },
-                  { key: "operacion", label: "Operación", sortable: true, render: (row) => <Badge variant={row.operacion === "venta" ? "success" : "danger"}>{row.operacion === "venta" ? "Venta" : "Compra"}</Badge> },
-                  { key: "entidad_tipo", label: "Tipo", render: (row) => <Badge variant="outline">{row.entidad_tipo === "cliente" ? "Cliente" : "Proveedor"}</Badge> },
-                  { key: "entidad_nombre", label: "Entidad", sortable: true, render: (row) => <span className="font-medium">{row.entidad_nombre}</span> },
-                  { key: "documento", label: "Documento", render: (row) => <span className="font-mono text-xs">{row.documento}</span> },
-                  { key: "moneda", label: "Moneda", render: (row) => <Badge variant="outline">{row.moneda}</Badge> },
-                  { key: "saldo", label: "Saldo", className: "text-right", sortable: true, render: (row) => <span className={`block text-right font-mono font-semibold ${row.operacion === "venta" ? "text-emerald-600" : "text-red-600"}`}>{formatCurrency(row.saldo, row.moneda)}</span> },
-                ]}
-                data={vencimientosFiltrados}
-                emptyMessage="No hay saldos abiertos con estos filtros"
-              />
-            </Card>
-          </>
-        )}
-
         {/* ── Movimiento Detail Panel ── */}
         {selectedMov && (
           <>
@@ -4936,60 +4912,130 @@ export default function FinanzasPage() {
         {/* ── CC Clientes ── */}
         {tab === "cc_clientes" && (
           <>
-            {!ccDetailCliente ? (
+            {!ccDetailCliente ? (() => {
+              // Clientes (16/10/2026): junta Por cliente (vencido, próximo vencimiento, último cobro),
+              // CC Clientes (saldo con ajustes y a favor, límite, le debemos, neto) y Vencimientos de venta (botón "Por vencimiento").
+              const pesos = (m: { ARS: { vencido: number; total: number }; USD: { vencido: number; total: number } } | undefined, k: "vencido" | "total") => m ? m.ARS[k] + m.USD[k] * (tcDivisa || 0) : 0;
+              const conSaldo = (c: CCRow) => Math.abs(Number(c.saldo_ars || 0)) > 0.005 || Math.abs(Number(c.saldo_usd || 0)) > 0.005 || aCobrarPorCliente.has(c.id);
+              const filas = filteredCcClientes.filter((c) => !ccSoloConSaldo || conSaldo(c))
+                .sort((x, y) => pesos(aCobrarPorCliente.get(y.id), "vencido") - pesos(aCobrarPorCliente.get(x.id), "vencido")
+                  || (Number(y.saldo_ars || 0) + Number(y.saldo_usd || 0) * (tcDivisa || 0)) - (Number(x.saldo_ars || 0) + Number(x.saldo_usd || 0) * (tcDivisa || 0)));
+              const deudores = [...aCobrarPorCliente.values()];
+              const suma = (k: "total" | "vencido", m: "ARS" | "USD") => deudores.reduce((acc, c) => acc + c[m][k], 0);
+              const montos = (c: { ARS: { total: number; vencido: number }; USD: { total: number; vencido: number } }, k: "total" | "vencido") =>
+                [c.ARS[k] ? formatCurrency(c.ARS[k]) : "", c.USD[k] ? formatCurrency(c.USD[k], "USD") : ""].filter(Boolean).join(" + ");
+              const hoyStr = flujoCaja.hoy;
+              const busqueda = ccClienteSearch.trim().toLowerCase();
+              const porVencimiento = deudasVenta
+                .filter((d) => !ccVencMoneda || d.moneda === ccVencMoneda)
+                .filter((d) => !busqueda || d.entidad_nombre.toLowerCase().includes(busqueda) || d.documento.toLowerCase().includes(busqueda))
+                .sort((x, y) => x.vencimiento.localeCompare(y.vencimiento));
+              const abrirFicha = (clienteId: string) => { const c = ccClientes.find((x) => x.id === clienteId); if (c) fetchCCDetailCliente(c); };
+              const btn = (activo: boolean) => `rounded-md px-2.5 py-1 text-[13px] font-medium ${activo ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"}`;
+              return (
               <>
-                <div className="mb-4 flex items-center gap-2">
+                <div className="mb-3 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900">
+                  <span><b className="text-lg">{deudores.length}</b> clientes deben</span>
+                  <span>Nos deben <b>{formatCurrency(suma("total", "ARS"))}</b>{suma("total", "USD") ? ` + ${formatCurrency(suma("total", "USD"), "USD")}` : ""}</span>
+                  <span className="text-red-600">Vencido <b>{formatCurrency(suma("vencido", "ARS"))}</b>{suma("vencido", "USD") ? ` + ${formatCurrency(suma("vencido", "USD"), "USD")}` : ""}</span>
+                  {!datosCompletos && <span className="text-xs text-zinc-400">Calculando vencidos…</span>}
+                </div>
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  <div className="flex items-center gap-0.5 rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800">
+                    <button type="button" onClick={() => setCcVista("cliente")} className={btn(ccVista === "cliente")}>Por cliente</button>
+                    <button type="button" onClick={() => setCcVista("vencimiento")} className={btn(ccVista === "vencimiento")}>Por vencimiento</button>
+                  </div>
                   <div className="relative flex-1 max-w-sm">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
                     <input value={ccClienteSearch} onChange={(e) => setCcClienteSearch(e.target.value)}
-                      placeholder="Buscar por nombre o CUIT..."
-                      className="w-full rounded-lg border border-zinc-200 pl-9 pr-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                      placeholder={ccVista === "cliente" ? "Buscar por nombre o CUIT..." : "Buscar cliente o factura..."}
+                      className="w-full rounded-lg border border-zinc-200 pl-9 pr-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                   </div>
-                  {ccClienteSearch && <span className="text-xs text-zinc-500">{filteredCcClientes.length} de {ccClientes.length}</span>}
-                  <button onClick={() => {
-                    const lines = ["Cliente,CUIT,Dias CC,Forma de Pago,Limite,Saldo"];
-                    filteredCcClientes.forEach(c => {
-                      lines.push(`"${c.razon_social}","${c.cuit || ""}",${c.dias_cuenta_corriente},"${c.forma_pago}",${c.limite_credito.toFixed(2)},${c.saldo_cuenta_corriente.toFixed(2)}`);
+                  {ccVista === "cliente" ? (
+                    <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-300">
+                      <input type="checkbox" checked={!ccSoloConSaldo} onChange={(e) => setCcSoloConSaldo(!e.target.checked)} /> Ver también los que están en cero
+                    </label>
+                  ) : (
+                    <select value={ccVencMoneda} onChange={(e) => setCcVencMoneda(e.target.value as "" | "ARS" | "USD")} className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                      <option value="">ARS y USD</option><option value="ARS">ARS</option><option value="USD">USD</option>
+                    </select>
+                  )}
+                  {ccVista === "cliente" && <button onClick={() => {
+                    const lines = ["Cliente,CUIT,Dias CC,Forma de Pago,Limite,Saldo,Saldo USD,Vencido ARS,Vencido USD,Prox. vencimiento,Ultimo cobro"];
+                    filas.forEach(c => {
+                      const d = aCobrarPorCliente.get(c.id);
+                      lines.push(`"${c.razon_social}","${c.cuit || ""}",${c.dias_cuenta_corriente},"${c.forma_pago}",${c.limite_credito.toFixed(2)},${c.saldo_cuenta_corriente.toFixed(2)},${Number(c.saldo_usd || 0).toFixed(2)},${(d?.ARS.vencido || 0).toFixed(2)},${(d?.USD.vencido || 0).toFixed(2)},${d?.proximoVencimiento || ""},${d?.ultimoCobro?.fecha || ""}`);
                     });
                     const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
-                    const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `CC_Clientes_${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url);
-                  }} className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors ml-auto">
+                    const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `Clientes_${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url);
+                  }} className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors ml-auto">
                     <Download className="h-4 w-4" /> Exportar CSV
-                  </button>
+                  </button>}
                 </div>
+                {ccVista === "cliente" ? (
                 <Card className="p-0 overflow-hidden">
                   <DataTable<CCRow>
                     columns={[
-                      { key: "razon_social", label: "Cliente", sortable: true, render: (row) => <span className="font-medium">{row.razon_social}</span> },
-                      { key: "cuit", label: "CUIT", render: (row) => <span className="font-mono text-xs text-zinc-500">{row.cuit}</span> },
-                      { key: "dias_cuenta_corriente", label: "Dias CC", sortable: true, render: (row) => <span>{row.dias_cuenta_corriente} dias</span> },
-                      { key: "forma_pago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.forma_pago || "—"}</Badge> },
-                      { key: "limite_credito", label: "Limite", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
-                      { key: "saldo_cuenta_corriente", label: "Nos debe", className: "text-right", sortable: true, render: (row) => {
+                      { key: "razon_social", label: "Cliente", sortable: true, render: (row) => {
+                        const d = aCobrarPorCliente.get(row.id);
+                        return <div><span className="font-medium">{row.razon_social}</span>{d ? <span className="ml-1 text-xs text-zinc-500">· {d.facturas} fact.</span> : null}{row.cuit && <p className="font-mono text-[11px] text-zinc-400">{row.cuit}</p>}</div>;
+                      }},
+                      { key: "saldo_cuenta_corriente", label: "Saldo", className: "text-right", sortable: true, render: (row) => {
                         const pct = row.limite_credito ? (Math.max(0, row.saldo_cuenta_corriente) / row.limite_credito) * 100 : 0;
                         // B6: saldo negativo = el cliente tiene saldo a favor (se muestra en verde, no se recorta a cero).
                         const aFavorARS = Number(row.saldo_ars || 0) < -0.005;
                         const aFavorUSD = Number(row.saldo_usd || 0) < -0.005;
-                        return (<div className="text-right"><span className={`font-mono font-semibold ${aFavorARS ? "text-emerald-600" : pct > 80 ? "text-red-600" : ""}`}>{aFavorARS ? `Saldo a favor ${formatCurrency(Math.abs(Number(row.saldo_ars || 0)))}` : formatCurrency(Number(row.saldo_ars || 0))}</span>{Math.abs(Number(row.saldo_usd || 0)) > 0.005 && <p className={`font-mono text-xs ${aFavorUSD ? "text-emerald-600" : "text-zinc-500"}`}>{aFavorUSD ? `Saldo a favor ${formatCurrency(Math.abs(Number(row.saldo_usd)), "USD")}` : formatCurrency(Number(row.saldo_usd), "USD")}</p>}{row.limite_credito > 0 && row.saldo_cuenta_corriente > row.limite_credito && <p className="mt-1 text-xs text-red-600 dark:text-red-400">Límite de crédito excedido</p>}<div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.max(0, Math.min(pct, 100))}%` }} /></div></div>);
+                        const hayARS = Math.abs(Number(row.saldo_ars || 0)) > 0.005;
+                        const hayUSD = Math.abs(Number(row.saldo_usd || 0)) > 0.005;
+                        return (<div className="text-right">{(hayARS || !hayUSD) && <span className={`font-mono font-semibold ${aFavorARS ? "text-emerald-600" : pct > 80 ? "text-red-600" : ""}`}>{aFavorARS ? `Saldo a favor ${formatCurrency(Math.abs(Number(row.saldo_ars || 0)))}` : formatCurrency(Number(row.saldo_ars || 0))}</span>}{hayUSD && <p className={`font-mono ${hayARS ? "text-xs" : "font-semibold"} ${aFavorUSD ? "text-emerald-600" : hayARS ? "text-zinc-500" : ""}`}>{aFavorUSD ? `Saldo a favor ${formatCurrency(Math.abs(Number(row.saldo_usd)), "USD")}` : formatCurrency(Number(row.saldo_usd), "USD")}</p>}{row.limite_credito > 0 && row.saldo_cuenta_corriente > row.limite_credito && <p className="mt-1 text-xs text-red-600 dark:text-red-400">Límite de crédito excedido</p>}{row.limite_credito > 0 && <div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.max(0, Math.min(pct, 100))}%` }} /></div>}</div>);
                       }},
-                      { key: "cuit" as any, label: "Le debemos", className: "text-right", sortable: false, render: (row) => {
+                      { key: "vencido", label: "Vencido", className: "text-right", sortable: true, sortValue: (row) => pesos(aCobrarPorCliente.get(row.id), "vencido"), render: (row) => {
+                        const d = aCobrarPorCliente.get(row.id);
+                        if (!d || (!d.ARS.vencido && !d.USD.vencido)) return <span className="block text-right text-xs text-zinc-300 dark:text-zinc-600">—</span>;
+                        return <span className="block whitespace-nowrap text-right font-mono font-semibold text-red-600">{montos(d, "vencido")}<span className="ml-1 font-normal">({d.diasMasVencida} d)</span></span>;
+                      }},
+                      { key: "proximo", label: "Próx. vencimiento", sortable: true, sortValue: (row) => aCobrarPorCliente.get(row.id)?.proximoVencimiento || "9999", render: (row) => {
+                        const v = aCobrarPorCliente.get(row.id)?.proximoVencimiento;
+                        return <span className="text-sm">{v ? formatDate(v) : "—"}</span>;
+                      }},
+                      { key: "ultimo_cobro", label: "Último cobro", sortable: true, sortValue: (row) => ultimosCobros.get(row.id)?.fecha || "", render: (row) => {
+                        const u = ultimosCobros.get(row.id);
+                        return <span className="text-xs text-zinc-600 dark:text-zinc-300">{u ? `${formatDate(u.fecha)} · ${formatCurrency(u.monto)}` : "—"}</span>;
+                      }},
+                      { key: "le_debemos", label: "Le debemos", className: "text-right", sortable: false, render: (row) => {
                         const saldoProv = row.cuit ? cuitToSaldoProveedor[row.cuit] : undefined;
                         if (saldoProv === undefined || saldoProv === 0) return <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>;
-                        return <span className="font-mono font-semibold text-red-600">{formatCurrency(saldoProv)}</span>;
-                      }},
-                      { key: "id" as any, label: "Neto", className: "text-right", sortable: false, render: (row) => {
-                        const saldoProv = row.cuit ? (cuitToSaldoProveedor[row.cuit] ?? 0) : 0;
-                        if (!row.cuit || !cuitToSaldoProveedor[row.cuit]) return <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>;
                         const neto = row.saldo_cuenta_corriente - saldoProv;
-                        return <span className={`font-mono font-bold ${neto >= 0 ? "text-emerald-600" : "text-red-600"}`}>{neto >= 0 ? "+" : ""}{formatCurrency(neto)}</span>;
+                        return <div className="text-right"><span className="font-mono font-semibold text-red-600">{formatCurrency(saldoProv)}</span><p className={`font-mono text-xs font-bold ${neto >= 0 ? "text-emerald-600" : "text-red-600"}`}>Neto {neto >= 0 ? "+" : ""}{formatCurrency(neto)}</p></div>;
                       }},
+                      { key: "dias_cuenta_corriente", label: "Condición", sortable: true, render: (row) => (
+                        <div className="text-xs text-zinc-600 dark:text-zinc-300"><span>{row.dias_cuenta_corriente} días</span>{row.forma_pago ? <span> · {row.forma_pago}</span> : null}{row.limite_credito > 0 && <p className="text-zinc-400">Límite {formatCurrency(row.limite_credito)}</p>}</div>
+                      )},
                     ]}
-                    data={filteredCcClientes}
+                    data={filas}
                     onRowClick={(row) => fetchCCDetailCliente(row)}
+                    emptyMessage={ccSoloConSaldo ? "Ningún cliente con saldo" : "Sin clientes"}
                   />
                 </Card>
+                ) : (
+                <Card className="p-0 overflow-hidden">
+                  <DataTable<VencimientoDeudaRow>
+                    columns={[
+                      { key: "vencimiento", label: "Vencimiento", sortable: true, render: (row) => <span className={row.vencimiento.slice(0, 10) < hoyStr ? "font-semibold text-red-600" : ""}>{formatDate(row.vencimiento)}</span> },
+                      { key: "entidad_nombre", label: "Cliente", sortable: true, render: (row) => <span className="font-medium">{row.entidad_nombre}</span> },
+                      { key: "documento", label: "Factura", render: (row) => <span className="font-mono text-xs">{row.documento}</span> },
+                      { key: "moneda", label: "Moneda", render: (row) => <Badge variant="outline">{row.moneda}</Badge> },
+                      { key: "saldo", label: "Saldo", className: "text-right", sortable: true, render: (row) => <span className="block text-right font-mono font-semibold text-emerald-600">{formatCurrency(row.saldo, row.moneda)}</span> },
+                    ]}
+                    data={porVencimiento}
+                    onRowClick={(row) => abrirFicha(row.entidad_id)}
+                    emptyMessage="No hay facturas con saldo con estos filtros"
+                  />
+                </Card>
+                )}
               </>
-            ) : (
+              );
+            })() : (
               <>
                 {/* Detail view for a single client */}
                 <div className="mb-4 flex items-center gap-3">
@@ -5065,55 +5111,123 @@ export default function FinanzasPage() {
         {/* ── CC Proveedores ── */}
         {tab === "cc_proveedores" && (
           <>
-            {!ccDetailProveedor ? (<>
-              <div className="mb-4 flex items-center gap-2">
+            {!ccDetailProveedor ? (() => {
+              // Proveedores (16/10/2026): junta CC Proveedores (saldo, a favor, nos debe, neto, condición)
+              // y Vencimientos de compra (botón "Por vencimiento"), con vencido, próximo vencimiento y último pago.
+              const pesos = (m: { ARS: { vencido: number; total: number }; USD: { vencido: number; total: number } } | undefined, k: "vencido" | "total") => m ? m.ARS[k] + m.USD[k] * (tcDivisa || 0) : 0;
+              const conSaldo = (p: CCRow) => Math.abs(Number(p.saldo_ars || 0)) > 0.005 || Math.abs(Number(p.saldo_usd || 0)) > 0.005 || aPagarPorProveedor.has(p.id);
+              const filas = filteredCcProveedores.filter((p) => !ccProvSoloConSaldo || conSaldo(p))
+                .sort((x, y) => pesos(aPagarPorProveedor.get(y.id), "vencido") - pesos(aPagarPorProveedor.get(x.id), "vencido")
+                  || (Number(y.saldo_ars || 0) + Number(y.saldo_usd || 0) * (tcDivisa || 0)) - (Number(x.saldo_ars || 0) + Number(x.saldo_usd || 0) * (tcDivisa || 0)));
+              const acreedores = [...aPagarPorProveedor.values()];
+              const suma = (k: "total" | "vencido", m: "ARS" | "USD") => acreedores.reduce((acc, c) => acc + c[m][k], 0);
+              const montos = (c: { ARS: { total: number; vencido: number }; USD: { total: number; vencido: number } }, k: "total" | "vencido") =>
+                [c.ARS[k] ? formatCurrency(c.ARS[k]) : "", c.USD[k] ? formatCurrency(c.USD[k], "USD") : ""].filter(Boolean).join(" + ");
+              const hoyStr = flujoCaja.hoy;
+              const busqueda = ccProveedorSearch.trim().toLowerCase();
+              const porVencimiento = deudasCompra
+                .filter((d) => !ccProvVencMoneda || d.moneda === ccProvVencMoneda)
+                .filter((d) => !busqueda || d.entidad_nombre.toLowerCase().includes(busqueda) || String(d.documento).toLowerCase().includes(busqueda))
+                .sort((x, y) => x.vencimiento.localeCompare(y.vencimiento));
+              const abrirFicha = (provId: string) => { const p = ccProveedores.find((x) => x.id === provId); if (p) fetchCCDetailProveedor(p); };
+              const btn = (activo: boolean) => `rounded-md px-2.5 py-1 text-[13px] font-medium ${activo ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"}`;
+              return (<>
+              <div className="mb-3 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900">
+                <span><b className="text-lg">{acreedores.length}</b> proveedores con facturas a pagar</span>
+                <span>Les debemos <b>{formatCurrency(suma("total", "ARS"))}</b>{suma("total", "USD") ? ` + ${formatCurrency(suma("total", "USD"), "USD")}` : ""}</span>
+                <span className="text-red-600">Vencido <b>{formatCurrency(suma("vencido", "ARS"))}</b>{suma("vencido", "USD") ? ` + ${formatCurrency(suma("vencido", "USD"), "USD")}` : ""}</span>
+                <span className="text-xs text-zinc-500">Los cheques ya entregados están en Cheques.</span>
+              </div>
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-0.5 rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800">
+                  <button type="button" onClick={() => setCcProvVista("proveedor")} className={btn(ccProvVista === "proveedor")}>Por proveedor</button>
+                  <button type="button" onClick={() => setCcProvVista("vencimiento")} className={btn(ccProvVista === "vencimiento")}>Por vencimiento</button>
+                </div>
                 <div className="relative flex-1 max-w-sm">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
-                  <input value={ccProveedorSearch} onChange={(e) => setCcProveedorSearch(e.target.value)} placeholder="Buscar por nombre o CUIT..." className="w-full rounded-lg border border-zinc-200 pl-9 pr-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                  <input value={ccProveedorSearch} onChange={(e) => setCcProveedorSearch(e.target.value)} placeholder={ccProvVista === "proveedor" ? "Buscar por nombre o CUIT..." : "Buscar proveedor o factura..."} className="w-full rounded-lg border border-zinc-200 pl-9 pr-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                 </div>
-                {ccProveedorSearch && <span className="text-xs text-zinc-500">{filteredCcProveedores.length} de {ccProveedores.length}</span>}
-                <button onClick={() => {
-                  const lines = ["Proveedor,CUIT,Dias CC,Forma de Pago,Limite,Saldo"];
-                  filteredCcProveedores.forEach(p => {
-                    lines.push(`"${p.razon_social}","${p.cuit || ""}",${p.dias_cuenta_corriente},"${p.forma_pago}",${p.limite_credito.toFixed(2)},${p.saldo_cuenta_corriente.toFixed(2)}`);
+                {ccProvVista === "proveedor" ? (
+                  <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-300">
+                    <input type="checkbox" checked={!ccProvSoloConSaldo} onChange={(e) => setCcProvSoloConSaldo(!e.target.checked)} /> Ver también los que están en cero
+                  </label>
+                ) : (
+                  <select value={ccProvVencMoneda} onChange={(e) => setCcProvVencMoneda(e.target.value as "" | "ARS" | "USD")} className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                    <option value="">ARS y USD</option><option value="ARS">ARS</option><option value="USD">USD</option>
+                  </select>
+                )}
+                {ccProvVista === "proveedor" && <button onClick={() => {
+                  const lines = ["Proveedor,CUIT,Dias CC,Forma de Pago,Limite,Saldo,Saldo USD,Vencido ARS,Vencido USD,Prox. vencimiento,Ultimo pago"];
+                  filas.forEach(p => {
+                    const d = aPagarPorProveedor.get(p.id);
+                    lines.push(`"${p.razon_social}","${p.cuit || ""}",${p.dias_cuenta_corriente},"${p.forma_pago}",${p.limite_credito.toFixed(2)},${p.saldo_cuenta_corriente.toFixed(2)},${Number(p.saldo_usd || 0).toFixed(2)},${(d?.ARS.vencido || 0).toFixed(2)},${(d?.USD.vencido || 0).toFixed(2)},${d?.proximoVencimiento || ""},${ultimosPagos.get(p.id)?.fecha || ""}`);
                   });
                   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
-                  const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `CC_Proveedores_${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url);
-                }} className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors ml-auto">
+                  const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `Proveedores_${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url);
+                }} className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors ml-auto">
                   <Download className="h-4 w-4" /> Exportar CSV
-                </button>
+                </button>}
               </div>
+              {ccProvVista === "proveedor" ? (
               <Card className="p-0 overflow-hidden">
                 <DataTable<CCRow>
                   columns={[
-                    { key: "razon_social", label: "Proveedor", sortable: true, render: (row) => <span className="font-medium">{row.razon_social}</span> },
-                    { key: "cuit", label: "CUIT", render: (row) => <span className="font-mono text-xs text-zinc-500">{row.cuit}</span> },
-                    { key: "rubro", label: "Rubro", render: (row) => <Badge variant="info">{(row.rubro ?? "").split(" ")[0]}</Badge> },
-                    { key: "dias_cuenta_corriente", label: "Dias CC", sortable: true, render: (row) => <span>{row.dias_cuenta_corriente} dias</span> },
-                    { key: "forma_pago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.forma_pago || "—"}</Badge> },
-                    { key: "limite_credito", label: "Limite", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
-                    { key: "saldo_cuenta_corriente", label: "Le debemos", className: "text-right", sortable: true, render: (row) => {
-                      const saldoAFavor = row.saldo_cuenta_corriente < -0.005;
-                      const pct = row.limite_credito ? (Math.max(0, row.saldo_cuenta_corriente) / row.limite_credito) * 100 : 0;
-                      return (<div className="text-right"><span className={`font-mono font-semibold ${saldoAFavor ? "text-emerald-600" : "text-red-600"}`}>{saldoAFavor ? `A favor ${formatCurrency(Math.abs(Number(row.saldo_ars || 0)))}` : formatCurrency(Number(row.saldo_ars || 0))}</span>{Math.abs(Number(row.saldo_usd || 0)) > 0.005 && <p className={`font-mono text-xs ${Number(row.saldo_usd) < 0 ? "text-emerald-600" : "text-zinc-500"}`}>{Number(row.saldo_usd) < 0 ? `A favor ${formatCurrency(Math.abs(Number(row.saldo_usd)), "USD")}` : formatCurrency(Number(row.saldo_usd), "USD")}</p>}<div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
+                    { key: "razon_social", label: "Proveedor", sortable: true, render: (row) => {
+                      const d = aPagarPorProveedor.get(row.id);
+                      return <div><span className="font-medium">{row.razon_social}</span>{d ? <span className="ml-1 text-xs text-zinc-500">· {d.facturas} fact.</span> : null}<p className="text-[11px] text-zinc-400"><span className="font-mono">{row.cuit}</span>{row.rubro ? ` · ${(row.rubro ?? "").split(" ")[0]}` : ""}</p></div>;
                     }},
-                    { key: "cuit" as any, label: "Nos debe", className: "text-right", sortable: false, render: (row) => {
+                    { key: "saldo_cuenta_corriente", label: "Le debemos", className: "text-right", sortable: true, render: (row) => {
+                      const hayARS = Math.abs(Number(row.saldo_ars || 0)) > 0.005;
+                      const hayUSD = Math.abs(Number(row.saldo_usd || 0)) > 0.005;
+                      const saldoAFavor = Number(row.saldo_ars || 0) < -0.005;
+                      return (<div className="text-right">{(hayARS || !hayUSD) && <span className={`font-mono font-semibold ${saldoAFavor ? "text-emerald-600" : "text-red-600"}`}>{saldoAFavor ? `A favor ${formatCurrency(Math.abs(Number(row.saldo_ars || 0)))}` : formatCurrency(Number(row.saldo_ars || 0))}</span>}{hayUSD && <p className={`font-mono ${hayARS ? "text-xs" : "font-semibold"} ${Number(row.saldo_usd) < 0 ? "text-emerald-600" : hayARS ? "text-zinc-500" : "text-red-600"}`}>{Number(row.saldo_usd) < 0 ? `A favor ${formatCurrency(Math.abs(Number(row.saldo_usd)), "USD")}` : formatCurrency(Number(row.saldo_usd), "USD")}</p>}</div>);
+                    }},
+                    { key: "vencido", label: "Vencido", className: "text-right", sortable: true, sortValue: (row) => pesos(aPagarPorProveedor.get(row.id), "vencido"), render: (row) => {
+                      const d = aPagarPorProveedor.get(row.id);
+                      if (!d || (!d.ARS.vencido && !d.USD.vencido)) return <span className="block text-right text-xs text-zinc-300 dark:text-zinc-600">—</span>;
+                      return <span className="block whitespace-nowrap text-right font-mono font-semibold text-red-600">{montos(d, "vencido")}<span className="ml-1 font-normal">({d.diasMasVencida} d)</span></span>;
+                    }},
+                    { key: "proximo", label: "Próx. vencimiento", sortable: true, sortValue: (row) => aPagarPorProveedor.get(row.id)?.proximoVencimiento || "9999", render: (row) => {
+                      const v = aPagarPorProveedor.get(row.id)?.proximoVencimiento;
+                      return <span className="text-sm">{v ? formatDate(v) : "—"}</span>;
+                    }},
+                    { key: "ultimo_pago", label: "Último pago", sortable: true, sortValue: (row) => ultimosPagos.get(row.id)?.fecha || "", render: (row) => {
+                      const u = ultimosPagos.get(row.id);
+                      return <span className="text-xs text-zinc-600 dark:text-zinc-300">{u ? `${formatDate(u.fecha)} · ${formatCurrency(u.monto)}` : "—"}</span>;
+                    }},
+                    { key: "nos_debe", label: "Nos debe", className: "text-right", sortable: false, render: (row) => {
                       const saldoCli = row.cuit ? cuitToSaldoCliente[row.cuit] : undefined;
                       if (saldoCli === undefined || saldoCli === 0) return <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>;
-                      return <span className="font-mono font-semibold text-emerald-600">{formatCurrency(saldoCli)}</span>;
-                    }},
-                    { key: "id" as any, label: "Neto", className: "text-right", sortable: false, render: (row) => {
-                      const saldoCli = row.cuit ? (cuitToSaldoCliente[row.cuit] ?? 0) : 0;
-                      if (!row.cuit || !cuitToSaldoCliente[row.cuit]) return <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>;
                       const neto = saldoCli - row.saldo_cuenta_corriente;
-                      return <span className={`font-mono font-bold ${neto >= 0 ? "text-emerald-600" : "text-red-600"}`}>{neto >= 0 ? "+" : ""}{formatCurrency(neto)}</span>;
+                      return <div className="text-right"><span className="font-mono font-semibold text-emerald-600">{formatCurrency(saldoCli)}</span><p className={`font-mono text-xs font-bold ${neto >= 0 ? "text-emerald-600" : "text-red-600"}`}>Neto {neto >= 0 ? "+" : ""}{formatCurrency(neto)}</p></div>;
                     }},
+                    { key: "dias_cuenta_corriente", label: "Condición", sortable: true, render: (row) => (
+                      <div className="text-xs text-zinc-600 dark:text-zinc-300"><span>{row.dias_cuenta_corriente} días</span>{row.forma_pago ? <span> · {row.forma_pago}</span> : null}{row.limite_credito > 0 && <p className="text-zinc-400">Límite {formatCurrency(row.limite_credito)}</p>}</div>
+                    )},
                   ]}
-                  data={filteredCcProveedores}
+                  data={filas}
                   onRowClick={(row) => fetchCCDetailProveedor(row)}
+                  emptyMessage={ccProvSoloConSaldo ? "Ningún proveedor con saldo" : "Sin proveedores"}
                 />
               </Card>
-            </>) : (<>
+              ) : (
+              <Card className="p-0 overflow-hidden">
+                <DataTable<VencimientoDeudaRow>
+                  columns={[
+                    { key: "vencimiento", label: "Vencimiento", sortable: true, render: (row) => <span className={row.vencimiento.slice(0, 10) < hoyStr ? "font-semibold text-red-600" : ""}>{formatDate(row.vencimiento)}</span> },
+                    { key: "entidad_nombre", label: "Proveedor", sortable: true, render: (row) => <span className="font-medium">{row.entidad_nombre}</span> },
+                    { key: "documento", label: "Factura", render: (row) => <span className="font-mono text-xs">{row.documento}</span> },
+                    { key: "moneda", label: "Moneda", render: (row) => <Badge variant="outline">{row.moneda}</Badge> },
+                    { key: "saldo", label: "Saldo", className: "text-right", sortable: true, render: (row) => <span className="block text-right font-mono font-semibold text-red-600">{formatCurrency(row.saldo, row.moneda)}</span> },
+                  ]}
+                  data={porVencimiento}
+                  onRowClick={(row) => abrirFicha(row.entidad_id)}
+                  emptyMessage="No hay facturas de compra con saldo con estos filtros"
+                />
+              </Card>
+              )}
+            </>);
+            })() : (<>
               <div className="mb-4 flex items-center gap-3">
                 <button onClick={() => setCcDetailProveedor(null)} className="flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"><X className="h-4 w-4" /> Volver</button>
                 <h2 className="text-lg font-semibold">{ccDetailProveedor.razon_social}</h2>
@@ -5617,6 +5731,9 @@ export default function FinanzasPage() {
         {tab === "extractos" && (
           <>
             <ExtractoBbva onIrACheques={() => setTab("echeqs")} />
+            {/* Cargador viejo de CSV (otros bancos), escondido 16/10/2026: el del BBVA de arriba lo reemplaza. No se borró. */}
+            <details className="rounded-xl border border-zinc-200 bg-white p-2 text-sm dark:border-zinc-800 dark:bg-zinc-900">
+              <summary className="cursor-pointer text-xs text-zinc-500">Cargador viejo de CSV (otros bancos)</summary>
             <div className="rounded-xl border-2 border-dashed border-zinc-300 bg-white p-6 text-center dark:border-zinc-600 dark:bg-zinc-900">
               <Upload className="mx-auto h-8 w-8 text-zinc-300" />
               <p className="mt-2 font-medium text-zinc-700 dark:text-zinc-300">Arrastra un extracto o hace click para subir</p>
@@ -5679,6 +5796,7 @@ export default function FinanzasPage() {
                 <p className="text-xs text-zinc-400 mt-1">Subi un archivo para comenzar la conciliacion</p>
               </Card>
             )}
+            </details>
           </>
         )}
 

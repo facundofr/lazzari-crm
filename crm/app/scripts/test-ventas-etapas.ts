@@ -55,10 +55,10 @@ assert.ok(enBandeja(e, "facturar"));
 e = etapaVenta({ ...base, facturas: [fa({ fecha_vencimiento: "2026-10-10" })] }, {}, hoy);
 assert.equal(e.vencida, true);
 
-// En entrega (remito pendiente).
+// Con remito ya cuenta como entregado, aunque el remito diga "pendiente" (el remito se hace para entregar).
 e = etapaVenta({ ...base, remitos: [{ estado: "pendiente" }] }, {}, hoy);
-assert.equal(e.enEntrega, true);
-assert.equal(e.entregado, false);
+assert.equal(e.enEntrega, false);
+assert.equal(e.entregado, true);
 
 // Resumen por moneda.
 const etapas = [

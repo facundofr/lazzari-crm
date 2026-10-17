@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { mockRemitos } from "@/lib/mock-data";
-import { Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, Trash2, Minus, ShieldCheck, GitBranch, MapPin, Maximize2, Search, Camera, Pencil } from "lucide-react";
+import { Truck, Loader2, CheckCircle2, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, Trash2, Minus, ShieldCheck, GitBranch, MapPin, Maximize2, Search, Camera, Pencil } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { RemitoVentana } from "@/components/remito-ventana";
 import { useToast } from "@/components/ui/toast";
@@ -37,12 +37,6 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
   );
 }
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
-
-const estadoConfig: Record<string, { label: string; variant: "success" | "warning" | "info" }> = {
-  pendiente: { label: "Pendiente", variant: "warning" },
-  entregado: { label: "Entregado", variant: "success" },
-  parcial: { label: "Parcial", variant: "info" },
-};
 
 const transporteEstadoConfig: Record<string, { label: string; variant: "success" | "warning" | "info" | "danger" }> = {
   solicitado: { label: "Solicitado", variant: "warning" },
@@ -224,7 +218,6 @@ export default function RemitosPage() {
   // SmartFilters state
   const [smartFilterValues, setSmartFilterValues] = useState<FilterValues>({
     fecha: { from: "", to: "" },
-    estado: "",
     cliente: "",
     vinculado: "",
     tipo: "",
@@ -248,16 +241,6 @@ export default function RemitosPage() {
         { value: "manual", label: "Manual (PR sin ARCA o muestra)" },
         { value: "interno", label: "Interno sin CAI" },
         { value: "arca", label: "Electrónico (ARCA)" },
-      ],
-    },
-    {
-      key: "estado",
-      label: "Estado",
-      type: "select",
-      options: [
-        { value: "pendiente", label: "Pendiente" },
-        { value: "entregado", label: "Entregado" },
-        { value: "parcial", label: "Parcial" },
       ],
     },
     {
@@ -383,7 +366,8 @@ export default function RemitosPage() {
 
   /**
    * Foto del remito firmado (no es obligatoria): se achica, se guarda en comprobantes/remitos/... y la IA lee quién recibió
-   * y lo anotado a mano. Si el remito no estaba entregado, queda entregado y se avisa al vendedor del PR.
+   * y lo anotado a mano. Es solo comprobante: no cambia el estado (el remito se hace para entregar).
+   * La primera foto le avisa al vendedor del PR.
    */
   async function subirFoto(r: RemitoRow, file: File) {
     if (!sociedadActiva?.id) return;
@@ -406,40 +390,23 @@ export default function RemitosPage() {
       const cambios: Record<string, unknown> = { foto_url: url, foto_ia: leido };
       if (leido?.recibio) cambios.recibio = leido.recibio;
       if (leido?.anotaciones) cambios.nota_ia = leido.anotaciones;
-      const marcar = r.estado !== "entregado";
-      if (marcar) { cambios.estado = "entregado"; cambios.entregado_at = new Date().toISOString(); cambios.entregado_por = profile?.id || null; }
+      const primera = !r.foto_url;
       const { error } = await (supabase as any).from("remitos").update(cambios).eq("id", r.id).eq("sociedad_id", sociedadActiva.id);
       if (error) throw error;
-      if (marcar && r.presupuesto_vendedor && r.presupuesto_vendedor !== profile?.id) {
+      if (primera && r.presupuesto_vendedor && r.presupuesto_vendedor !== profile?.id) {
         await (supabase as any).from("alertas").insert({
-          tipo: "seguimiento", title: `Entregado: ${r.presupuesto_numero || r.numero}`,
+          tipo: "seguimiento", title: `Remito firmado: ${r.presupuesto_numero || r.numero}`,
           description: `${profile?.full_name || "Alguien"} subió el remito firmado ${r.numero} de ${r.clienteNombre}${leido?.recibio ? ` · recibió ${leido.recibio}` : ""}`,
           entity_id: r.id, entity_type: "remito", module: "remitos", user_id: r.presupuesto_vendedor, sociedad_id: sociedadActiva.id,
         }).then(() => {}, () => {});
       }
-      toast.success(`Foto guardada en ${r.numero}${marcar ? " · quedó entregado" : ""}${leido?.recibio ? ` · recibió ${leido.recibio}` : ""}`);
+      toast.success(`Foto guardada en ${r.numero}${leido?.recibio ? ` · recibió ${leido.recibio}` : ""}`);
       if (leido?.anotaciones) toast.warning(`Anotaron a mano: ${leido.anotaciones}`);
       await fetchData();
     } catch (err) {
       toast.error(`No se pudo subir la foto: ${err instanceof Error ? err.message : "error"}`);
     } finally {
       setSubiendoFoto(null);
-    }
-  }
-
-  async function handleEstadoChange(id: string, estado: "pendiente" | "entregado" | "parcial") {
-    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de modificar el remito"); return; }
-    try {
-      let remitoUpdate = supabase.from("remitos").update({ estado }).eq("id", id);
-      remitoUpdate = remitoUpdate.eq("sociedad_id" as any, sociedadActiva.id);
-      const { error } = await remitoUpdate;
-      if (error) {
-        alert("Error al actualizar estado: " + error.message);
-        return;
-      }
-      await fetchData();
-    } catch (err) {
-      console.error("Error updating remito:", err);
     }
   }
 
@@ -748,7 +715,6 @@ export default function RemitosPage() {
       `REMITO ${detailRemito.numero}`,
       `Cliente: ${detailRemito.clientes?.razon_social || "\u2014"}`,
       `Fecha: ${formatDate(detailRemito.fecha)}`,
-      `Estado: ${estadoConfig[detailRemito.estado]?.label || detailRemito.estado}`,
       detailRemito.sucursal_nombre ? `Sucursal: ${detailRemito.sucursal_nombre}` : "",
       detailRemito.oc_cliente ? `OC Cliente: ${detailRemito.oc_cliente}` : "",
       detailRemito.valor_declarado ? `VALOR DECLARADO: $ ${Number(detailRemito.valor_declarado).toLocaleString("es-AR", { minimumFractionDigits: 2 })}` : "",
@@ -921,8 +887,6 @@ export default function RemitosPage() {
               const fechaFilter = smartFilterValues.fecha as { from?: string; to?: string } | undefined;
               if (fechaFilter?.from && r.fecha < fechaFilter.from) return false;
               if (fechaFilter?.to && r.fecha > fechaFilter.to) return false;
-              const estadoFilter = smartFilterValues.estado as string;
-              if (estadoFilter && r.estado !== estadoFilter) return false;
               const clienteFilter = smartFilterValues.cliente as string;
               if (clienteFilter && r.clientes?.razon_social !== clienteFilter) return false;
               const vinculadoFilter = smartFilterValues.vinculado as string;
@@ -962,9 +926,6 @@ export default function RemitosPage() {
               <div>
                 <div className="flex items-center gap-3">
                   <h2 className="text-lg font-semibold font-mono dark:text-white">{numeroRemito(detailRemito)}</h2>
-                  <Badge variant={(estadoConfig[detailRemito.estado] || { variant: "info" as const }).variant}>
-                    {(estadoConfig[detailRemito.estado] || { label: detailRemito.estado }).label}
-                  </Badge>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -996,21 +957,9 @@ export default function RemitosPage() {
                 <button onClick={() => setVentana({ remitoId: detailRemito.id })} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-orange-500 text-white hover:bg-orange-600 transition-colors">
                   <Pencil className="h-4 w-4" /> Editar
                 </button>
-                {(detailRemito.estado === "pendiente" || detailRemito.estado === "parcial") && (
-                  <button onClick={() => openSplitModal()} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-violet-500 text-white hover:bg-violet-600 transition-colors">
-                    <GitBranch className="h-4 w-4" /> Dividir remito
-                  </button>
-                )}
-                {(detailRemito.estado === "pendiente" || detailRemito.estado === "parcial") && (
-                  <button onClick={() => { handleEstadoChange(detailRemito.id, "entregado"); setDetailRemito({ ...detailRemito, estado: "entregado" }); }} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition-colors">
-                    <CheckCircle2 className="h-4 w-4" /> Marcar entregado
-                  </button>
-                )}
-                {detailRemito.estado === "entregado" && (
-                  <button onClick={() => { handleEstadoChange(detailRemito.id, "pendiente"); setDetailRemito({ ...detailRemito, estado: "pendiente" }); }} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-amber-500 text-white hover:bg-amber-600 transition-colors">
-                    <Package className="h-4 w-4" /> Desmarcar entregado
-                  </button>
-                )}
+                <button onClick={() => openSplitModal()} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-violet-500 text-white hover:bg-violet-600 transition-colors">
+                  <GitBranch className="h-4 w-4" /> Dividir remito
+                </button>
               </div>
 
               {/* Resumen: tipo, items, unidades y cuánto del PR está remitido */}

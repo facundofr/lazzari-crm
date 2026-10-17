@@ -147,7 +147,7 @@ export const GUIA_SECCIONES: SeccionGuia[] = [
     "titulo": "Remitos",
     "ruta": "/remitos",
     "modulo": "remitos",
-    "texto": "**Para qué sirve:** documentar entregas.\n**Cómo se hace:** 1) **Nuevo remito**: **Remito R (con CAI)** o **Muestras (sin CAI)**. 2) Cliente y PR aprobado (o ítems a mano); varias sucursales → **Crear N Remitos**. 3) **Entrega parcial**, **Dividir remito**, **Marcar entregado** / **Desmarcar entregado**. 4) PDF, correo o copiar resumen. 5) Flete: **Agregar transporte** → **Crear transporte**.\n**Ojo:** con transporte, el valor declarado es obligatorio. El CAI se asigna al crear. Eliminar un remito no se deshace. Si el PR ya está todo remitido, avisa."
+    "texto": "**Para qué sirve:** documentar entregas.\n**Cómo se hace:** 1) **Nuevo remito**: **Remito R (con CAI)** o **Muestras (sin CAI)**. 2) Cliente y PR aprobado (o ítems a mano); varias sucursales → **Crear N Remitos**. 3) **Dividir remito** si hace falta; el remito se hace para entregar (no hay que marcarlo entregado) y la foto del remito firmado queda como comprobante. 4) PDF, correo o copiar resumen. 5) Flete: **Agregar transporte** → **Crear transporte**.\n**Ojo:** con transporte, el valor declarado es obligatorio. El CAI se asigna al crear. Eliminar un remito no se deshace. Si el PR ya está todo remitido, avisa."
   },
   {
     "id": "entregar-transportes",

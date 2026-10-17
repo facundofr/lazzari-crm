@@ -1,6 +1,6 @@
 // Prueba rápida de lib/remito-entrega (sin base). Uso (desde crm/app): npx tsx scripts/test-remito-entrega.ts
 import assert from "node:assert/strict";
-import { costoNumero, entregaInicial, entregaGuardada, difiereDeSucursal, datosRemito, planViaje, filaVigente, textoTransporte, RETIRA_TEXTO, PROPIO_TEXTO, FILA_ACTUAL, type FilaTransporte } from "../src/lib/remito-entrega";
+import { costoNumero, entregaInicial, entregaGuardada, difiereDeSucursal, datosRemito, planViaje, filaVigente, textoTransporte, entregaPDF, RETIRA_TEXTO, PROPIO_TEXTO, FILA_ACTUAL, type FilaTransporte } from "../src/lib/remito-entrega";
 
 const ctx = { sociedad_id: "soc", cliente_id: "cli", remito_id: "rem", fecha: "2026-10-16", created_by: "yo" };
 const nombre = (id: string) => ({ t1: "Cruz del Sur", t2: "Andreani" } as Record<string, string>)[id] || null;
@@ -69,5 +69,15 @@ assert.equal(textoTransporte({ direccion_entrega_snapshot: RETIRA_TEXTO }, [{ ..
 assert.equal(textoTransporte({}, [{ ...viaje, tipo: "interno", transportista: PROPIO_TEXTO }]), "Propio");
 assert.equal(textoTransporte({}, []), "");
 assert.equal(planViaje({ ...def, modo: "propio", domicilio: "", localidad: "" }, null, ctx, nombre).accion === "crear" && (planViaje({ ...def, modo: "propio", domicilio: "", localidad: "" }, null, ctx, nombre) as any).datos.destino, "", "destino nunca null");
+
+// PDF: línea Entrega (nombre — direccion). Lo del remito manda; sin nada, la sucursal sin repetir el nombre.
+const sucPDF = { nombre: "Planta Norte", direccion: "Ruta 8 km 371", localidad: "Venado Tuerto", provincia: "Santa Fe" };
+assert.deepEqual(entregaPDF({}, sucPDF), { nombre: "Planta Norte", direccion: "Ruta 8 km 371, Venado Tuerto, Santa Fe" });
+assert.deepEqual(entregaPDF({ direccion_entrega_snapshot: "Mitre 50", localidad_entrega_snapshot: "Rufino" }, sucPDF), { nombre: "Planta Norte", direccion: "Mitre 50, Rufino" });
+assert.deepEqual(entregaPDF({ direccion_entrega_snapshot: "Mitre 50", localidad_entrega_snapshot: "Rufino" }, null), { nombre: "Mitre 50, Rufino", direccion: null });
+assert.deepEqual(entregaPDF({ localidad_entrega_snapshot: "Rufino" }, null), { nombre: "Rufino", direccion: null });
+assert.deepEqual(entregaPDF({ direccion_entrega_snapshot: "retira el cliente " }, sucPDF), { nombre: RETIRA_TEXTO, direccion: "Planta Norte" });
+assert.deepEqual(entregaPDF({ direccion_entrega_snapshot: RETIRA_TEXTO }, null), { nombre: RETIRA_TEXTO, direccion: null });
+assert.deepEqual(entregaPDF({}, null), { nombre: null, direccion: null }, "sin nada: el PDF usa el domicilio del cliente");
 
 console.log("remito-entrega OK");
