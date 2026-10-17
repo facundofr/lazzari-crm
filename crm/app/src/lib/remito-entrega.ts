@@ -48,8 +48,8 @@ export function costoNumero(t: string): number | null {
   return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
-/** Destino del viaje: "domicilio, localidad". */
-export const destinoDe = (e: Pick<Entrega, "domicilio" | "localidad">) => [limpio(e.domicilio), limpio(e.localidad)].filter(Boolean).join(", ") || null;
+/** Destino del viaje: "domicilio, localidad" ("" si no hay: la columna destino no acepta null). */
+export const destinoDe = (e: Pick<Entrega, "domicilio" | "localidad">) => [limpio(e.domicilio), limpio(e.localidad)].filter(Boolean).join(", ");
 
 /** Viaje vigente del remito (el último que no está cancelado). */
 export function filaVigente(filas: FilaTransporte[]): FilaTransporte | null {

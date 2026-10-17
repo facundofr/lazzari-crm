@@ -359,6 +359,11 @@ export default function RemitosPage() {
     const { data: filas } = await (supabase as any).from("transportes").select("id, transportista, transportista_id, tipo, estado, destino, costo, created_at").eq("remito_id", row.id).eq("sociedad_id", sociedadActiva.id);
     const vigente = filaVigente(filas || []);
     const base = entregaGuardada({ direccion_entrega_snapshot: row.direccion_entrega_snapshot ?? null, localidad_entrega_snapshot: row.localidad_entrega_snapshot ?? null, transportista_id: null }, vigente, { modo: "nose", transportista_id: null, domicilio: "", localidad: "", costo: "" });
+    // Sin domicilio guardado (remito viejo, o venía de "Retira el cliente"): el de la sucursal.
+    if (!base.domicilio && !base.localidad && row.sucursal_id) {
+      const { data: s } = await (supabase as any).from("cliente_sucursales").select("direccion, localidad").eq("id", row.sucursal_id).maybeSingle();
+      if (s) { base.domicilio = s.direccion || ""; base.localidad = s.localidad || ""; }
+    }
     const e: Entrega = v.startsWith("t:") ? { ...base, modo: "transporte", transportista_id: v.slice(2) } : { ...base, modo: v as ModoEntrega, transportista_id: null };
     // "Retira" pisa el domicilio solo en el remito; si después se elige un transporte y no había domicilio, el PDF usa el de la sucursal.
     const aviso = await guardarEntrega(supabase, e, { sociedad_id: sociedadActiva.id, cliente_id: row.cliente_id, remito_id: row.id, fecha: row.fecha, created_by: profile?.id || null, sucursal_id: row.sucursal_id || null }, (id) => listaTransp.find((t) => t.id === id)?.nombre || null, null);

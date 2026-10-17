@@ -68,5 +68,6 @@ assert.equal(textoTransporte({}, [viaje]), "Cruz del Sur");
 assert.equal(textoTransporte({ direccion_entrega_snapshot: RETIRA_TEXTO }, [{ ...viaje, estado: "cancelado" }]), RETIRA_TEXTO);
 assert.equal(textoTransporte({}, [{ ...viaje, tipo: "interno", transportista: PROPIO_TEXTO }]), "Propio");
 assert.equal(textoTransporte({}, []), "");
+assert.equal(planViaje({ ...def, modo: "propio", domicilio: "", localidad: "" }, null, ctx, nombre).accion === "crear" && (planViaje({ ...def, modo: "propio", domicilio: "", localidad: "" }, null, ctx, nombre) as any).datos.destino, "", "destino nunca null");
 
 console.log("remito-entrega OK");
