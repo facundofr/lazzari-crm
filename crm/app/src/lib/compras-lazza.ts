@@ -99,6 +99,15 @@ export function crucesSeguros(items: ItemFc[], lineas: LineaOc[], monedaFactura:
   });
 }
 
+/** Vencimiento para Pagos: fecha de la factura + los días elegidos ("a 60 días"). Sin días o sin fecha válida → el que trae la factura. */
+export function vencimientoPorDias(fecha: string | null | undefined, dias: string | number | null | undefined, vencFactura: string | null | undefined): string | null {
+  const d = typeof dias === "number" ? dias : String(dias ?? "").trim() === "" ? NaN : Number(dias);
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(fecha || "");
+  if (!Number.isFinite(d) || d < 0 || !m) return vencFactura || null;
+  const t = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3] + Math.round(d)));
+  return t.toISOString().slice(0, 10);
+}
+
 /** Texto que queda en la factura y en las OC marcadas "Observar". */
 export function notaObservar(args: { numeroFc: string; comp: Comparacion; varias: boolean; nota: string; moneda: string; fecha: string; quien: string }): string {
   const m = (n: number) => `${args.moneda === "USD" ? "US$" : "$"} ${n.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;

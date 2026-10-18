@@ -21,8 +21,20 @@ Actualizado el 17/10/2026 para seguir desde otra cuenta sin el historial del cha
   - **Migración** `supabase/migrations/20261016200000_compras_lazza_observar.sql` (columnas `observar` y `observar_nota` en `facturas_compra` y `ordenes_compra`; vuelta atrás en `supabase/rollback/`). **Ya corrida por Augusto y verificada.**
   - `lib/oc-sin-proveedor.ts`: `asignarRenglonesAProveedor` tiene la opción `conRecibido`.
 
-## Sin publicar
-Nada de Compras. Los archivos locales son iguales a origin/main (chequeado el 17/10). Chequeos: hooks OK, `test-compras-lazza` OK, `test-cargar-factura` OK. El único error de `tsc` que había era de Finanzas, no de Compras.
+## Publicado en V1.1.519 (17/10, commit da11dd2, verificado en producción; sin migración)
+- Columna **Factura** de Compras Lazza: **"+"** siempre (también en OC ya facturadas: una OC puede tener varias facturas). Abre Cargar factura "de la OC-…" con esa OC ya tildada; si es de otro proveedor o sin proveedor, pregunta "¿seguro?". Si ya estaba facturada entera, la trae igual y ofrece [Sumar a la OC] / [Pasar igual]. Si no queda ningún renglón, se ata con un renglón en $0.
+- **✔ / ½** abre las facturas de la OC (`components/compras-lazza-facturas-oc.tsx`) con **"Sacar"** (cargada por error):
+  - la factura queda ANULADA con `anular_factura_compra` (solo administración);
+  - se borran los renglones de envío/diferencia que esa factura sumó;
+  - los costos que cambió vuelven al anterior en la OC y en el PR (`costoPrAnterior`; solo si nadie los cambió después; queda nota en el PR);
+  - se recalcula facturada / en parte;
+  - si estaba pagada o con OP: avisa y pregunta.
+  - NUNCA se confirmó un "Sacar" real: la primera vez, mirarlo con Augusto.
+- Archivos: `crm/app/src/components/compras-lista-oc.tsx`, `crm/app/src/app/(crm)/compras-lazza/page.tsx`, `crm/app/src/components/compras-lazza-factura.tsx`, `crm/app/src/components/compras-lazza-facturas-oc.tsx` (nuevo), `crm/app/src/lib/compras-lazza.ts`, `crm/app/scripts/test-compras-lazza.ts`.
+
+## Publicado en V1.1.521 (17/10; prueba, tsc 0 y hooks OK)
+- Cargar factura de Compras Lazza → "Para Pagos": al elegir los días, el **vencimiento de la factura = fecha de la factura + esos días** (ej. FC del 16/10 "a 60 días" → 15/12) y al lado de los días se ve "vence dd/mm". Sin días queda el vencimiento que trae la factura; con Visa no cambia. Función `vencimientoPorDias` en `lib/compras-lazza.ts` (con prueba en `scripts/test-compras-lazza.ts`), usada en `components/compras-lazza-factura.tsx`.
+- Primeras facturas reales para revisar: Segutécnica 0014-73759 ($612.956,25 → OC-2026-1241, OC en USD: no compara) y 0014-73760 ($1.267.750 → OC-2026-1246, +3,4 % por talles grandes 48-56; 13 pantalones OMBÚ). Pago transferencia a 60 días.
 
 ## Próximos pasos
 1. **Mirar con Augusto la PRIMERA factura que se guarde con Compras Lazza**: que la OC quede facturada (o parcial), el costo en el PR, Pagos, el PDF y Observar si correspondía. Todavía no se guardó ninguna real con este botón, y la lectura con IA tampoco se probó.
@@ -43,5 +55,5 @@ Nada de Compras. Los archivos locales son iguales a origin/main (chequeado el 17
 
 ## Prompt para seguir en un chat nuevo
 ```
-Sos el chat de Compras del CRM Lazzari. Leé CLAUDE.md, docs/traspaso/compras-oc.md y en docs/ESTADO.md la entrada "COMPRAS LAZZA". Compras Lazza está publicada (V1.1.516) y su migración ya está corrida. Saludá a Augusto en corto y preguntale si ya cargaron la primera factura con Compras Lazza para revisarla juntos (OC, costo en el PR, Pagos, Observar). No publiques nada sin que lo pida y ojo con lz-pub-auto (enlace a node_modules).
+Sos el chat de Compras del CRM Lazzari. Leé CLAUDE.md, docs/traspaso/compras-oc.md y en docs/ESTADO.md la entrada "COMPRAS LAZZA". Compras Lazza está publicada (V1.1.516) y su migración ya está corrida; el "+" de la columna Factura y "Sacar factura" salieron en V1.1.519; no queda nada sin publicar. Saludá a Augusto en corto y preguntale si ya cargaron la primera factura (o usaron "Sacar") con Compras Lazza para revisarla juntos (OC, costo en el PR, Pagos, Observar). No publiques nada sin que lo pida y ojo con lz-pub-auto (enlace a node_modules).
 ```

@@ -26,7 +26,7 @@ import { asignarRenglonesAProveedor } from "@/lib/oc-sin-proveedor";
 import { traerTarjetas, tarjetaSugerida, registrarPagoTarjeta, movimientoPagoTarjeta } from "@/lib/pago-tarjeta";
 import { citaOc, esEnvio } from "@/lib/purchase-matching";
 import { repartirEnvio, cant } from "@/lib/cargar-factura";
-import { aFacturarPorRenglon, comparar, crucesSeguros, netoFactura, netoPorOc, notaObservar, AVISO_PCT, type LineaOc } from "@/lib/compras-lazza";
+import { aFacturarPorRenglon, comparar, crucesSeguros, netoFactura, netoPorOc, notaObservar, vencimientoPorDias, AVISO_PCT, type LineaOc } from "@/lib/compras-lazza";
 import { coincideTodas, normalizarTexto, palabrasBusqueda } from "@/lib/buscar-texto";
 import { AlertTriangle, Check, CreditCard, FileUp, Loader2, Search, Sparkles, UserPlus, X } from "lucide-react";
 
@@ -293,6 +293,7 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
   const formaPago: FormaPago = forma ?? (/cheq/i.test(proveedor?.medio_pago_preferido || "") ? "echeq" : "transferencia");
   const diasSugeridos = formaPago === "echeq" ? (proveedor?.plazo_cheque_dias ?? proveedor?.dias_pago) : proveedor?.dias_pago;
   const dias = diasTxt ?? (diasSugeridos != null ? String(diasSugeridos) : "");
+  const vencePago = factura ? vencimientoPorDias(factura.fecha, dias, factura.vencimiento) : null;
   const faltaEmail = !!proveedor && !String(proveedor.email || "").trim();
   const faltaBanco = !!proveedor && !String(proveedor.cbu || "").trim() && !String(proveedor.alias_bancario || "").trim();
 
@@ -414,7 +415,7 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
         p_sociedad_id: sociedadId, p_factura_id: null,
         p_factura: {
           proveedor_id: proveedor.id, numero_factura: numero, tipo_comprobante: factura.tipo, fecha: factura.fecha,
-          fecha_vencimiento: factura.vencimiento || null, cae: factura.cae || null, moneda: factura.moneda, subtotal: num(netoTxt),
+          fecha_vencimiento: pagaVisa ? factura.vencimiento || null : vencimientoPorDias(factura.fecha, dias, factura.vencimiento), cae: factura.cae || null, moneda: factura.moneda, subtotal: num(netoTxt),
           iva: factura.iva > 0 ? factura.iva : Math.max(0, round2(factura.total - factura.percepciones - num(netoTxt))), iva_porcentaje: factura.ivaPorcentaje, percepciones: factura.percepciones, total: factura.total, notas,
         },
         p_items: items, p_asignaciones: asign, p_borrador: false, p_aceptar_costos: true, p_equivalencias: [], p_confirmar: true,
@@ -607,6 +608,7 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
                   className="w-12 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-right dark:border-zinc-600 dark:bg-zinc-900" />
                 <span className="text-xs text-zinc-500">días</span>
                 {DIAS_RAPIDOS.map(d => <button key={d} onClick={() => setDiasTxt(String(d))} className={`rounded px-1.5 py-0.5 text-xs ${dias === String(d) ? "bg-violet-600 text-white" : "text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-700"}`}>{d}</button>)}
+                {vencePago && <span className="text-xs text-zinc-500">vence {vencePago.split("-").reverse().join("/")}</span>}
                 <input value={notaPago} onChange={e => setNotaPago(e.target.value)} placeholder="Nota para Pagos (opcional)"
                   className="ml-auto min-w-[180px] flex-1 rounded border border-zinc-300 bg-white px-2 py-0.5 text-sm dark:border-zinc-600 dark:bg-zinc-900" />
                 {(faltaEmail || faltaBanco) && (

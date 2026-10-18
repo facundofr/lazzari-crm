@@ -1,7 +1,7 @@
 // Compras Lazza: comparación factura vs OC, neto estimado y cruces seguros de precio.
 // Uso (desde crm/app): npx tsx scripts/test-compras-lazza.ts
 import assert from "node:assert/strict";
-import { comparar, netoFactura, netoPorOc, crucesSeguros, notaObservar, aFacturarPorRenglon, costoPrAnterior } from "../src/lib/compras-lazza";
+import { comparar, netoFactura, netoPorOc, crucesSeguros, notaObservar, aFacturarPorRenglon, costoPrAnterior, vencimientoPorDias } from "../src/lib/compras-lazza";
 import { repartirEnvio } from "../src/lib/cargar-factura";
 
 // Neto
@@ -76,5 +76,13 @@ assert.equal(costoPrAnterior({ ...base, costoActual: 120 }), null);             
 assert.deepEqual(costoPrAnterior({ ...base, costoActual: 110, precioLista: 200 }), { precio_costo: 100, markup_porcentaje: 100 }); // con descuento: sobre lista
 // PR en dólares, factura en pesos (tc 1000): costo anterior 100.000 $ = 100 US$; venta 150 US$ → 50 %.
 assert.deepEqual(costoPrAnterior({ ...base, costoActual: 110000, precioFactura: 110000, precioAnterior: 100000, prMoneda: "USD", tc: 1000 }), { precio_costo: 100000, markup_porcentaje: 50 });
+
+// Para Pagos "a N días": vencimiento = fecha de la factura + N (sin días, el de la factura).
+assert.equal(vencimientoPorDias("2026-10-16", "60", "2026-11-15"), "2026-12-15");
+assert.equal(vencimientoPorDias("2026-10-16", "0", "2026-11-15"), "2026-10-16");
+assert.equal(vencimientoPorDias("2026-12-20", 30, null), "2027-01-19");
+assert.equal(vencimientoPorDias("2026-10-16", "", "2026-11-15"), "2026-11-15");
+assert.equal(vencimientoPorDias("", "60", "2026-11-15"), "2026-11-15");
+assert.equal(vencimientoPorDias(null, null, null), null);
 
 console.log("test-compras-lazza OK");
