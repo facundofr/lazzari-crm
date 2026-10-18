@@ -26,7 +26,7 @@ import { asignarRenglonesAProveedor } from "@/lib/oc-sin-proveedor";
 import { traerTarjetas, tarjetaSugerida, registrarPagoTarjeta, movimientoPagoTarjeta } from "@/lib/pago-tarjeta";
 import { citaOc } from "@/lib/purchase-matching";
 import { cant } from "@/lib/cargar-factura";
-import { aFacturarPorRenglon, netoFactura, tipoNotaCredito, vencimientoPorDias, type LineaOc } from "@/lib/compras-lazza";
+import { aFacturarPorRenglon, ivaYPercepciones, netoFactura, tipoNotaCredito, vencimientoPorDias, type LineaOc } from "@/lib/compras-lazza";
 import { coincideTodas, normalizarTexto, palabrasBusqueda } from "@/lib/buscar-texto";
 import { AlertTriangle, Check, CreditCard, FileUp, Loader2, Search, Sparkles, UserPlus, X } from "lucide-react";
 
@@ -283,8 +283,10 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
   const diasSugeridos = formaPago === "echeq" ? (proveedor?.plazo_cheque_dias ?? proveedor?.dias_pago) : proveedor?.dias_pago;
   const dias = diasTxt ?? (diasSugeridos != null ? String(diasSugeridos) : "");
   const vencePago = factura ? vencimientoPorDias(factura.fecha, dias, factura.vencimiento) : null;
-  // IVA de la factura (leída por QR viene en 0: total − percepciones − neto).
-  const ivaFactura = !factura ? 0 : factura.iva > 0 ? factura.iva : Math.max(0, round2(factura.total - factura.percepciones - num(netoTxt)));
+  // IVA y percepciones (leída por QR el IVA viene en 0: IVA = neto × alícuota y lo que sobra son percepciones, ej. IIBB).
+  const impuestos = factura ? ivaYPercepciones({ total: factura.total, neto: num(netoTxt), iva: factura.iva, percepciones: factura.percepciones, ivaPorcentaje: factura.ivaPorcentaje }) : { iva: 0, percepciones: 0, percepcionEstimada: false };
+  const ivaFactura = impuestos.iva;
+  const percepcionesFactura = impuestos.percepciones;
   const faltaEmail = !!proveedor && !String(proveedor.email || "").trim();
   const faltaBanco = !!proveedor && !String(proveedor.cbu || "").trim() && !String(proveedor.alias_bancario || "").trim();
 
@@ -338,7 +340,7 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
         p_sociedad_id: sociedadId, p_request_key: ncKey.current,
         p_factura: {
           numero_factura: numero, tipo_comprobante: factura.tipo, proveedor_id: proveedor.id, fecha: factura.fecha || todayAR(),
-          subtotal: num(netoTxt), iva_porcentaje: factura.ivaPorcentaje, iva: ivaFactura, percepciones: factura.percepciones, total: factura.total,
+          subtotal: num(netoTxt), iva_porcentaje: factura.ivaPorcentaje, iva: ivaFactura, percepciones: percepcionesFactura, total: factura.total,
           moneda: factura.moneda, tipo: "mercaderia", notas, cae: factura.cae || null,
         },
         p_items: items, p_aplicaciones: [],
@@ -426,7 +428,7 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
         p_factura: {
           proveedor_id: proveedor.id, numero_factura: numero, tipo_comprobante: factura.tipo, fecha: factura.fecha,
           fecha_vencimiento: pagaVisa ? factura.vencimiento || null : vencimientoPorDias(factura.fecha, dias, factura.vencimiento), cae: factura.cae || null, moneda: factura.moneda, subtotal: num(netoTxt),
-          iva: ivaFactura, iva_porcentaje: factura.ivaPorcentaje, percepciones: factura.percepciones, total: factura.total, notas,
+          iva: ivaFactura, iva_porcentaje: factura.ivaPorcentaje, percepciones: percepcionesFactura, total: factura.total, notas,
         },
         // Solo ata la factura a la OC: no se tocan los costos de la OC ni del PR.
         p_items: items, p_asignaciones: asign, p_borrador: false, p_aceptar_costos: false, p_equivalencias: [], p_confirmar: true,
@@ -501,7 +503,7 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
               {/* Neto + IVA (lo que cuesta la mercadería); las percepciones aparte, en chico */}
               <span className="ml-auto text-right leading-tight">
                 <span className="font-semibold">{plata(round2(num(netoTxt) + ivaFactura))}</span> <span className="text-xs text-zinc-500">neto + IVA</span>
-                {factura.percepciones > 0 && <span className="block text-[11px] text-zinc-500">+ percep. {plata(factura.percepciones)} = total {plata(factura.total)}</span>}
+                {percepcionesFactura > 0 && <span className="block text-[11px] text-zinc-500">+ percep.{impuestos.percepcionEstimada ? " (calculada)" : ""} {plata(percepcionesFactura)} = total {plata(factura.total)}</span>}
               </span>
               <button onClick={() => { reiniciar(); setArchivo(null); }} disabled={guardando} className="text-xs text-zinc-500 underline">Otra factura</button>
             </div>

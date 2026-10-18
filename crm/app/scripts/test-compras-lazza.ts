@@ -1,7 +1,7 @@
 // Compras Lazza: comparación factura vs OC, neto estimado y cruces seguros de precio.
 // Uso (desde crm/app): npx tsx scripts/test-compras-lazza.ts
 import assert from "node:assert/strict";
-import { comparar, netoFactura, netoPorOc, crucesSeguros, notaObservar, aFacturarPorRenglon, costoPrAnterior, vencimientoPorDias, tipoNotaCredito } from "../src/lib/compras-lazza";
+import { comparar, netoFactura, netoPorOc, crucesSeguros, notaObservar, aFacturarPorRenglon, costoPrAnterior, vencimientoPorDias, tipoNotaCredito, ivaYPercepciones } from "../src/lib/compras-lazza";
 import { repartirEnvio } from "../src/lib/cargar-factura";
 
 // Neto
@@ -94,5 +94,13 @@ assert.equal(tipoNotaCredito("NC A"), "NC A");
 assert.equal(tipoNotaCredito("FACTURA A"), null);
 assert.equal(tipoNotaCredito("NOTA DE DEBITO A"), null);
 assert.equal(tipoNotaCredito("FC A"), null);
+
+// IVA y percepciones: el QR solo trae el total (FC Segutécnica 0014-73759: neto 490.365, IVA 21 %, IIBB 19.614,60)
+assert.deepEqual(ivaYPercepciones({ total: 612956.25, neto: 490365, iva: 0, percepciones: 0, ivaPorcentaje: 21 }), { iva: 102976.65, percepciones: 19614.6, percepcionEstimada: true });
+assert.deepEqual(ivaYPercepciones({ total: 1267750, neto: 1014200, iva: 0, percepciones: 0, ivaPorcentaje: 21 }), { iva: 212982, percepciones: 40568, percepcionEstimada: true });
+assert.deepEqual(ivaYPercepciones({ total: 1210, neto: 1000, iva: 0, percepciones: 0, ivaPorcentaje: 21 }), { iva: 210, percepciones: 0, percepcionEstimada: false });
+assert.deepEqual(ivaYPercepciones({ total: 1105, neto: 1000, iva: 0, percepciones: 0, ivaPorcentaje: 21 }), { iva: 105, percepciones: 0, percepcionEstimada: false }); // 10,5 %
+assert.deepEqual(ivaYPercepciones({ total: 1250, neto: 1000, iva: 210, percepciones: 40, ivaPorcentaje: 21 }), { iva: 210, percepciones: 40, percepcionEstimada: false }); // leídos
+assert.deepEqual(ivaYPercepciones({ total: 1250, neto: 1000, iva: 0, percepciones: 40, ivaPorcentaje: 21 }), { iva: 210, percepciones: 40, percepcionEstimada: false });
 
 console.log("test-compras-lazza OK");

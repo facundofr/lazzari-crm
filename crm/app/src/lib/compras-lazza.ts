@@ -153,3 +153,20 @@ export function tipoNotaCredito(raw: string | null | undefined): string | null {
   if (/FCE|MIPYME/.test(t) && (letra === "A" || letra === "B")) return `NC FCE ${letra}`;
   return letra ? `NC ${letra}` : "NC";
 }
+
+/**
+ * IVA y percepciones de la factura. El QR de ARCA solo trae el total; si no se leyó el IVA, antes se tomaba
+ * "IVA = total − neto" y la percepción de IIBB quedaba adentro del IVA (FC Segutécnica 0014-73759, 18/10).
+ * Ahora: IVA = neto × alícuota y lo que sobra del total son percepciones. Si sobra de menos (ej. parte al 10,5 %),
+ * queda como antes: IVA = total − percepciones − neto.
+ */
+export function ivaYPercepciones(f: { total: number; neto: number; iva: number; percepciones: number; ivaPorcentaje?: number | null }): { iva: number; percepciones: number; percepcionEstimada: boolean } {
+  const total = Number(f.total) || 0, neto = Number(f.neto) || 0, perc = Math.max(0, Number(f.percepciones) || 0);
+  if ((Number(f.iva) || 0) > 0) return { iva: round2(Number(f.iva)), percepciones: round2(perc), percepcionEstimada: false };
+  const porDiferencia = { iva: Math.max(0, round2(total - perc - neto)), percepciones: round2(perc), percepcionEstimada: false };
+  if (!(neto > 0) || !(total > 0)) return porDiferencia;
+  const iva = round2(neto * (Number(f.ivaPorcentaje ?? 21) || 21) / 100);
+  const resto = round2(total - neto - iva - perc);
+  if (resto < 1) return porDiferencia; // redondeo, o IVA más bajo (10,5 %)
+  return { iva, percepciones: round2(perc + resto), percepcionEstimada: true };
+}
