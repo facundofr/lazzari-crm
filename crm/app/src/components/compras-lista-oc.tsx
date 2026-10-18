@@ -5,7 +5,7 @@
  * Columnas: Fecha · OC · PR / Cliente · Proveedor · Descripción · Persona · Estado · Llegó · Factura · Pago · Copiar.
  * "En curso" = falta llegar, facturar o pagar algo. "Terminadas" = llegó todo + facturada + pagada.
  * Copiar: texto para el proveedor sin precios (no abre la OC). Solo lectura: no guarda nada.
- * Con `lazza` (pantalla Compras Lazza): botón "Llegó" en cada OC, marca 👁 Observar y filtro "Observar".
+ * Con `lazza` (pantalla Compras Lazza): el número abre la OC para editarla, botón "Llegó" en cada OC, marca 👁 Observar y filtro "Observar".
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
@@ -73,7 +73,7 @@ export type OcLazza = { id: string; numero: string; observar_nota?: string | nul
 export default function ComprasListaOC({ sociedadId, lazza }: {
   sociedadId: string | undefined;
   /** Compras Lazza: "Llegó" en cada OC y la marca "Observar" (con su nota). */
-  lazza?: { onLlego: (oc: OcLazza) => void; onObservar: (oc: OcLazza) => void; onFactura: (oc: OcLazza) => void; onFacturas: (oc: OcLazza) => void };
+  lazza?: { onLlego: (oc: OcLazza) => void; onObservar: (oc: OcLazza) => void; onFactura: (oc: OcLazza) => void; onFacturas: (oc: OcLazza) => void; onAbrir: (oc: OcLazza) => void };
 }) {
   const { toast } = useToast();
   const [filas, setFilas] = useState<Vista[]>([]);
@@ -254,7 +254,9 @@ export default function ComprasListaOC({ sociedadId, lazza }: {
           emptyMessage={vista === "terminadas" ? "No hay OC terminadas con estos filtros." : "No hay OC en curso con estos filtros."}
           columns={[
             { key: "fecha", label: "Fecha", render: f => <span className={`whitespace-nowrap text-xs ${f.atrasada ? "font-semibold text-red-600 dark:text-red-400" : "text-zinc-600 dark:text-zinc-300"}`} title={f.atrasada ? `Atrasada${f.fecha_entrega_estimada ? `: entrega estimada ${formatDate(f.fecha_entrega_estimada)}` : ""}` : undefined}>{formatDate(f.fecha)}</span> },
-            { key: "numero", label: "OC", render: f => <span className="whitespace-nowrap font-mono text-xs font-bold">{f.numero}</span> },
+            { key: "numero", label: "OC", render: f => lazza
+              ? <button onClick={e => { e.stopPropagation(); lazza.onAbrir(f); }} title="Abrir la OC para editarla (proveedor, artículos, cantidades, precios)" className="whitespace-nowrap font-mono text-xs font-bold text-orange-600 hover:underline">{f.numero}</button>
+              : <span className="whitespace-nowrap font-mono text-xs font-bold">{f.numero}</span> },
             { key: "prNumero", label: "PR / Cliente", sortValue: f => `${f.prNumero} ${f.clienteNombre}`, render: f => f.prNumero || f.clienteNombre
               ? <span className="block max-w-[200px] truncate text-xs" title={`${f.prNumero} · ${f.clienteNombre}`}><span className="font-mono text-zinc-500">{f.prNumero}</span>{f.clienteNombre ? ` · ${f.clienteNombre}` : ""}</span>
               : <span className="text-xs text-zinc-400">—</span> },

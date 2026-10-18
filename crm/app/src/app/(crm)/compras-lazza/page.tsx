@@ -4,6 +4,7 @@
  * Compras Lazza (Augusto 16/10): versión MUY simple de Compras, para probarla ellos. Lo de Compras nueva no se toca.
  * - Lista de OC con los mismos filtros (components/compras-lista-oc) + 📋 Copiar para WhatsApp.
  * - Las OC se arman solas al aprobar el PR (como siempre).
+ * - El número de la OC la abre para editarla (components/compras-lazza-oc), con cambio de proveedor.
  * - "Llegó": Completo o Parcial por artículo (components/compras-lazza-llego).
  * - "Cargar factura": simple y permisiva (components/compras-lazza-factura); lo que no coincide queda en "Observar".
  * Solo la ven en el menú los que tienen la casilla "Prueba: Compras nueva".
@@ -17,6 +18,7 @@ import ComprasListaOC, { type OcLazza } from "@/components/compras-lista-oc";
 import ComprasLazzaLlego from "@/components/compras-lazza-llego";
 import ComprasLazzaFactura from "@/components/compras-lazza-factura";
 import ComprasLazzaFacturasOc from "@/components/compras-lazza-facturas-oc";
+import ComprasLazzaOc from "@/components/compras-lazza-oc";
 import { EVENTO_FACTURAS_COMPRA } from "@/components/carga-masiva-global";
 import { Check, FileUp, Loader2, X } from "lucide-react";
 
@@ -32,6 +34,8 @@ export default function ComprasLazzaPage() {
   // ✔ / ½ en la columna Factura: las facturas de esa OC (para sacar una cargada por error).
   const [facturasDe, setFacturasDe] = useState<OcLazza | null>(null);
   const [llego, setLlego] = useState<OcLazza | null>(null);
+  // El número de la OC abre la OC para editarla (proveedor, artículos, cantidades, precios).
+  const [abrir, setAbrir] = useState<OcLazza | null>(null);
   const [observar, setObservar] = useState<OcLazza | null>(null);
   const [sacando, setSacando] = useState(false);
 
@@ -66,7 +70,7 @@ export default function ComprasLazzaPage() {
             <FileUp className="h-4 w-4" /> Cargar factura
           </button>
         </div>
-        <ComprasListaOC sociedadId={sociedadId} lazza={{ onLlego: setLlego, onObservar: setObservar, onFactura: oc => { setFacturaOc(oc); setFactura(true); }, onFacturas: setFacturasDe }} />
+        <ComprasListaOC sociedadId={sociedadId} lazza={{ onLlego: setLlego, onObservar: setObservar, onFactura: oc => { setFacturaOc(oc); setFactura(true); }, onFacturas: setFacturasDe, onAbrir: setAbrir }} />
       </div>
 
       {factura && sociedadId && <ComprasLazzaFactura sociedadId={sociedadId} ocInicial={facturaOc} onClose={() => { setFactura(false); setFacturaOc(null); }} />}
@@ -74,6 +78,7 @@ export default function ComprasLazzaPage() {
         <ComprasLazzaFacturasOc sociedadId={sociedadId} oc={facturasDe} onClose={() => setFacturasDe(null)}
           onCargar={() => { setFacturaOc(facturasDe); setFacturasDe(null); setFactura(true); }} />
       )}
+      {abrir && sociedadId && <ComprasLazzaOc sociedadId={sociedadId} oc={abrir} onClose={() => setAbrir(null)} />}
       {llego && sociedadId && <ComprasLazzaLlego sociedadId={sociedadId} oc={llego} onClose={() => setLlego(null)} />}
       {observar && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4" onClick={() => { if (!sacando) setObservar(null); }}>

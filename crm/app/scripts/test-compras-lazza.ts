@@ -1,7 +1,7 @@
 // Compras Lazza: comparación factura vs OC, neto estimado y cruces seguros de precio.
 // Uso (desde crm/app): npx tsx scripts/test-compras-lazza.ts
 import assert from "node:assert/strict";
-import { comparar, netoFactura, netoPorOc, crucesSeguros, notaObservar, aFacturarPorRenglon, costoPrAnterior, vencimientoPorDias, tipoNotaCredito, ivaYPercepciones } from "../src/lib/compras-lazza";
+import { comparar, netoFactura, netoPorOc, crucesSeguros, notaObservar, aFacturarPorRenglon, costoPrAnterior, vencimientoPorDias, tipoNotaCredito, ivaYPercepciones, totalesOc, renglonesPrDeOc } from "../src/lib/compras-lazza";
 import { repartirEnvio } from "../src/lib/cargar-factura";
 
 // Neto
@@ -102,5 +102,23 @@ assert.deepEqual(ivaYPercepciones({ total: 1210, neto: 1000, iva: 0, percepcione
 assert.deepEqual(ivaYPercepciones({ total: 1105, neto: 1000, iva: 0, percepciones: 0, ivaPorcentaje: 21 }), { iva: 105, percepciones: 0, percepcionEstimada: false }); // 10,5 %
 assert.deepEqual(ivaYPercepciones({ total: 1250, neto: 1000, iva: 210, percepciones: 40, ivaPorcentaje: 21 }), { iva: 210, percepciones: 40, percepcionEstimada: false }); // leídos
 assert.deepEqual(ivaYPercepciones({ total: 1250, neto: 1000, iva: 0, percepciones: 40, ivaPorcentaje: 21 }), { iva: 210, percepciones: 40, percepcionEstimada: false });
+
+// Editar OC: totales y renglones del PR
+assert.deepEqual(totalesOc([{ cantidad: 2, precio: 100 }, { cantidad: 1, precio: 50, iva: 10.5 }], false), { subtotal: 250, iva: 47.25, total: 297.25 });
+assert.deepEqual(totalesOc([{ cantidad: 2, precio: 100 }], true), { subtotal: 200, iva: 0, total: 200 });
+const prIts = [
+  { id: "p1", codigo: "H700", descripcion: "Casco H700", proveedor_id: "VIEJO" },
+  { id: "p2", codigo: "", descripcion: "Guante nitrilo", proveedor_id: null },
+  { id: "p3", codigo: "", descripcion: "Botin", proveedor_id: "OTRO" },
+  { id: "p4", codigo: "", descripcion: "Remera", proveedor_id: "VIEJO" },
+  { id: "p5", codigo: "", descripcion: "Remera", proveedor_id: "VIEJO" },
+];
+const m = renglonesPrDeOc([
+  { id: "o1", codigo: "h700", descripcion: "CASCO H700 BLANCO" },  // por código
+  { id: "o2", codigo: null, descripcion: "GUANTE  NITRILO" },       // por descripción, PR sin proveedor
+  { id: "o3", codigo: null, descripcion: "Botin" },                 // es de otro proveedor: no
+  { id: "o4", codigo: null, descripcion: "Remera" },                // dos iguales: dudoso, no
+], prIts, "VIEJO");
+assert.deepEqual([...m], [["o1", "p1"], ["o2", "p2"]]);
 
 console.log("test-compras-lazza OK");

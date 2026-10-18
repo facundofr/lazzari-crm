@@ -170,3 +170,34 @@ export function ivaYPercepciones(f: { total: number; neto: number; iva: number; 
   if (resto < 1) return porDiferencia; // redondeo, o IVA más bajo (10,5 %)
   return { iva, percepciones: round2(perc + resto), percepcionEstimada: true };
 }
+
+/** Editar OC (Compras Lazza): subtotal, IVA (por renglón) y total. OC de PR manual = sin IVA. */
+export function totalesOc(items: Array<{ cantidad: number; precio: number; iva?: number | null }>, sinIva: boolean): { subtotal: number; iva: number; total: number } {
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const subtotal = r2(items.reduce((s, i) => s + (Number(i.cantidad) || 0) * (Number(i.precio) || 0), 0));
+  const iva = sinIva ? 0 : r2(items.reduce((s, i) => s + r2((Number(i.cantidad) || 0) * (Number(i.precio) || 0) * (i.iva != null ? Number(i.iva) : 21) / 100), 0));
+  return { subtotal, iva, total: r2(subtotal + iva) };
+}
+
+/**
+ * Editar OC: qué renglón del PR de origen corresponde a cada renglón de la OC (para pasarle el proveedor nuevo y el costo).
+ * Se busca con el código y la descripción de ANTES de editar: mismo código, o si no hay código, misma descripción.
+ * Solo renglones del PR del proveedor viejo (o sin proveedor) y solo si hay UNO solo: lo dudoso no se toca.
+ */
+export function renglonesPrDeOc(
+  ocItems: Array<{ id: string; codigo: string | null; descripcion: string }>,
+  prItems: Array<{ id: string; codigo: string | null; descripcion: string | null; proveedor_id: string | null }>,
+  proveedorViejo: string | null,
+): Map<string, string> {
+  const norm = (t: string | null | undefined) => (t || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const candidatos = prItems.filter(p => !p.proveedor_id || p.proveedor_id === proveedorViejo);
+  const usados = new Set<string>();
+  const out = new Map<string, string>();
+  for (const oc of ocItems) {
+    const cod = norm(oc.codigo);
+    let hits = cod ? candidatos.filter(p => norm(p.codigo) === cod) : [];
+    if (hits.length !== 1) hits = candidatos.filter(p => norm(p.descripcion) === norm(oc.descripcion) && (!cod || !norm(p.codigo) || norm(p.codigo) === cod));
+    if (hits.length === 1 && !usados.has(hits[0]!.id)) { out.set(oc.id, hits[0]!.id); usados.add(hits[0]!.id); }
+  }
+  return out;
+}
