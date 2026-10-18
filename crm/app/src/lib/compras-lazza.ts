@@ -140,3 +140,16 @@ export function costoPrAnterior(a: {
   if (!conv || conv <= 0 || venta == null) return null;
   return { precio_costo: a.precioAnterior, markup_porcentaje: round2((((a.precioLista ?? venta) / conv) - 1) * 100) };
 }
+
+/**
+ * Nota de crédito de proveedor (Augusto 18/10: "una NC sin OC… va directo a la cc del proveedor"):
+ * el tipo leído ("NOTA DE CREDITO A", "NOTA DE CREDITO FCE MIPYME A", "NC B"…) → el que guarda registrar_nota_credito_compra_v2.
+ * null si no es una nota de crédito.
+ */
+export function tipoNotaCredito(raw: string | null | undefined): string | null {
+  const t = String(raw || "").toUpperCase().replace(/[ÉÈ]/g, "E").trim();
+  if (!/CREDITO|^N\.?\s?\/?\s?C\b/.test(t)) return null;
+  const letra = (t.match(/\b([ABC])\s*$/) || [])[1] || "";
+  if (/FCE|MIPYME/.test(t) && (letra === "A" || letra === "B")) return `NC FCE ${letra}`;
+  return letra ? `NC ${letra}` : "NC";
+}

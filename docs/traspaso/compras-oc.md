@@ -39,7 +39,26 @@ Actualizado el 17/10/2026 para seguir desde otra cuenta sin el historial del cha
 ## Publicado en V1.1.522 (17/10)
 - **Arreglo "numeric field overflow"** al guardar una factura en pesos contra una OC en dólares (FC Segutécnica 0014-73759 → OC-2026-1241 / PR-1247, costos en US$): `guardar_conciliacion_compra` tomaba el precio de la OC (US$ 0,23) como pesos y el margen del PR daba 230.000 % (columna numeric(5,2)). Ahora, con OC en otra moneda, `p_aceptar_costos = false` (no toca costos de OC ni PR) y el envío solo se suma a OC de la misma moneda (si no hay, queda anotado en la factura). Pendiente de fondo: que la función use la moneda de la OC (migración), para que también actualice el costo del PR en esos casos.
 - Encabezado de Cargar factura: muestra **neto + IVA** (pedido de Augusto) y, en chico, "+ percep. … = total …".
-- FC 0014-73760 (OC-2026-1246) se guardó el 17/10 21:47 con la versión vieja en pantalla: quedó sin vencimiento (eCheq a 60 días → debería ser 15/12/2026).
+- FC 0014-73760 (OC-2026-1246) se guardó el 17/10 21:47 con la versión vieja en pantalla: quedó sin vencimiento: corregido el 18/10 a 15/12/2026 con `supabase/migrations/20261018090000_datos_segutecnica.sql` (también puso el CBU de Segutécnica 0170486420000000018344, Banco Francés, en Lazzari y Grupo LA; vuelta atrás en `supabase/rollback/`; sin commitear: subirlo con la próxima tanda). Falta cargar la 0014-73759 (OC-2026-1241); en PR-1247 el protector auditivo se vende a $529,58 y cuesta $918 (y vino el 1110 con cordón).
+
+## Revisión 18/10 (solo lectura)
+- FC 0014-73759 **todavía NO está cargada** (no hay ninguna factura con ese número). OC-2026-1241 (USD 342,31, PR-2026-1247): recibida completa, sin facturar, pago pendiente. Neto de la FC ≈ $506.575 → equivale a ~$1.480 por dólar: razonable.
+- FC 0014-73760 / OC-2026-1246: OK (facturada, venc. 15/12, PDF, nota de diferencia 3,42 %). Ojo: en las notas dice "eCheq a 60 días", pero `condicion_pago` y `dias_pago` quedaron vacíos (el traspaso decía transferencia).
+- Al cargar la 73759: como la OC es en USD, NO va a actualizar el costo del PR-1247 (arreglo de V1.1.522). El protector auditivo (cuesta $918, se vende a $529,58) hay que mirarlo a mano con Augusto.
+- Ocultar del menú: es poner `oculto: true` en `src/components/layout/sidebar.tsx` (siguen andando por link). Ojo: "Compras Lazza" usa el permiso `compras_nueva`; si se oculta "Compras" antes de darle esa casilla a todos los que compran, se quedan sin ninguna entrada de Compras.
+
+## SIN PUBLICAR (18/10): Cargar factura simple + Compras nueva fuera del menú
+- Augusto: "solo quiero que le carguen la factura a la OC y listo… la coincidencia no me interesa". En `components/compras-lazza-factura.tsx`:
+  - Se sacó la comparación entera (neto, envío, Coincide/Diferencia, Sumar la diferencia, aviso 5 %, Observar automático) y el botón "Leer artículos con IA" (queda "Leer con IA" solo si el sistema no la puede leer).
+  - Guarda con `p_aceptar_costos: false` y las asignaciones a precio de OC: **no toca ningún costo** (ni OC ni PR). La OC queda facturada / en parte. Si la OC ya no tiene nada pendiente, se ata con un renglón en $0 (como antes).
+  - Pago igual (Pagos: transferencia/eCheq a __ días con vencimiento; o Visa). Email del proveedor si falta (siempre); CBU/alias si falta y va a Pagos.
+  - **"Nota para Finanzas (opcional)"** siempre visible: queda en las notas de la factura ("Nota para Finanzas: …").
+  - La marca 👁 Observar manual de la lista de OC sigue.
+- `components/layout/sidebar.tsx`: "Compras nueva" con `oculto: true` (sigue andando por link `/compras-nueva`).
+- El plan del dólar (pasar FC en pesos a OC en USD) quedó DESCARTADO: ya no se actualizan costos desde Compras Lazza. Sin migración.
+- **Factura sin OC**: se carga igual; el cartel dice "Sin OC: la factura va directo a la cuenta corriente de …". Varias OC: se tildan todas.
+- **NC sin OC** (Augusto 18/10: "todo va directo a la cc del proveedor"): si el comprobante es nota de crédito (`tipoNotaCredito` en `lib/compras-lazza.ts`, con prueba), no muestra OC ni forma de pago; guarda con `registrar_nota_credito_compra_v2` (la misma de Finanzas) sin aplicar a ninguna factura → queda como crédito del proveedor (estado `recibida`), con la "Nota para Finanzas" y el PDF. La nota de débito sigue sin cargarse acá.
+- tsc 0, hooks OK, `scripts/test-compras-lazza.ts` OK. Probado en local SIN guardar con el PDF de la FC 0014-73759: se lee, aparece OC-2026-1241, sin comparación, nota para Finanzas, vence 15/12. La NC no se probó con un PDF real (no había ninguno a mano).
 
 ## Próximos pasos
 1. **Mirar con Augusto la PRIMERA factura que se guarde con Compras Lazza**: que la OC quede facturada (o parcial), el costo en el PR, Pagos, el PDF y Observar si correspondía. Todavía no se guardó ninguna real con este botón, y la lectura con IA tampoco se probó.

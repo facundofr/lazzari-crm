@@ -3,30 +3,30 @@
 /**
  * Compras Lazza › Cargar factura (Augusto 16/10): MUY simple y permisivo. Es para que los chicos carguen las facturas
  * y saber más o menos cuánto se gastó por PR.
- * 1. Subís el PDF: lo lee el SISTEMA (QR de ARCA o texto, sin IA). La IA es opcional ("Leer artículos con IA").
+ * 1. Subís el PDF: lo lee el SISTEMA (QR de ARCA o texto, sin IA). Si no puede, "Leer con IA".
  * 2. Proveedor por CUIT. Se eligen una o más OC (con su detalle). También: OC sin proveedor y OC de otros proveedores
  *    (pregunta "¿seguro?" y si pasa toda la OC o solo algunos artículos a este proveedor).
- * 3. Envío / logística: siempre se suma a la OC (con varias, repartido por plata).
- * 4. Se compara el neto (sin envío) con lo de las OC (lib/compras-lazza.ts). Si no coincide: con una OC
- *    [Sumar la diferencia a la OC] o [Pasar igual]; con varias, "diferencia sin definir". Pasar igual = "Observar".
- *    Más del 5 %: aviso y "Dejar algo anotado". Nada frena.
- * 5. Precio de un artículo: se actualiza (OC y PR) solo si es seguro. Pago: como siempre (Pagos o Visa).
- * Guardar usa guardar_conciliacion_compra (la de siempre), sin aprender equivalencias.
+ * 3. Augusto 18/10: "solo que le carguen la factura a la OC y listo": NO se compara con la OC, no se suman envío ni
+ *    diferencias y no se toca ningún precio (ni OC ni PR). La OC queda facturada (o en parte).
+ * 4. Pago como siempre (Pagos o Visa), email y CBU/alias del proveedor si faltan, y "Nota para Finanzas".
+ * 5. Nota de crédito: sin OC y sin forma de pago; va a la cuenta corriente del proveedor como crédito
+ *    (registrar_nota_credito_compra_v2, la misma de Finanzas). La nota de débito no se carga acá.
+ * Guardar usa guardar_conciliacion_compra (la de siempre), sin aceptar costos ni aprender equivalencias.
  */
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
 import { useToast } from "@/components/ui/toast";
 import { ProveedorFormModal } from "@/components/proveedor-form-modal";
 import { EVENTO_FACTURAS_COMPRA } from "@/components/carga-masiva-global";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
-import { facturaDesdeDatos, lineKey, precioNeto, type FacturaCarga } from "@/lib/factura-compra-leida";
+import { facturaDesdeDatos, lineKey, type FacturaCarga } from "@/lib/factura-compra-leida";
 import { leerFacturaLocal } from "@/lib/leer-factura-local";
 import { asignarRenglonesAProveedor } from "@/lib/oc-sin-proveedor";
 import { traerTarjetas, tarjetaSugerida, registrarPagoTarjeta, movimientoPagoTarjeta } from "@/lib/pago-tarjeta";
-import { citaOc, esEnvio } from "@/lib/purchase-matching";
-import { repartirEnvio, cant } from "@/lib/cargar-factura";
-import { aFacturarPorRenglon, comparar, crucesSeguros, netoFactura, netoPorOc, notaObservar, vencimientoPorDias, AVISO_PCT, type LineaOc } from "@/lib/compras-lazza";
+import { citaOc } from "@/lib/purchase-matching";
+import { cant } from "@/lib/cargar-factura";
+import { aFacturarPorRenglon, netoFactura, tipoNotaCredito, vencimientoPorDias, type LineaOc } from "@/lib/compras-lazza";
 import { coincideTodas, normalizarTexto, palabrasBusqueda } from "@/lib/buscar-texto";
 import { AlertTriangle, Check, CreditCard, FileUp, Loader2, Search, Sparkles, UserPlus, X } from "lucide-react";
 
@@ -58,7 +58,6 @@ const chip = "rounded-md border px-2 py-1 text-xs";
 const btnSi = "rounded-md bg-violet-600 px-2 py-1 text-xs font-medium text-white hover:bg-violet-700";
 const btnNo = "rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-700 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800";
 const elegido = "ring-2 ring-violet-400";
-const inputCls = "w-28 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-right text-sm dark:border-zinc-600 dark:bg-zinc-900";
 
 /** OC abiertas con algo pendiente de facturar, con su detalle (cuánto pidió, cuánto llegó y precio). */
 async function traerOcs(sociedadId: string, fuente: Fuente, proveedorId: string, soloId?: string): Promise<Oc[]> {
@@ -122,7 +121,9 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
   const [archivo, setArchivo] = useState<File | null>(null);
   const [origen, setOrigen] = useState<"sistema" | "ia" | "">("");
   const [noSeLeyo, setNoSeLeyo] = useState(false);
+  // Nota de débito: no se carga acá. Nota de crédito: sí (factura.tipo "NC …").
   const [esNota, setEsNota] = useState(false);
+  const ncKey = useRef<string | null>(null);
   const [otraSociedad, setOtraSociedad] = useState("");
   const [duplicada, setDuplicada] = useState(false);
   const [proveedor, setProveedor] = useState<Proveedor | null>(null);
@@ -135,13 +136,11 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
   const [elegidas, setElegidas] = useState<Map<string, Eleccion>>(new Map());
   const [preguntar, setPreguntar] = useState<{ oc: Oc; articulos: Set<string> | null } | null>(null);
   const [netoTxt, setNetoTxt] = useState("");
-  const [envioTxt, setEnvioTxt] = useState("");
-  const [sumarDif, setSumarDif] = useState(false);
-  const [nota, setNota] = useState("");
   const [conVisa, setConVisa] = useState<boolean | null>(null);
-  // Nota para Pagos: transferencia o eCheq y a cuántos días (null = lo que sugiere el proveedor).
+  // Para Pagos: transferencia o eCheq y a cuántos días (null = lo que sugiere el proveedor).
   const [forma, setForma] = useState<FormaPago | null>(null);
   const [diasTxt, setDiasTxt] = useState<string | null>(null);
+  // Nota para Finanzas (opcional): queda en las notas de la factura.
   const [notaPago, setNotaPago] = useState("");
   // Recordatorio: si al proveedor le falta el email o los datos bancarios, se completan acá y se guardan en el proveedor.
   const [emailProv, setEmailProv] = useState("");
@@ -153,8 +152,9 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
 
   // ── 1. Leer (sistema primero; IA opcional) ──
   function reiniciar() {
+    ncKey.current = null;
     setError(""); setFactura(null); setProveedor(null); setOcs([]); setCargadas(new Set()); setElegidas(new Map()); setVer("prov"); setBusca("");
-    setSumarDif(false); setNota(""); setConVisa(null); setForma(null); setDiasTxt(null); setNotaPago(""); setDuplicada(false); setEsNota(false); setOtraSociedad(""); setNoSeLeyo(false); setOrigen("");
+    setConVisa(null); setForma(null); setDiasTxt(null); setNotaPago(""); setDuplicada(false); setEsNota(false); setOtraSociedad(""); setNoSeLeyo(false); setOrigen("");
   }
 
   async function leer(file: File) {
@@ -184,14 +184,14 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
   }
 
   async function usarDatos(file: File, d: any, como: "sistema" | "ia") {
-    const f = facturaDesdeDatos(file, d);
+    const leida = facturaDesdeDatos(file, d);
+    const nc = tipoNotaCredito(d.tipo_comprobante);
+    const f = nc ? { ...leida, tipo: nc } : leida;
     setFactura(f); setOrigen(como);
-    setEsNota(/CR[EÉ]DITO|D[EÉ]BITO|^N\.?\s?[CD]\b/i.test(String(d.tipo_comprobante || "")));
+    setEsNota(!nc && /D[EÉ]BITO|^N\.?\s?D\b/i.test(String(d.tipo_comprobante || "")));
     const soc = SOCIEDAD_POR_CUIT[digitos(d.cuit_receptor)];
     setOtraSociedad(soc && soc.id !== sociedadId ? soc.nombre : "");
     setNetoTxt(aTexto(netoFactura(f).neto));
-    const envio = f.items.filter(it => esEnvio(it.descripcion)).reduce((t, it) => t + it.cantidad * precioNeto(it), 0);
-    setEnvioTxt(envio > 0 ? aTexto(envio) : "");
     if (proveedor && digitos(proveedor.cuit) === f.cuit) return; // releída con IA: mismo proveedor, mismas OC
     if (f.cuit.length === 11) {
       const { data: ps } = await db.from("proveedores").select("id, razon_social, cuit, talles_especiales, medio_pago_preferido, plazo_cheque_dias, dias_pago, email, cbu, alias_bancario").eq("sociedad_id", sociedadId).eq("activo", true);
@@ -206,6 +206,7 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
     const norm = (n: string) => { const m = String(n || "").replace(/\s+/g, "").match(/^(\d{1,5})[-/](\d{1,8})$/); return m ? `${m[1].padStart(5, "0")}-${m[2].padStart(8, "0")}` : String(n || "").replace(/\s+/g, "").toUpperCase(); };
     setDuplicada(!!f.numero && (dups || []).some((x: any) => norm(x.numero_factura) === norm(f.numero) && String(x.tipo_comprobante || "FC A").toUpperCase() === f.tipo.toUpperCase()));
     setProveedor(p); // después del chequeo de duplicada: el aviso sale junto con el proveedor
+    if (f.tipo.startsWith("NC")) return; // nota de crédito: sin OC
     const propias = await cargarFuente("prov", p.id, true);
     const citadas = propias.filter(o => (f.ocRefs || []).some(r => citaOc(r, o.numero)));
     // Desde el "+" de una OC: esa OC viene elegida. Si es de otro proveedor o sin proveedor, pregunta "¿seguro?".
@@ -276,20 +277,6 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
     return o.lineas.filter(l => (cant.get(l.id) || 0) > 0 && (e.modo !== "articulos" || e.itemIds.has(l.id)))
       .map(l => ({ id: l.id, ocId: o.id, codigo: l.codigo, descripcion: l.descripcion, pendiente: cant.get(l.id) || 0, precio: l.precio, moneda: o.moneda }));
   }), [ocsElegidas, elegidas]);
-  const itemsFc = useMemo(() => (factura?.items || []).map((it, i) => ({ key: lineKey(factura!, i), codigo: it.codigo || null, descripcion: it.descripcion, cantidad: it.cantidad, precio: precioNeto(it) })), [factura]);
-  const cruces = useMemo(() => (factura ? crucesSeguros(itemsFc.filter(it => !esEnvio(it.descripcion)), lineas, factura.moneda, { tallesEspeciales: proveedor?.talles_especiales || [] }) : []), [factura, itemsFc, lineas, proveedor]);
-  const precios = useMemo(() => new Map(cruces.filter(c => c.cambia).map(c => [c.lineaId, c.precioNuevo])), [cruces]);
-  const porOc = useMemo(() => netoPorOc(lineas, precios), [lineas, precios]);
-  const netoOc = useMemo(() => round2([...porOc.values()].reduce((t, x) => t + x, 0)), [porOc]);
-  const envio = num(envioTxt);
-  const comp = useMemo(() => comparar(num(netoTxt), envio, netoOc), [netoTxt, envio, netoOc]);
-  const varias = ocsElegidas.length > 1;
-  // OC en otra moneda que la factura (ej. OC en USD, factura en pesos): la cuenta no sirve, no se compara.
-  const mismaMoneda = (o: { moneda: string }) => !!factura && (String(o.moneda || "ARS").toUpperCase().startsWith("USD") ? "USD" : "ARS") === factura.moneda;
-  const otraMoneda = !!factura && ocsElegidas.some(o => !mismaMoneda(o));
-  // El envío (en la moneda de la factura) solo se suma a OC de esa moneda; si no hay, queda anotado en la factura.
-  const reparto = useMemo(() => repartirEnvio(envio, ocsElegidas.filter(mismaMoneda).map(o => ({ ocId: o.id, ocNumero: o.numero, importe: porOc.get(o.id) || 0 }))), [envio, ocsElegidas, porOc, factura?.moneda]);
-  const observar = !!ocsElegidas.length && !otraMoneda && !comp.coincide && (varias || !sumarDif);
   const visaSugerida = esMercadoLibre(proveedor?.razon_social) || ocsElegidas.some(o => o.medioPago === "tarjeta" || o.esML);
   const pagaVisa = conVisa ?? visaSugerida;
   const formaPago: FormaPago = forma ?? (/cheq/i.test(proveedor?.medio_pago_preferido || "") ? "echeq" : "transferencia");
@@ -320,14 +307,57 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
       toast.error(`No se pudo guardar en el proveedor (${e?.message || "error"})`);
     } finally { setGuardandoProv(false); }
   }
-  const textoPago = `Pago: ${formaPago === "echeq" ? "eCheq" : "transferencia"}${dias.trim() ? ` a ${Math.round(num(dias))} días` : ""}${notaPago.trim() ? ` · ${notaPago.trim()}` : ""}`;
+  const textoPago = `Pago: ${formaPago === "echeq" ? "eCheq" : "transferencia"}${dias.trim() ? ` a ${Math.round(num(dias))} días` : ""}`;
   const listo = !!factura && !!proveedor && !esNota;
+  const esNC = !!factura && factura.tipo.startsWith("NC");
   const cuantas = (f: Fuente) => ocs.filter(o => o.fuente === f).length;
 
   // ── 4. Guardar ──
+  /** PDF de la factura / NC al Storage (si falla, el comprobante ya quedó: no se avisa). */
+  async function subirArchivo(facturaId: string) {
+    if (!archivo) return;
+    const path = `${sociedadId}/${facturaId}/factura.${archivo.name.split(".").pop() || "pdf"}`;
+    const { error: upErr } = await supabase.storage.from("facturas-compra").upload(path, archivo, { upsert: true });
+    if (upErr) return;
+    const { data: u } = supabase.storage.from("facturas-compra").getPublicUrl(path);
+    if (u?.publicUrl) await db.from("facturas_compra").update({ archivo_url: u.publicUrl, archivo_nombre: archivo.name }).eq("id", facturaId);
+  }
+
+  // Nota de crédito: sin OC ni pago; queda como crédito en la cuenta corriente del proveedor (se usa al pagarle).
+  async function guardarNC() {
+    if (!factura || !proveedor) return;
+    const numero = factura.numero.trim();
+    setGuardando(true); setError("");
+    try {
+      if (!ncKey.current) ncKey.current = crypto.randomUUID();
+      const iva = Number(factura.ivaPorcentaje ?? 21);
+      const items = factura.items.length ? factura.items.map(it => ({ codigo: it.codigo || null, descripcion: it.descripcion, cantidad: it.cantidad, precio_unitario: it.precio_unitario, descuento_porcentaje: it.descuento_porcentaje, unidad: it.unidad, iva_porcentaje: it.iva_porcentaje }))
+        : [{ codigo: null, descripcion: "Nota de crédito (sin detalle de artículos)", cantidad: 1, precio_unitario: num(netoTxt), descuento_porcentaje: 0, unidad: "UN", iva_porcentaje: iva }];
+      const notas = [notaPago.trim() ? `Nota para Finanzas: ${notaPago.trim()}` : "", "Cargada con «Compras Lazza» (sin OC)"].filter(Boolean).join("\n");
+      const { data, error: e } = await db.rpc("registrar_nota_credito_compra_v2", {
+        p_sociedad_id: sociedadId, p_request_key: ncKey.current,
+        p_factura: {
+          numero_factura: numero, tipo_comprobante: factura.tipo, proveedor_id: proveedor.id, fecha: factura.fecha || todayAR(),
+          subtotal: num(netoTxt), iva_porcentaje: factura.ivaPorcentaje, iva: ivaFactura, percepciones: factura.percepciones, total: factura.total,
+          moneda: factura.moneda, tipo: "mercaderia", notas, cae: factura.cae || null,
+        },
+        p_items: items, p_aplicaciones: [],
+      });
+      if (e) throw new Error(e.message);
+      if (!data?.factura_compra_id) throw new Error("La base no confirmó la nota de crédito. No se guardó nada.");
+      await subirArchivo(data.factura_compra_id);
+      toast.success(`✔ ${factura.tipo} ${numero} cargada · queda como crédito de ${proveedor.razon_social}`);
+      window.dispatchEvent(new Event(EVENTO_FACTURAS_COMPRA));
+      onClose();
+    } catch (e: any) {
+      setError(`No se pudo guardar la nota de crédito: ${e?.message || "error"}`);
+    } finally { setGuardando(false); }
+  }
+
   async function guardar() {
     if (!factura || !proveedor) return;
     if (!factura.numero.trim()) { setError("Falta el número de la factura."); return; }
+    if (esNC) return guardarNC();
     setGuardando(true); setError("");
     const numero = factura.numero.trim();
     const insertados: string[] = [];
@@ -357,63 +387,39 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
         }
       }
 
-      // b) Envío y diferencia: renglones nuevos en la OC (cuentan como llegados: no son mercadería).
+      // b) OC elegida sin nada pendiente (ej. ya facturada entera): un renglón en $0 para que la factura quede atada
+      //    a esa OC (una OC puede tener varias facturas). No se suman envío ni diferencias (Augusto 18/10).
       const iva = Number(factura.ivaPorcentaje ?? 21);
-      const conRenglonNuevo = new Set<string>();
-      const nuevoRenglon = async (ocId: string, descripcion: string, precio: number) => {
+      const nuevoRenglon = async (ocId: string, descripcion: string) => {
         const { data: orden } = await db.from("orden_compra_items").select("orden").eq("orden_id", ocId).order("orden", { ascending: false }).limit(1);
         const { data, error: e } = await db.from("orden_compra_items").insert({
-          orden_id: ocId, codigo: "", descripcion, cantidad: 1, cantidad_recibida: 1, unidad: "UN", precio_unitario: precio, iva_porcentaje: iva,
+          orden_id: ocId, codigo: "", descripcion, cantidad: 1, cantidad_recibida: 1, unidad: "UN", precio_unitario: 0, iva_porcentaje: iva,
           orden: (Number(orden?.[0]?.orden) || 0) + 1,
         }).select("id").single();
-        if (e || !data) throw new Error(`No se pudo sumar "${descripcion}" a la OC (${e?.message || "sin respuesta"})`);
-        insertados.push(data.id); conRenglonNuevo.add(ocId);
+        if (e || !data) throw new Error(`No se pudo atar la factura a la OC (${e?.message || "sin respuesta"})`);
+        insertados.push(data.id);
         return data.id as string;
       };
-      const extras: Array<{ id: string; precio: number; origen: string }> = [];
-      const envioDesc = factura.items.find(it => esEnvio(it.descripcion))?.descripcion || "Envío / logística";
-      for (const p of reparto.filter(p => p.monto > 0)) extras.push({ id: await nuevoRenglon(ocFinal.get(p.ocId)!, `${envioDesc} (FC ${numero})`, p.monto), precio: p.monto, origen: "envio" });
-      // OC elegida sin nada pendiente ni envío/diferencia (ej. ya facturada entera y "Pasar igual"):
-      // un renglón en $0 para que la factura quede atada a esa OC (una OC puede tener varias facturas).
-      const conAlgo = new Set([...lineas.map(l => ocFinal.get(l.ocId) || l.ocId), ...conRenglonNuevo]);
-      const sumaDif = !otraMoneda && !comp.coincide && !varias && sumarDif && ocsElegidas.length === 1;
-      if (sumaDif) extras.push({ id: await nuevoRenglon(ocFinal.get(ocsElegidas[0].id)!, `Diferencia FC ${numero}`, comp.diferencia), precio: comp.diferencia, origen: "diferencia" });
+      const vinculos: string[] = [];
+      const conAlgo = new Set(lineas.map(l => ocFinal.get(l.ocId) || l.ocId));
       for (const o of ocsElegidas) {
         const destino = ocFinal.get(o.id)!;
-        if (!conAlgo.has(destino) && !conRenglonNuevo.has(destino)) extras.push({ id: await nuevoRenglon(destino, `FC ${numero} (sin renglones pendientes)`, 0), precio: 0, origen: "vinculo" });
-      }
-      for (const ocId of conRenglonNuevo) {
-        const { data: its } = await db.from("orden_compra_items").select("cantidad, precio_unitario, iva_porcentaje").eq("orden_id", ocId);
-        if (!its?.length) continue;
-        const neto = round2(its.reduce((t: number, i: any) => t + Number(i.cantidad) * Number(i.precio_unitario), 0));
-        const ivaT = round2(its.reduce((t: number, i: any) => t + Number(i.cantidad) * Number(i.precio_unitario) * Number(i.iva_porcentaje ?? 21) / 100, 0));
-        await db.from("ordenes_compra").update({ subtotal: neto, iva: ivaT, total: round2(neto + ivaT), updated_at: new Date().toISOString() }).eq("id", ocId).eq("sociedad_id", sociedadId);
+        if (!conAlgo.has(destino)) { vinculos.push(await nuevoRenglon(destino, `FC ${numero} (sin renglones pendientes)`)); conAlgo.add(destino); }
       }
 
-      // c) Factura + asignaciones. Sin artículos leídos, un renglón "Factura sin detalle" con el neto.
+      // c) Factura + asignaciones (a precio de OC: no se toca ningún costo). Sin artículos leídos, un renglón "Factura sin detalle" con el neto.
       const items = factura.items.length
         ? factura.items.map((it, i) => ({ key: lineKey(factura, i), ...it }))
         : [{ key: "fc", codigo: "", descripcion: "Factura (sin detalle de artículos)", cantidad: 1, precio_unitario: num(netoTxt), descuento_porcentaje: 0, iva_porcentaje: iva, unidad: "UN" }];
-      const keyBase = items.find(it => !esEnvio(it.descripcion))?.key || items[0].key;
-      const keyEnvio = items.find(it => esEnvio(it.descripcion))?.key || keyBase;
-      const cruce = new Map(cruces.map(c => [c.lineaId, c]));
+      const keyBase = items[0].key;
       const asign = [
-        ...lineas.map(l => {
-          const c = cruce.get(l.id);
-          return { key: c?.key || keyBase, orden_compra_item_id: l.id, cantidad: l.pendiente, precio_factura: c?.cambia ? c.precioNuevo : l.precio, precio_oc: l.precio, origen: c ? c.motivo : "lazza" };
-        }),
-        ...extras.map(x => ({ key: x.origen === "envio" ? keyEnvio : keyBase, orden_compra_item_id: x.id, cantidad: 1, precio_factura: x.precio, precio_oc: x.precio, origen: x.origen })),
+        ...lineas.map(l => ({ key: keyBase, orden_compra_item_id: l.id, cantidad: l.pendiente, precio_factura: l.precio, precio_oc: l.precio, origen: "lazza" })),
+        ...vinculos.map(id => ({ key: keyBase, orden_compra_item_id: id, cantidad: 1, precio_factura: 0, precio_oc: 0, origen: "vinculo" })),
       ];
-      const notaObs = observar || (comp.alta && !otraMoneda) ? notaObservar({
-        numeroFc: numero, comp, varias, nota, moneda: factura.moneda, fecha: new Date().toLocaleDateString("es-AR", { timeZone: "America/Argentina/Buenos_Aires" }), quien: profile?.full_name || "",
-      }) : "";
       const notas = [
         pagaVisa ? "" : textoPago,
+        notaPago.trim() ? `Nota para Finanzas: ${notaPago.trim()}` : "",
         "Cargada con «Compras Lazza»",
-        envio > 0 && !reparto.length ? `Envío / logística ${plata(envio)} (sin OC elegida)` : "",
-        reparto.some(p => p.monto > 0) ? `Envío sumado a la OC: ${reparto.filter(p => p.monto > 0).map(p => `${p.ocNumero} ${plata(p.monto)}`).join(" · ")}` : "",
-        sumaDif ? `Diferencia ${plata(comp.diferencia)} sumada a la ${ocsElegidas[0].numero}` : "",
-        notaObs ? `${observar ? "OBSERVAR: " : ""}${notaObs}` : "",
       ].filter(Boolean).join("\n");
       const { data, error: eRpc } = await db.rpc("guardar_conciliacion_compra", {
         p_sociedad_id: sociedadId, p_factura_id: null,
@@ -422,22 +428,14 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
           fecha_vencimiento: pagaVisa ? factura.vencimiento || null : vencimientoPorDias(factura.fecha, dias, factura.vencimiento), cae: factura.cae || null, moneda: factura.moneda, subtotal: num(netoTxt),
           iva: ivaFactura, iva_porcentaje: factura.ivaPorcentaje, percepciones: factura.percepciones, total: factura.total, notas,
         },
-        // OC en otra moneda: el precio de la OC (ej. US$) no es el de la factura (pesos); no se tocan los costos de la OC ni del PR
-        // (antes los tomaba como pesos y el margen daba "numeric field overflow").
-        p_items: items, p_asignaciones: asign, p_borrador: false, p_aceptar_costos: !otraMoneda, p_equivalencias: [], p_confirmar: true,
+        // Solo ata la factura a la OC: no se tocan los costos de la OC ni del PR.
+        p_items: items, p_asignaciones: asign, p_borrador: false, p_aceptar_costos: false, p_equivalencias: [], p_confirmar: true,
       });
       if (eRpc) throw new Error(eRpc.message);
       const facturaId = data?.factura_compra_id as string;
 
-      // d) PDF, pago y "Observar" (si algo de esto falla, la factura ya quedó: solo se avisa).
-      if (archivo && facturaId) {
-        const path = `${sociedadId}/${facturaId}/factura.${archivo.name.split(".").pop() || "pdf"}`;
-        const { error: upErr } = await supabase.storage.from("facturas-compra").upload(path, archivo, { upsert: true });
-        if (!upErr) {
-          const { data: u } = supabase.storage.from("facturas-compra").getPublicUrl(path);
-          if (u?.publicUrl) await db.from("facturas_compra").update({ archivo_url: u.publicUrl, archivo_nombre: archivo.name }).eq("id", facturaId);
-        }
-      }
+      // d) PDF y pago (si algo de esto falla, la factura ya quedó: solo se avisa).
+      if (facturaId) await subirArchivo(facturaId);
       let pagoTxt = "va a Pagos";
       if (facturaId && pagaVisa) {
         const visa = tarjetaSugerida(await traerTarjetas(db, sociedadId), { ocConTarjeta: true });
@@ -450,14 +448,7 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
       } else if (facturaId) {
         await db.from("facturas_compra").update({ estado: "pendiente" }).eq("id", facturaId).eq("estado", "pendiente_aprobacion");
       }
-      if (observar && facturaId) {
-        const { error: eO } = await db.from("facturas_compra").update({ observar: true, observar_nota: notaObs }).eq("id", facturaId);
-        const ocIds = [...new Set(ocsElegidas.map(o => ocFinal.get(o.id)!))];
-        const { error: eO2 } = eO ? { error: eO } : await db.from("ordenes_compra").update({ observar: true, observar_nota: notaObs }).in("id", ocIds).eq("sociedad_id", sociedadId);
-        if (eO || eO2) toast.warning("La factura quedó cargada y la diferencia anotada en sus notas, pero falta correr la migración de «Observar» para marcarla.");
-      }
-      toast.success([`✔ FC ${numero} cargada`, pagoTxt, observar ? "quedó en Observar" : "",
-        Number(data?.presupuestos_items_actualizados) ? `${data.presupuestos_items_actualizados} costo(s) actualizados en el PR` : ""].filter(Boolean).join(" · "));
+      toast.success([`✔ FC ${numero} cargada`, pagoTxt].join(" · "));
       if (data?.aviso) toast.warning(String(data.aviso));
       window.dispatchEvent(new Event(EVENTO_FACTURAS_COMPRA));
       onClose();
@@ -516,15 +507,10 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
               <span className="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800">{origen === "ia" ? `✨ Leída con IA · ${factura.items.length} artículo(s)` : "Leída por el sistema (sin IA)"}</span>
-              {origen === "sistema" && (
-                <button onClick={() => void leerConIA()} disabled={leyendoIA || guardando} className="inline-flex items-center gap-1 text-violet-600 underline disabled:opacity-50">
-                  {leyendoIA ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />} Leer artículos con IA (opcional: actualiza precios y encuentra el envío)
-                </button>
-              )}
             </div>
             {otraSociedad && <p className="flex items-center gap-1 text-sm text-amber-700 dark:text-amber-400"><AlertTriangle className="h-4 w-4" /> Está a nombre de {otraSociedad}: cargala desde esa sociedad.</p>}
-            {duplicada && <p className="flex items-center gap-1 text-sm text-red-600"><AlertTriangle className="h-4 w-4" /> Esta factura ya está cargada en el sistema.</p>}
-            {esNota && <p className="flex items-center gap-1 text-sm text-amber-700 dark:text-amber-400"><AlertTriangle className="h-4 w-4" /> Es una nota de crédito o débito: esta pantalla es para facturas.</p>}
+            {duplicada && <p className="flex items-center gap-1 text-sm text-red-600"><AlertTriangle className="h-4 w-4" /> {esNC ? "Esta nota de crédito" : "Esta factura"} ya está cargada en el sistema.</p>}
+            {esNota && <p className="flex items-center gap-1 text-sm text-amber-700 dark:text-amber-400"><AlertTriangle className="h-4 w-4" /> Es una nota de débito: esta pantalla es para facturas y notas de crédito.</p>}
             {!proveedor && !esNota && (
               <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
                 <AlertTriangle className="h-4 w-4" /> {factura.cuit ? `El proveedor CUIT ${factura.cuit} no está cargado.` : "No se leyó el CUIT del proveedor."}
@@ -532,8 +518,15 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
               </div>
             )}
 
+            {/* Nota de crédito: sin OC, a la cuenta corriente del proveedor */}
+            {listo && esNC && (
+              <p className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
+                Nota de crédito: no se ata a ninguna OC. Va a la cuenta corriente de <b>{proveedor!.razon_social}</b> como crédito (se usa al pagarle).
+              </p>
+            )}
+
             {/* OC */}
-            {listo && (
+            {listo && !esNC && (
               <div>
                 <div className="mb-1 flex flex-wrap items-center gap-1.5">
                   <span className="mr-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">¿De qué OC es?</span>
@@ -557,49 +550,7 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
               </div>
             )}
 
-            {/* Comparación */}
-            {listo && ocsElegidas.length > 0 && (
-              <div className="space-y-2 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-700">
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                  <label className="flex items-center gap-1.5">Neto de la factura <input value={netoTxt} onChange={e => setNetoTxt(e.target.value)} inputMode="decimal" className={inputCls} />
-                    {netoFactura(factura).estimado && <span className="text-xs text-amber-600" title="El QR solo trae el total: se calculó sacando el IVA">(estimado)</span>}</label>
-                  <label className="flex items-center gap-1.5">Envío / logística <input value={envioTxt} onChange={e => setEnvioTxt(e.target.value)} placeholder="0" inputMode="decimal" className={inputCls} /></label>
-                  {reparto.some(p => p.monto > 0) && <span className="text-xs text-sky-700 dark:text-sky-300">Se suma a {reparto.filter(p => p.monto > 0).map(p => `${p.ocNumero} ${plata(p.monto)}`).join(" · ")}</span>}
-                </div>
-                {cruces.some(c => c.cambia) && (
-                  <div className="text-xs text-zinc-600 dark:text-zinc-300">
-                    <span className="font-medium">Precios que se actualizan (OC y PR):</span>{" "}
-                    {cruces.filter(c => c.cambia).map(c => { const l = lineas.find(x => x.id === c.lineaId); return `${l?.descripcion || ""}: ${plata(c.precioViejo)} → ${plata(c.precioNuevo)}`; }).join(" · ")}
-                  </div>
-                )}
-                {otraMoneda ? (
-                  <p className="text-xs text-zinc-600 dark:text-zinc-300">Hay OC en otra moneda que la factura ({factura.moneda}): no se compara. Se carga igual.</p>
-                ) : comp.coincide ? (
-                  <p className="flex items-center gap-1.5 font-medium text-emerald-700 dark:text-emerald-400"><Check className="h-4 w-4" /> Coincide: factura {plata(comp.factura)} · OC {plata(comp.oc)}</p>
-                ) : (
-                  <div className={`space-y-2 rounded-md px-2 py-1.5 ${comp.alta ? "bg-amber-50 dark:bg-amber-950/30" : "bg-zinc-50 dark:bg-zinc-800/60"}`}>
-                    <p className="flex flex-wrap items-center gap-1.5">
-                      <AlertTriangle className={`h-4 w-4 ${comp.alta ? "text-amber-600" : "text-zinc-400"}`} />
-                      La factura da <b>{plata(comp.factura)}</b> y {varias ? "las OC" : "la OC"} <b>{plata(comp.oc)}</b>. Diferencia <b>{plata(comp.diferencia)}</b> ({aTexto(comp.pct)} %).
-                    </p>
-                    {varias ? <p className="text-xs text-zinc-600 dark:text-zinc-300">Son varias OC: la diferencia queda <b>sin definir</b> (no se tocan precios) y la factura queda en <b>Observar</b>.</p> : (
-                      <div className="flex flex-wrap gap-1.5">
-                        <button onClick={() => setSumarDif(true)} className={`${btnNo} ${sumarDif ? elegido : ""}`}>Sumar la diferencia a la {ocsElegidas[0].numero}</button>
-                        <button onClick={() => setSumarDif(false)} className={`${btnNo} ${!sumarDif ? elegido : ""}`}>Pasar igual (queda en Observar)</button>
-                      </div>
-                    )}
-                    {comp.alta && (
-                      <label className="block text-xs">
-                        <span className="font-medium text-amber-800 dark:text-amber-300">Diferencia de más del {AVISO_PCT} %. Si querés, dejá algo anotado:</span>
-                        <input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej.: el proveedor cobró aparte el bordado" className="mt-1 w-full rounded border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-600 dark:bg-zinc-900" />
-                      </label>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {listo && (
+            {listo && !esNC && (
               <div className="flex flex-wrap items-center gap-3 text-sm">
                 <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">¿Cómo se paga?</span>
                 <label className="flex items-center gap-1"><input type="radio" checked={!pagaVisa} onChange={() => setConVisa(false)} /> Va a Pagos</label>
@@ -607,7 +558,7 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
                 {visaSugerida && conVisa === null && <span className="text-xs text-zinc-500">(la OC es de Mercado Libre o se pagó con tarjeta)</span>}
               </div>
             )}
-            {listo && !pagaVisa && (
+            {listo && !esNC && !pagaVisa && (
               <div className="flex flex-wrap items-center gap-1.5 rounded-lg bg-zinc-50 px-3 py-2 text-sm dark:bg-zinc-800/60">
                 <span className="mr-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Para Pagos</span>
                 {(["transferencia", "echeq"] as const).map(f => (
@@ -619,30 +570,32 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
                 <span className="text-xs text-zinc-500">días</span>
                 {DIAS_RAPIDOS.map(d => <button key={d} onClick={() => setDiasTxt(String(d))} className={`rounded px-1.5 py-0.5 text-xs ${dias === String(d) ? "bg-violet-600 text-white" : "text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-700"}`}>{d}</button>)}
                 {vencePago && <span className="text-xs text-zinc-500">vence {vencePago.split("-").reverse().join("/")}</span>}
-                <input value={notaPago} onChange={e => setNotaPago(e.target.value)} placeholder="Nota para Pagos (opcional)"
-                  className="ml-auto min-w-[180px] flex-1 rounded border border-zinc-300 bg-white px-2 py-0.5 text-sm dark:border-zinc-600 dark:bg-zinc-900" />
-                {(faltaEmail || faltaBanco) && (
-                  <div className="flex w-full flex-wrap items-center gap-1.5 border-t border-zinc-200 pt-1.5 text-xs dark:border-zinc-700">
-                    <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
-                    <span className="text-amber-700 dark:text-amber-400">A {proveedor!.razon_social} le falta {[faltaEmail && "el email", faltaBanco && "los datos bancarios"].filter(Boolean).join(" y ")}:</span>
-                    {faltaEmail && <input value={emailProv} onChange={e => setEmailProv(e.target.value)} placeholder="Email" type="email"
-                      className="w-48 rounded border border-zinc-300 bg-white px-1.5 py-0.5 dark:border-zinc-600 dark:bg-zinc-900" />}
-                    {faltaBanco && <input value={bancoProv} onChange={e => setBancoProv(e.target.value)} placeholder="CBU o alias"
-                      className="w-56 rounded border border-zinc-300 bg-white px-1.5 py-0.5 dark:border-zinc-600 dark:bg-zinc-900" />}
-                    <button onClick={() => void guardarDatosProveedor()} disabled={guardandoProv || !(emailProv.trim() || bancoProv.trim())} className={`${btnSi} disabled:opacity-40`}>
-                      {guardandoProv ? <Loader2 className="inline h-3 w-3 animate-spin" /> : "Guardar en el proveedor"}
-                    </button>
-                  </div>
-                )}
               </div>
+            )}
+            {listo && (faltaEmail || (faltaBanco && !pagaVisa && !esNC)) && (
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+                <span className="text-amber-700 dark:text-amber-400">A {proveedor!.razon_social} le falta {[faltaEmail && "el email", faltaBanco && !pagaVisa && !esNC && "los datos bancarios"].filter(Boolean).join(" y ")}:</span>
+                {faltaEmail && <input value={emailProv} onChange={e => setEmailProv(e.target.value)} placeholder="Email" type="email"
+                  className="w-48 rounded border border-zinc-300 bg-white px-1.5 py-0.5 dark:border-zinc-600 dark:bg-zinc-900" />}
+                {faltaBanco && !pagaVisa && !esNC && <input value={bancoProv} onChange={e => setBancoProv(e.target.value)} placeholder="CBU o alias"
+                  className="w-56 rounded border border-zinc-300 bg-white px-1.5 py-0.5 dark:border-zinc-600 dark:bg-zinc-900" />}
+                <button onClick={() => void guardarDatosProveedor()} disabled={guardandoProv || !(emailProv.trim() || bancoProv.trim())} className={`${btnSi} disabled:opacity-40`}>
+                  {guardandoProv ? <Loader2 className="inline h-3 w-3 animate-spin" /> : "Guardar en el proveedor"}
+                </button>
+              </div>
+            )}
+            {listo && (
+              <input value={notaPago} onChange={e => setNotaPago(e.target.value)} placeholder="Nota para Finanzas (opcional)"
+                className="w-full rounded border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-600 dark:bg-zinc-900" />
             )}
             {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400">{error}</p>}
             <div className="flex items-center justify-end gap-2">
-              {listo && !ocsElegidas.length && <span className="mr-auto text-xs text-amber-700">Sin OC elegida: la factura se carga igual, sin atarla a ninguna OC.</span>}
+              {listo && !esNC && !ocsElegidas.length && <span className="mr-auto text-xs text-zinc-600 dark:text-zinc-300">Sin OC: la factura va directo a la cuenta corriente de {proveedor!.razon_social}.</span>}
               <button onClick={onClose} disabled={guardando} className="rounded-lg border px-4 py-2 text-sm dark:border-zinc-600">Cancelar</button>
               <button onClick={() => void guardar()} disabled={!listo || guardando || leyendoIA}
                 className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-5 py-2 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-40">
-                {guardando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Guardar
+                {guardando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} {esNC ? "Guardar NC" : "Guardar"}
               </button>
             </div>
           </div>

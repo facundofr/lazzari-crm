@@ -61,7 +61,7 @@ const navigation: { grupo: string; items: { name: string; href: string; icon: ty
   ] },
   { grupo: "Comprar", items: [
     { name: "Proveedores", href: "/proveedores", icon: Factory, module: "proveedores" },
-    { name: "Compras nueva", href: "/compras-nueva", icon: ShoppingCart, module: "compras_nueva" },
+    { name: "Compras nueva", href: "/compras-nueva", icon: ShoppingCart, module: "compras_nueva", oculto: true }, // Augusto 18/10: no se usa más (sigue por link)
     { name: "Compras Lazza", href: "/compras-lazza", icon: ShoppingCart, module: "compras_nueva" },
     { name: "Compras", href: "/ordenes-compra", icon: ShoppingCart, module: "ordenes_compra" },
     { name: "Personalización", href: "/personalizacion", icon: Scissors, module: "ordenes_compra", oculto: true },

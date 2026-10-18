@@ -1,7 +1,7 @@
 // Compras Lazza: comparación factura vs OC, neto estimado y cruces seguros de precio.
 // Uso (desde crm/app): npx tsx scripts/test-compras-lazza.ts
 import assert from "node:assert/strict";
-import { comparar, netoFactura, netoPorOc, crucesSeguros, notaObservar, aFacturarPorRenglon, costoPrAnterior, vencimientoPorDias } from "../src/lib/compras-lazza";
+import { comparar, netoFactura, netoPorOc, crucesSeguros, notaObservar, aFacturarPorRenglon, costoPrAnterior, vencimientoPorDias, tipoNotaCredito } from "../src/lib/compras-lazza";
 import { repartirEnvio } from "../src/lib/cargar-factura";
 
 // Neto
@@ -84,5 +84,15 @@ assert.equal(vencimientoPorDias("2026-12-20", 30, null), "2027-01-19");
 assert.equal(vencimientoPorDias("2026-10-16", "", "2026-11-15"), "2026-11-15");
 assert.equal(vencimientoPorDias("", "60", "2026-11-15"), "2026-11-15");
 assert.equal(vencimientoPorDias(null, null, null), null);
+
+// Nota de crédito: tipo leído (QR / texto / IA) → el que guarda la base
+assert.equal(tipoNotaCredito("NOTA DE CREDITO A"), "NC A");
+assert.equal(tipoNotaCredito("NOTA DE CRÉDITO B"), "NC B");
+assert.equal(tipoNotaCredito("NOTA DE CREDITO FCE MIPYME A"), "NC FCE A");
+assert.equal(tipoNotaCredito("NOTA DE CREDITO C"), "NC C");
+assert.equal(tipoNotaCredito("NC A"), "NC A");
+assert.equal(tipoNotaCredito("FACTURA A"), null);
+assert.equal(tipoNotaCredito("NOTA DE DEBITO A"), null);
+assert.equal(tipoNotaCredito("FC A"), null);
 
 console.log("test-compras-lazza OK");
