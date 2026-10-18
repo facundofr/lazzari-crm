@@ -36,6 +36,11 @@ Actualizado el 17/10/2026 para seguir desde otra cuenta sin el historial del cha
 - Cargar factura de Compras Lazza → "Para Pagos": al elegir los días, el **vencimiento de la factura = fecha de la factura + esos días** (ej. FC del 16/10 "a 60 días" → 15/12) y al lado de los días se ve "vence dd/mm". Sin días queda el vencimiento que trae la factura; con Visa no cambia. Función `vencimientoPorDias` en `lib/compras-lazza.ts` (con prueba en `scripts/test-compras-lazza.ts`), usada en `components/compras-lazza-factura.tsx`.
 - Primeras facturas reales para revisar: Segutécnica 0014-73759 ($612.956,25 → OC-2026-1241, OC en USD: no compara) y 0014-73760 ($1.267.750 → OC-2026-1246, +3,4 % por talles grandes 48-56; 13 pantalones OMBÚ). Pago transferencia a 60 días.
 
+## Publicado en V1.1.522 (17/10)
+- **Arreglo "numeric field overflow"** al guardar una factura en pesos contra una OC en dólares (FC Segutécnica 0014-73759 → OC-2026-1241 / PR-1247, costos en US$): `guardar_conciliacion_compra` tomaba el precio de la OC (US$ 0,23) como pesos y el margen del PR daba 230.000 % (columna numeric(5,2)). Ahora, con OC en otra moneda, `p_aceptar_costos = false` (no toca costos de OC ni PR) y el envío solo se suma a OC de la misma moneda (si no hay, queda anotado en la factura). Pendiente de fondo: que la función use la moneda de la OC (migración), para que también actualice el costo del PR en esos casos.
+- Encabezado de Cargar factura: muestra **neto + IVA** (pedido de Augusto) y, en chico, "+ percep. … = total …".
+- FC 0014-73760 (OC-2026-1246) se guardó el 17/10 21:47 con la versión vieja en pantalla: quedó sin vencimiento (eCheq a 60 días → debería ser 15/12/2026).
+
 ## Próximos pasos
 1. **Mirar con Augusto la PRIMERA factura que se guarde con Compras Lazza**: que la OC quede facturada (o parcial), el costo en el PR, Pagos, el PDF y Observar si correspondía. Todavía no se guardó ninguna real con este botón, y la lectura con IA tampoco se probó.
 2. Cuando Compras Lazza esté probada: proponer ocultar del menú "Compras nueva" y "Compras" (que sigan andando por link).

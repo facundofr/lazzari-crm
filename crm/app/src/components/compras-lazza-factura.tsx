@@ -285,8 +285,10 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
   const comp = useMemo(() => comparar(num(netoTxt), envio, netoOc), [netoTxt, envio, netoOc]);
   const varias = ocsElegidas.length > 1;
   // OC en otra moneda que la factura (ej. OC en USD, factura en pesos): la cuenta no sirve, no se compara.
-  const otraMoneda = !!factura && ocsElegidas.some(o => (String(o.moneda || "ARS").toUpperCase().startsWith("USD") ? "USD" : "ARS") !== factura.moneda);
-  const reparto = useMemo(() => repartirEnvio(envio, ocsElegidas.map(o => ({ ocId: o.id, ocNumero: o.numero, importe: porOc.get(o.id) || 0 }))), [envio, ocsElegidas, porOc]);
+  const mismaMoneda = (o: { moneda: string }) => !!factura && (String(o.moneda || "ARS").toUpperCase().startsWith("USD") ? "USD" : "ARS") === factura.moneda;
+  const otraMoneda = !!factura && ocsElegidas.some(o => !mismaMoneda(o));
+  // El envío (en la moneda de la factura) solo se suma a OC de esa moneda; si no hay, queda anotado en la factura.
+  const reparto = useMemo(() => repartirEnvio(envio, ocsElegidas.filter(mismaMoneda).map(o => ({ ocId: o.id, ocNumero: o.numero, importe: porOc.get(o.id) || 0 }))), [envio, ocsElegidas, porOc, factura?.moneda]);
   const observar = !!ocsElegidas.length && !otraMoneda && !comp.coincide && (varias || !sumarDif);
   const visaSugerida = esMercadoLibre(proveedor?.razon_social) || ocsElegidas.some(o => o.medioPago === "tarjeta" || o.esML);
   const pagaVisa = conVisa ?? visaSugerida;
@@ -294,6 +296,8 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
   const diasSugeridos = formaPago === "echeq" ? (proveedor?.plazo_cheque_dias ?? proveedor?.dias_pago) : proveedor?.dias_pago;
   const dias = diasTxt ?? (diasSugeridos != null ? String(diasSugeridos) : "");
   const vencePago = factura ? vencimientoPorDias(factura.fecha, dias, factura.vencimiento) : null;
+  // IVA de la factura (leída por QR viene en 0: total − percepciones − neto).
+  const ivaFactura = !factura ? 0 : factura.iva > 0 ? factura.iva : Math.max(0, round2(factura.total - factura.percepciones - num(netoTxt)));
   const faltaEmail = !!proveedor && !String(proveedor.email || "").trim();
   const faltaBanco = !!proveedor && !String(proveedor.cbu || "").trim() && !String(proveedor.alias_bancario || "").trim();
 
@@ -416,9 +420,11 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
         p_factura: {
           proveedor_id: proveedor.id, numero_factura: numero, tipo_comprobante: factura.tipo, fecha: factura.fecha,
           fecha_vencimiento: pagaVisa ? factura.vencimiento || null : vencimientoPorDias(factura.fecha, dias, factura.vencimiento), cae: factura.cae || null, moneda: factura.moneda, subtotal: num(netoTxt),
-          iva: factura.iva > 0 ? factura.iva : Math.max(0, round2(factura.total - factura.percepciones - num(netoTxt))), iva_porcentaje: factura.ivaPorcentaje, percepciones: factura.percepciones, total: factura.total, notas,
+          iva: ivaFactura, iva_porcentaje: factura.ivaPorcentaje, percepciones: factura.percepciones, total: factura.total, notas,
         },
-        p_items: items, p_asignaciones: asign, p_borrador: false, p_aceptar_costos: true, p_equivalencias: [], p_confirmar: true,
+        // OC en otra moneda: el precio de la OC (ej. US$) no es el de la factura (pesos); no se tocan los costos de la OC ni del PR
+        // (antes los tomaba como pesos y el margen daba "numeric field overflow").
+        p_items: items, p_asignaciones: asign, p_borrador: false, p_aceptar_costos: !otraMoneda, p_equivalencias: [], p_confirmar: true,
       });
       if (eRpc) throw new Error(eRpc.message);
       const facturaId = data?.factura_compra_id as string;
@@ -501,7 +507,11 @@ export default function ComprasLazzaFactura({ sociedadId, ocInicial, onClose }: 
               <span className="text-zinc-500">{formatDate(factura.fecha || todayAR())}</span>
               <span className="font-medium">{proveedor?.razon_social || factura.razonSocialLeida || "Proveedor"}</span>
               <span className="text-xs text-zinc-500">CUIT {factura.cuit || "?"}</span>
-              <span className="ml-auto font-semibold">{plata(factura.total)}</span>
+              {/* Neto + IVA (lo que cuesta la mercadería); las percepciones aparte, en chico */}
+              <span className="ml-auto text-right leading-tight">
+                <span className="font-semibold">{plata(round2(num(netoTxt) + ivaFactura))}</span> <span className="text-xs text-zinc-500">neto + IVA</span>
+                {factura.percepciones > 0 && <span className="block text-[11px] text-zinc-500">+ percep. {plata(factura.percepciones)} = total {plata(factura.total)}</span>}
+              </span>
               <button onClick={() => { reiniciar(); setArchivo(null); }} disabled={guardando} className="text-xs text-zinc-500 underline">Otra factura</button>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
