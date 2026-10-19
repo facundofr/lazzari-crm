@@ -272,7 +272,7 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
         </div>
       )}
 
-      {subir && <ChequesBanco sociedadId={sociedadId} cheques={todos} onClose={() => setSubir(false)} onGuardado={() => { cargar(); }} />}
+      {subir && <ChequesBanco sociedadId={sociedadId} cheques={todos.map((c) => ({ id: c.id, numero: c.numero, direccion: c.direccion, estado: c.estado, monto: Number(c.monto), cuit_emisor: c.cuit || null }))} onClose={() => setSubir(false)} onGuardado={() => { cargar(); }} />}
     </div>
   );
 }

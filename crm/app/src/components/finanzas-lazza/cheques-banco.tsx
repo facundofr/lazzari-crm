@@ -1,19 +1,20 @@
 "use client";
 
 // Finanzas Lazza → Cheques → "Subir Excel del banco" (Augusto 19/10/2026).
-// Mismo circuito que Finanzas > Extractos > "Completar cheques emitidos" (lib/extracto-bbva + RPC completar_cheques_emitidos):
-// lee la planilla (hoja "Emitidos") o los Excel de eCheq emitidos, NO DUPLICA (busca cada cheque por número),
-// agrega solo los que faltan, marca los de Martín y pasa a debitados los que el banco pagó antes del corte del extracto.
-// Muestra el resumen y guarda recién cuando Augusto aprieta Guardar.
+// Se suben juntos los listados de eCheq del BBVA (aceptados, depósito, endosados, rechazados, emitidos, denegados);
+// cada archivo se reconoce solo. Reglas en lib/cheques-banco (con prueba): solo cambia el estado si coinciden N° + CUIT + monto,
+// nunca crea cheques, ignora lo anterior al 22/08/2026 y solo avanza estados. Los rechazados usan rechazar_cheque_recibido
+// (la misma función de Finanzas: anula el cobro, la factura vuelve a pendiente y deja aviso). Guarda solo con "Guardar".
 import { useMemo, useState } from "react";
-import { Loader2, Upload, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2, Upload, X } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
-import { formatDate } from "@/lib/utils";
-import { leerListadoCheques, chequesParaCompletar, unirListados, numeroCheque, type ChequeListado } from "@/lib/extracto-bbva";
+import { formatCurrency, formatDate } from "@/lib/utils";
+import { compararConBanco, cuentasDeOtraSociedad, leerListadoBanco, nombreListado, DESDE_CRM, type ChequeBanco, type ChequeCrm } from "@/lib/cheques-banco";
+import { useUser } from "@/lib/auth-context";
 
 const db = supabase as any;
-const CHEQUES_DESDE = "2026-08-01";
 const errorTexto = (e: unknown) => (e instanceof Error ? e.message : (e as { message?: string })?.message || String(e));
+const ESTADO: Record<string, string> = { en_cartera: "En cartera", depositado: "Depositado", cobrado: "Cobrado / debitado", endosado: "Endosado", rechazado: "Rechazado", entregado: "Sin debitar", pendiente: "Sin debitar" };
 
 async function leerHojas(file: File): Promise<unknown[][][]> {
   const XLSX: any = await import("xlsx");
@@ -23,46 +24,40 @@ async function leerHojas(file: File): Promise<unknown[][][]> {
 
 export function ChequesBanco({ sociedadId, cheques, onClose, onGuardado }: {
   sociedadId: string;
-  cheques: { numero: string; direccion: string; estado: string }[];
+  cheques: ChequeCrm[];
   onClose: () => void;
   onGuardado: () => void;
 }) {
   const [leyendo, setLeyendo] = useState(false);
   const [guardando, setGuardando] = useState(false);
-  const [archivos, setArchivos] = useState<string[]>([]);
-  const [listado, setListado] = useState<ChequeListado[] | null>(null);
-  const [viejosPagados, setViejosPagados] = useState<ChequeListado[]>([]);
-  const [corte, setCorte] = useState("2026-08-31");
-  const [aviso, setAviso] = useState<string | null>(null);
+  const [archivos, setArchivos] = useState<{ nombre: string; listado: string; filas: number }[]>([]);
+  const [banco, setBanco] = useState<ChequeBanco[] | null>(null);
+  const [resultado, setResultado] = useState<string[] | null>(null);
+  const [numerosCuentas, setNumerosCuentas] = useState<string[]>([]);
+  const { sociedadActiva } = useUser();
 
-  const aPagarEnCrm = useMemo(() => new Set(cheques.filter((c) => c.direccion === "emitido" && ["pendiente", "entregado"].includes(c.estado)).map((c) => numeroCheque(c.numero))), [cheques]);
-  const comparacion = useMemo(() => {
-    if (!listado) return null;
-    const enCrm = new Set(cheques.filter((c) => c.direccion === "emitido").map((c) => numeroCheque(c.numero)));
-    const nuevos = listado.filter((c) => !enCrm.has(numeroCheque(c.numero)));
-    const pagadosAntes = [...listado, ...viejosPagados].filter((c) => c.estado === "PAGADO" && c.fecha_debito && c.fecha_debito <= corte && aPagarEnCrm.has(numeroCheque(c.numero)));
-    return { total: listado.length, nuevos, yaEstan: listado.length - nuevos.length, terceros: listado.filter((c) => c.cubre_tercero).length, pagadosAntes: pagadosAntes.length };
-  }, [listado, viejosPagados, cheques, corte, aPagarEnCrm]);
+  const comp = useMemo(() => (banco ? compararConBanco(banco, cheques) : null), [banco, cheques]);
+  const ajenas = useMemo(() => (banco ? cuentasDeOtraSociedad(banco, numerosCuentas) : []), [banco, numerosCuentas]);
 
   async function elegir(files: FileList | null) {
     if (!files?.length) return;
-    setLeyendo(true); setAviso(null);
+    setLeyendo(true); setResultado(null);
     try {
-      const { data: cs } = await db.from("cuentas_financieras").select("fecha_corte").eq("sociedad_id", sociedadId);
-      setCorte((cs || []).map((c: any) => c.fecha_corte).filter(Boolean).sort()[0] || "2026-08-31");
-      const listados: ChequeListado[][] = [];
+      const todos: ChequeBanco[] = [];
+      const info: { nombre: string; listado: string; filas: number }[] = [];
       for (const f of Array.from(files)) {
+        let filas = 0, listado = "";
         for (const hoja of await leerHojas(f)) {
-          const l = leerListadoCheques(hoja);
-          if (l.length) listados.push(l);
+          const l = leerListadoBanco(hoja, f.name);
+          if (l.length) { todos.push(...l); filas += l.length; listado = nombreListado(l[0].listado); }
         }
+        info.push({ nombre: f.name, listado: listado || "no es un listado de eCheq", filas });
       }
-      if (!listados.length) { alert("No encontré cheques emitidos en esos archivos (hace falta la hoja \"Emitidos\" o el Excel de eCheq emitidos del banco)."); return; }
-      const l = chequesParaCompletar(listados, CHEQUES_DESDE);
-      const enListado = new Set(l.map((c) => numeroCheque(c.numero)));
-      setListado(l);
-      setViejosPagados(unirListados(listados).filter((c) => c.estado === "PAGADO" && c.fecha_debito && !enListado.has(numeroCheque(c.numero))));
-      setArchivos(Array.from(files).map((f) => f.name));
+      if (!todos.length) { alert("No encontré listados de eCheq en esos archivos. Bajalos del BBVA (eCheq → Exportar) y subilos tal cual."); return; }
+      const { data: cs } = await db.from("cuentas_financieras").select("numero").eq("sociedad_id", sociedadId);
+      setNumerosCuentas((cs || []).map((c: any) => c.numero).filter(Boolean));
+      setArchivos(info);
+      setBanco(todos);
     } catch (e) {
       alert(`No se pudo leer: ${errorTexto(e)}`);
     } finally {
@@ -71,31 +66,27 @@ export function ChequesBanco({ sociedadId, cheques, onClose, onGuardado }: {
   }
 
   async function guardar() {
-    if (!listado?.length) return;
+    if (!comp?.cambios.length) return;
     setGuardando(true);
-    let agregados = 0, numerados = 0, marcados = 0, pagados = 0;
+    const hechos: string[] = [];
     try {
-      // Los viejos solo van si el CRM los tiene "a pagar" (para no mandar los cheques de años anteriores).
-      const viejos = viejosPagados.filter((c) => aPagarEnCrm.has(numeroCheque(c.numero)) && String(c.fecha_debito) <= corte).map((c) => ({ ...c, soloMarcar: true }));
-      const todos: Array<ChequeListado & { soloMarcar?: boolean }> = [...listado, ...viejos];
-      for (let i = 0; i < todos.length; i += 200) {
-        const { data, error } = await db.rpc("completar_cheques_emitidos", {
-          p_sociedad_id: sociedadId,
-          p_cheques: todos.slice(i, i + 200).map((c) => ({
-            numero: c.numero, monto: c.monto, fecha_emision: c.fecha_emision, fecha_pago: c.fecha_pago,
-            beneficiario: c.beneficiario, estado: c.estado, cubre_tercero: c.cubre_tercero,
-            pagado_antes_corte: c.estado === "PAGADO" && Boolean(c.fecha_debito) && String(c.fecha_debito) <= corte,
-            solo_marcar: Boolean(c.soloMarcar),
-          })),
-        });
-        if (error) throw error;
-        agregados += Number(data?.agregados || 0); numerados += Number(data?.numerados || 0); marcados += Number(data?.marcados || 0); pagados += Number(data?.pagados || 0);
+      for (const c of comp.cambios) {
+        if (c.accion === "rechazar") {
+          const { data, error } = await db.rpc("rechazar_cheque_recibido", { p_cheque_id: c.chequeId, p_motivo: "Rechazado según el Excel del banco" });
+          if (error) { hechos.push(`✗ ${c.numero}: ${errorTexto(error)}`); continue; }
+          const avisos: string[] = Array.isArray(data?.avisos) ? data.avisos.map(String) : [];
+          hechos.push(`✓ ${c.numero} rechazado${data?.cobro_anulado ? ": se anuló el cobro y la factura volvió a quedar pendiente" : ""}${avisos.length ? ` (${avisos.join("; ")})` : ""}`);
+          continue;
+        }
+        // Solo si sigue en el estado que se comparó (si alguien lo cambió en el medio, no se pisa).
+        const { data, error } = await db.from("echeqs").update(c.campos).eq("id", c.chequeId).eq("sociedad_id", sociedadId).eq("estado", c.de).select("id");
+        if (error) hechos.push(`✗ ${c.numero}: ${errorTexto(error)}`);
+        else if (!data?.length) hechos.push(`– ${c.numero}: cambió en el medio, no se tocó`);
+        else hechos.push(`✓ ${c.numero}: ${ESTADO[c.de] || c.de} → ${ESTADO[c.a] || c.a}`);
       }
-      setAviso(`${agregados} agregados · ${numerados} del CRM completados con su número · ${marcados} marcados de Martín · ${pagados} pasaron a debitados.`);
-      setListado(null); setViejosPagados([]);
+      setResultado(hechos);
+      setBanco(null);
       onGuardado();
-    } catch (e) {
-      alert(`No se pudieron guardar los cheques: ${errorTexto(e)}`);
     } finally {
       setGuardando(false);
     }
@@ -103,38 +94,107 @@ export function ChequesBanco({ sociedadId, cheques, onClose, onGuardado }: {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
-      <div className="w-full max-w-lg space-y-3 rounded-xl bg-white p-4 shadow-2xl dark:bg-zinc-900" onClick={(e) => e.stopPropagation()}>
+      <div className="max-h-[90vh] w-full max-w-2xl space-y-3 overflow-y-auto rounded-xl bg-white p-4 shadow-2xl dark:bg-zinc-900" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-2">
           <div>
             <h2 className="text-base font-bold text-zinc-900 dark:text-white">Subir Excel del banco</h2>
             <p className="text-xs text-zinc-500">
-              La planilla de cheques (hoja &quot;Emitidos&quot;) o los Excel de eCheq emitidos. No duplica: si el cheque ya está, no lo vuelve a cargar.
-              Agrega los que faltan (desde el {formatDate(CHEQUES_DESDE)} o sin pagar) y pasa a debitados los que el banco pagó antes del extracto.
+              Subí juntos los listados de eCheq del BBVA (aceptados, depósito, endosados, rechazados, emitidos, denegados). No duplica nada:
+              solo cambia el estado de los cheques que coinciden en N°, CUIT y monto. Nada se guarda hasta que apretás Guardar.
             </p>
           </div>
           <button type="button" aria-label="Cerrar" onClick={onClose} className="rounded p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
         </div>
+
         <label className="flex w-fit cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-200 px-3 py-2 text-sm font-medium hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800">
           {leyendo ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} Elegir archivos
           <input type="file" accept=".xls,.xlsx" multiple className="hidden" onChange={(e) => { void elegir(e.target.files); e.target.value = ""; }} />
         </label>
-        {comparacion && (
-          <div className="space-y-2 rounded-lg bg-zinc-50 p-3 text-sm dark:bg-zinc-800/50">
-            <p className="text-xs text-zinc-500">{archivos.join(", ")}</p>
-            <ul className="space-y-0.5">
-              <li>{comparacion.total} cheques que importan</li>
-              <li><b>{comparacion.nuevos.length} nuevos</b> (no están en el CRM)</li>
-              <li>{comparacion.yaEstan} ya están (no se duplican)</li>
-              {comparacion.terceros > 0 && <li>{comparacion.terceros} de Martín Fernández</li>}
-              {comparacion.pagadosAntes > 0 && <li>{comparacion.pagadosAntes} figuran &quot;a pagar&quot; pero el banco los debitó: pasan a debitados</li>}
-            </ul>
-            <button type="button" disabled={guardando} onClick={() => void guardar()} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
-              {guardando ? <Loader2 className="h-4 w-4 animate-spin" /> : "Guardar"}
-            </button>
+
+        {archivos.length > 0 && banco && (
+          <ul className="space-y-0.5 text-xs text-zinc-500">
+            {archivos.map((a) => <li key={a.nombre}>{a.nombre}: <b className="text-zinc-700 dark:text-zinc-200">{a.listado}</b>{a.filas ? ` · ${a.filas} cheques` : ""}</li>)}
+          </ul>
+        )}
+
+        {ajenas.length === 0 && comp && comp.coinciden === 0 && comp.cambios.length === 0 && comp.faltan.length > 5 && (
+          <p className="flex items-start gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>Ningún cheque coincide con {sociedadActiva?.nombre || "esta sociedad"}: ¿estos Excel son de la otra sociedad? Cambiala arriba y volvé a subirlos.</span>
+          </p>
+        )}
+        {ajenas.length > 0 && (
+          <p className="flex items-start gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>Estos Excel son de la cuenta {ajenas.join(", ")}, que no es de {sociedadActiva?.nombre || "esta sociedad"}. Cambiá la sociedad arriba y volvé a subirlos.</span>
+          </p>
+        )}
+
+        {comp && (
+          <div className="space-y-3 text-sm">
+            <p className="flex flex-wrap gap-x-4 gap-y-1 rounded-lg bg-zinc-50 px-3 py-2 dark:bg-zinc-800/50">
+              <span className="flex items-center gap-1 text-emerald-700 dark:text-emerald-400"><CheckCircle2 className="h-4 w-4" /> {comp.coinciden} iguales que en el CRM</span>
+              <span><b>{comp.cambios.length}</b> cambian de estado</span>
+              {comp.avisos.length > 0 && <span className="text-amber-700 dark:text-amber-400">{comp.avisos.length} para revisar</span>}
+              {comp.faltan.length > 0 && <span>{comp.faltan.length} no están en el CRM</span>}
+              <span className="text-zinc-400">{comp.viejos} de antes del {formatDate(DESDE_CRM)} (no se tocan)</span>
+            </p>
+
+            {comp.cambios.length > 0 && (
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase text-zinc-500">Cambian de estado</p>
+                <table className="w-full text-xs">
+                  <tbody>
+                    {comp.cambios.map((c) => (
+                      <tr key={c.chequeId} className="border-t border-zinc-100 dark:border-zinc-800">
+                        <td className="py-1 pr-2 font-mono">{c.numero}</td>
+                        <td className="pr-2">{c.quien}</td>
+                        <td className="pr-2 text-right font-mono">{formatCurrency(c.monto)}</td>
+                        <td className={`pr-2 ${c.accion === "rechazar" ? "font-semibold text-red-600" : ""}`}>{ESTADO[c.de] || c.de} → {ESTADO[c.a] || c.a}</td>
+                        <td className="text-zinc-500">{c.detalle}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {comp.avisos.length > 0 && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 dark:border-amber-900 dark:bg-amber-950/30">
+                <p className="mb-1 flex items-center gap-1 text-xs font-semibold text-amber-800 dark:text-amber-200"><AlertTriangle className="h-3.5 w-3.5" /> Para revisar (no se cambian)</p>
+                <ul className="space-y-0.5 text-xs text-amber-900 dark:text-amber-100">
+                  {comp.avisos.map((a, i) => <li key={`${a.numero}-${i}`}><span className="font-mono">{a.numero}</span> {a.quien} {formatCurrency(a.monto)}: {a.texto}</li>)}
+                </ul>
+              </div>
+            )}
+
+            {comp.faltan.length > 0 && (
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase text-zinc-500">No están en el CRM (no se cargan solos)</p>
+                <ul className="space-y-0.5 text-xs text-zinc-600 dark:text-zinc-300">
+                  {comp.faltan.map((f, i) => (
+                    <li key={`${f.numero}-${i}`}>
+                      <span className="font-mono">{f.numero}</span> · {nombreListado(f.listado)} · {f.quien}{f.destinatario ? ` → ${f.destinatario}` : ""} · {formatCurrency(f.monto)}
+                      {f.pago ? ` · pago ${formatDate(f.pago)}` : ""} · banco: {f.estadoBanco.toLowerCase()}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {comp.cambios.length > 0 ? (
+              <button type="button" disabled={guardando} onClick={() => void guardar()} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
+                {guardando ? <Loader2 className="h-4 w-4 animate-spin" /> : `Guardar ${comp.cambios.length} cambio${comp.cambios.length === 1 ? "" : "s"}`}
+              </button>
+            ) : <p className="text-xs text-emerald-700 dark:text-emerald-400">No hay nada para cambiar: el CRM está igual que el banco.</p>}
           </div>
         )}
-        {aviso && <p className="text-xs text-emerald-700 dark:text-emerald-400">✓ {aviso}</p>}
-        <p className="text-[11px] text-zinc-400">Los recibidos (en cartera, depositados, cobrados, rechazados) los actualiza el sistema con cada cobro, OP y extracto.</p>
+
+        {resultado && (
+          <ul className="space-y-0.5 rounded-lg bg-zinc-50 p-2 text-xs dark:bg-zinc-800/50">
+            {resultado.map((r, i) => <li key={i}>{r}</li>)}
+          </ul>
+        )}
       </div>
     </div>
   );
