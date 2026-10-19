@@ -3,7 +3,7 @@
 Para una sesión nueva sin el historial. Leer antes `CLAUDE.md`, la memoria (`C:\Users\lazza\.claude\projects\C--Users-lazza-lazzari\memory\MEMORY.md` y sus archivos) y, en `docs/ESTADO.md`, las entradas **"FINANZAS LAZZA"** (arriba de todo). Lo de más abajo en este archivo es el trabajo del banco del 16-17/10.
 
 ## Finanzas Lazza (pantalla nueva `/finanzas-lazza`, solo super_admin) — estado al 19/10/2026
-Todo publicado; producción en V1.1.538. Finanzas vieja sigue en el menú (no se reemplaza hasta que Augusto apruebe).
+Todo publicado; producción en V1.1.539. Finanzas vieja sigue en el menú (no se reemplaza hasta que Augusto apruebe).
 - **Tanda 1 — V1.1.526:** Reportes (mes), IVA (débito/crédito), Vencimientos. Solo lectura.
 - **Tanda 2 — V1.1.527:** inicio con 14 tarjetas; Facturas (`components/facturas-consulta.tsx` modo `completa`), Cuentas corrientes (una sola, clientes y proveedores), Vencimientos con filtros y orden, OP, Recibos, Retenciones, Movimientos, Objetivos.
 - **Tanda 3 — V1.1.528** (migración `20261019120000_finanzas_lazza_bancos.sql`, corrida): Bancos (cuentas, tarjetas con resumen leído por IA, préstamos debo/me deben), Cheques (en fecha, por estado, 4 semanas, pestaña Martín F., Subir Excel del banco). Correcciones 1 (Descargar/Enviar OP, Guardar y enviar), 2 (CC en una moneda según la ficha), 3 (editar vencimiento y días de pago), 5 (columna OP en facturas de compra).
@@ -14,7 +14,7 @@ Todo publicado; producción en V1.1.538. Finanzas vieja sigue en el menú (no se
 - Servidor local propio: `.claude/launch.json` → "crm-finanzas" (puerto 3005).
 
 ### Próximo
-- **Facturas (19/10, SIN PUBLICAR):** `components/finanzas-lazza/facturas.tsx` reemplaza Pagar, Cobrar y Vencimientos (una fila por factura, Ventas | Compras, Pendientes/Vencidas/Todas, tildar → Pagar/Cobrar (n), Cobrada/Pagada con con Ver/Descargar/Enviar, Enviar recibo por mail). Detalle en ESTADO ("FINANZAS LAZZA › FACTURAS"). Falta probar en pantalla al publicar.
+- **Facturas (19/10, PUBLICADO V1.1.539 y probado en producción):** `components/finanzas-lazza/facturas.tsx` reemplaza Pagar, Cobrar y Vencimientos (una fila por factura, Ventas | Compras, Pendientes/Vencidas/Todas, tildar → Pagar/Cobrar (n), Cobrada/Pagada con con Ver/Descargar/Enviar, Enviar recibo por mail). Detalle en ESTADO ("FINANZAS LAZZA › FACTURAS").
 - **Sacar Finanzas vieja (19/10):** lista de lo que falta en Lazza entregada a Augusto (Gastos, Para confirmar/Extracto, movimientos y cheques a mano, caja proyectada, BCRA, líneas de crédito, exportar, acceso para admin/administrativo). Ocultar = `oculto: true` en `components/layout/sidebar.tsx` línea ~77; los links a /finanzas siguen andando. Orden propuesto: Facturas → Gastos → Banco → cheques/movimientos → acceso → ocultar.
 - **Saldos iniciales (recomendación, sin OK):** fecha de corte sugerida 31/07/2026, Excel del sistema anterior (cliente/proveedor, CUIT, moneda, saldo); cuidado con no duplicar los cobros del sistema anterior ya cargados (Del Sol).
 - **V1.1.538 (19/10, publicada y probada):** corrección de Recibos (columna Banco); Resumen de cuenta completo en la ficha de CC + Excel/PDF; Pagar sin facturas abre en "Pago a cuenta". Nada sin publicar.
