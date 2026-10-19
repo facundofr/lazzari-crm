@@ -6,7 +6,8 @@
  * - Las OC se arman solas al aprobar el PR (como siempre).
  * - El número de la OC la abre para editarla (components/compras-lazza-oc), con cambio de proveedor.
  * - "Llegó": Completo o Parcial por artículo (components/compras-lazza-llego).
- * - "Cargar factura": simple y permisiva (components/compras-lazza-factura); lo que no coincide queda en "Observar".
+ * - "Cargar factura": simple y permisiva (components/compras-lazza-factura). Desde el 19/10 la factura ya no se ata a ninguna OC:
+ *   va directo a la cuenta corriente del proveedor (lo ya vinculado queda como está). La OC solo controla que llegue todo.
  * Solo la ven en el menú los que tienen la casilla "Prueba: Compras nueva".
  */
 import { useState } from "react";
@@ -17,7 +18,6 @@ import { supabase } from "@/lib/supabase/client";
 import ComprasListaOC, { type OcLazza } from "@/components/compras-lista-oc";
 import ComprasLazzaLlego from "@/components/compras-lazza-llego";
 import ComprasLazzaFactura from "@/components/compras-lazza-factura";
-import ComprasLazzaFacturasOc from "@/components/compras-lazza-facturas-oc";
 import ComprasLazzaOc from "@/components/compras-lazza-oc";
 import { EVENTO_FACTURAS_COMPRA } from "@/components/carga-masiva-global";
 import { Check, FileUp, Loader2, X } from "lucide-react";
@@ -29,10 +29,6 @@ export default function ComprasLazzaPage() {
   const { toast } = useToast();
   const sociedadId = sociedadActiva?.id;
   const [factura, setFactura] = useState(false);
-  // "+" en la columna Factura: se abre Cargar factura con esa OC ya elegida.
-  const [facturaOc, setFacturaOc] = useState<OcLazza | null>(null);
-  // ✔ / ½ en la columna Factura: las facturas de esa OC (para sacar una cargada por error).
-  const [facturasDe, setFacturasDe] = useState<OcLazza | null>(null);
   const [llego, setLlego] = useState<OcLazza | null>(null);
   // El número de la OC abre la OC para editarla (proveedor, artículos, cantidades, precios).
   const [abrir, setAbrir] = useState<OcLazza | null>(null);
@@ -61,23 +57,19 @@ export default function ComprasLazzaPage() {
 
   return (
     <div>
-      <Header title="Compras Lazza" subtitle="Las OC se arman solas al aprobar un PR. Marcás lo que llegó y cargás la factura." />
+      <Header title="Compras Lazza" subtitle="Las OC se arman solas al aprobar un PR. Marcás lo que llegó. Las facturas se cargan aparte." />
       <div className="space-y-3 p-4 md:p-6">
         <div className="flex justify-end">
-          <button onClick={() => { setFacturaOc(null); setFactura(true); }} disabled={!sociedadId}
+          <button onClick={() => setFactura(true)} disabled={!sociedadId}
             className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-40"
-            title="Subí la factura del proveedor, elegí la o las OC y guardá">
+            title="Subí la factura o nota de crédito del proveedor: va a su cuenta corriente">
             <FileUp className="h-4 w-4" /> Cargar factura
           </button>
         </div>
-        <ComprasListaOC sociedadId={sociedadId} lazza={{ onLlego: setLlego, onObservar: setObservar, onFactura: oc => { setFacturaOc(oc); setFactura(true); }, onFacturas: setFacturasDe, onAbrir: setAbrir }} />
+        <ComprasListaOC sociedadId={sociedadId} lazza={{ onLlego: setLlego, onObservar: setObservar, onAbrir: setAbrir }} />
       </div>
 
-      {factura && sociedadId && <ComprasLazzaFactura sociedadId={sociedadId} ocInicial={facturaOc} onClose={() => { setFactura(false); setFacturaOc(null); }} />}
-      {facturasDe && sociedadId && (
-        <ComprasLazzaFacturasOc sociedadId={sociedadId} oc={facturasDe} onClose={() => setFacturasDe(null)}
-          onCargar={() => { setFacturaOc(facturasDe); setFacturasDe(null); setFactura(true); }} />
-      )}
+      {factura && sociedadId && <ComprasLazzaFactura sociedadId={sociedadId} onClose={() => setFactura(false)} />}
       {abrir && sociedadId && <ComprasLazzaOc sociedadId={sociedadId} oc={abrir} onClose={() => setAbrir(null)} />}
       {llego && sociedadId && <ComprasLazzaLlego sociedadId={sociedadId} oc={llego} onClose={() => setLlego(null)} />}
       {observar && (

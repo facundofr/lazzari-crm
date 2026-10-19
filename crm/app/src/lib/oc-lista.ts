@@ -61,9 +61,14 @@ export function ejePago(oc: OCParaLista): Eje {
   return fcs.some(f => f.estado === "pagada") ? "parcial" : "falta";
 }
 
-/** Terminada = llegó todo + facturada + pagada. Sale de la lista y pasa a "Terminadas". */
+/** Terminada (Compras nueva) = llegó todo + facturada + pagada. Sale de la lista y pasa a "Terminadas". */
 export function ocTerminada(oc: OCParaLista): boolean {
   return estadoOC(oc) === "completo" && ejeFactura(oc) === "ok" && ejePago(oc) === "ok";
+}
+
+/** Terminada en Compras Lazza (Augusto 19/10): la OC solo controla que llegue todo; facturas y pagos van aparte. */
+export function ocTerminadaLazza(oc: OCParaLista): boolean {
+  return estadoOC(oc) === "completo";
 }
 
 /** Atrasada: pasó la fecha de entrega estimada (o 7 días desde que se pidió) y no llegó todo. */
@@ -85,16 +90,12 @@ export function descripcionCorta(items: ItemOC[]): string {
     .map(i => `${(i.descripcion || i.codigo || "").trim()} (${cant(n(i.cantidad))})`).join(", ");
 }
 
-/** Texto para el proveedor: nombre, N° de OC, artículos con cantidades (sin precios) y el pedido de indicar la OC. */
-export function textoCopiarOC(oc: { numero: string; items: ItemOC[] }, proveedor: string): string {
+/**
+ * Texto para el proveedor (Augusto 19/10): solo "Pedido:" y los artículos con cantidades.
+ * Sin proveedor, sin N° de OC, sin precios y sin pedirles que indiquen la OC. Se pega en el mail o WhatsApp.
+ */
+export function textoCopiarOC(oc: { items: ItemOC[] }): string {
   const renglones = oc.items.filter(i => (i.descripcion || i.codigo || "").trim())
     .map(i => `${cant(n(i.cantidad))} × ${(i.descripcion || i.codigo || "").trim()}`);
-  return [
-    `Proveedor: ${proveedor.trim() || "-"}`,
-    `OC N° ${oc.numero}`,
-    "",
-    ...renglones,
-    "",
-    `Adjunto OC N° ${oc.numero}. Por favor, en el remito y en la factura (si es posible), indicar el número o los números de OC correspondientes a ese remito / factura.`,
-  ].join("\n");
+  return ["Pedido:", ...renglones].join("\n");
 }

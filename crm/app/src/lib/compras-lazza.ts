@@ -201,3 +201,30 @@ export function renglonesPrDeOc(
   }
   return out;
 }
+
+/**
+ * Augusto 19/10: "En la OC cada artículo tiene su costo en su moneda".
+ * Moneda del renglón: la guardada en el renglón; si no tiene, la del costo del renglón del PR; si no, la de la OC.
+ */
+export function monedaRenglonOc(renglon: string | null | undefined, costoPr: string | null | undefined, oc: string | null | undefined): "ARS" | "USD" {
+  for (const m of [renglon, costoPr, oc]) if (m === "ARS" || m === "USD") return m;
+  return "ARS";
+}
+
+/**
+ * Renglón del PR de cada renglón de la OC: primero el que quedó atado al aprobar (presupuesto_item_id);
+ * para las OC viejas sin ese dato, el cruce por código / descripción (renglonesPrDeOc).
+ */
+export function prDeRenglones(
+  ocItems: Array<{ id: string; codigo: string | null; descripcion: string; presupuesto_item_id?: string | null }>,
+  prItems: Array<{ id: string; codigo: string | null; descripcion: string | null; proveedor_id: string | null }>,
+  proveedorViejo: string | null,
+): Map<string, string> {
+  const enPr = new Set(prItems.map(p => p.id));
+  const out = new Map<string, string>();
+  for (const i of ocItems) if (i.presupuesto_item_id && enPr.has(i.presupuesto_item_id)) out.set(i.id, i.presupuesto_item_id);
+  const usados = new Set(out.values());
+  const resto = renglonesPrDeOc(ocItems.filter(i => !out.has(i.id)), prItems.filter(p => !usados.has(p.id)), proveedorViejo);
+  for (const [k, v] of resto) out.set(k, v);
+  return out;
+}

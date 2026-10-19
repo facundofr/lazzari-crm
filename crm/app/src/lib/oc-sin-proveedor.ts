@@ -54,7 +54,7 @@ export interface ResultadoAsignar { movidos: number; ocDestino: string[]; avisos
  * Pasa renglones de OC (sin proveedor) a una OC del proveedor real, del mismo PR y moneda: usa una OC sin mandar que ya exista o crea una.
  * La OC que queda vacía se CANCELA (no se borra). No toca el PR. Se salta lo que ya tiene algo recibido.
  */
-export async function asignarRenglonesAProveedor(db: any, args: { sociedadId: string; userId?: string | null; itemIds: string[]; proveedorId: string; proveedorNombre: string; nota?: string; /** Compras Lazza: mueve también lo que ya tiene algo recibido (lo recibido viaja con el renglón). */ conRecibido?: boolean }): Promise<ResultadoAsignar> {
+export async function asignarRenglonesAProveedor(db: any, args: { sociedadId: string; userId?: string | null; itemIds: string[]; proveedorId: string; proveedorNombre: string; nota?: string; /** Compras Lazza: mueve también lo que ya tiene algo recibido (lo recibido viaja con el renglón). */ conRecibido?: boolean; /** Por qué se pasan (va en las observaciones de la OC nueva). */ motivo?: string }): Promise<ResultadoAsignar> {
   const res: ResultadoAsignar = { movidos: 0, ocDestino: [], avisos: [] };
   if (!args.itemIds.length) return res;
   const { data: items, error: e0 } = await db.from("orden_compra_items").select("id, orden_id, cantidad_recibida, descripcion").in("id", args.itemIds);
@@ -82,7 +82,7 @@ export async function asignarRenglonesAProveedor(db: any, args: { sociedadId: st
       const { data: nueva, error: e2 } = await db.from("ordenes_compra").insert({
         proveedor_id: args.proveedorId, presupuesto_origen_id: o.presupuesto_origen_id, sociedad_id: args.sociedadId, fecha: new Date().toLocaleDateString("en-CA", { timeZone: "America/Buenos_Aires" }),
         moneda: o.moneda, estado: "enviada", subtotal: 0, iva: 0, total: 0,
-        observaciones: `Proveedor real ${args.proveedorNombre}: renglones pasados desde ${o.numero} al conciliar su factura${nota}`, created_by: args.userId || null,
+        observaciones: `Proveedor real ${args.proveedorNombre}: renglones pasados desde ${o.numero} ${args.motivo || "al conciliar su factura"}${nota}`, created_by: args.userId || null,
       }).select("id").single();
       if (e2 || !nueva) throw new Error(e2?.message || "no se pudo crear la OC del proveedor");
       destId = nueva.id as string;

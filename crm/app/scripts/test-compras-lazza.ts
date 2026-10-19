@@ -1,7 +1,7 @@
 // Compras Lazza: comparación factura vs OC, neto estimado y cruces seguros de precio.
 // Uso (desde crm/app): npx tsx scripts/test-compras-lazza.ts
 import assert from "node:assert/strict";
-import { comparar, netoFactura, netoPorOc, crucesSeguros, notaObservar, aFacturarPorRenglon, costoPrAnterior, vencimientoPorDias, tipoNotaCredito, ivaYPercepciones, totalesOc, renglonesPrDeOc } from "../src/lib/compras-lazza";
+import { comparar, netoFactura, netoPorOc, crucesSeguros, notaObservar, aFacturarPorRenglon, costoPrAnterior, vencimientoPorDias, tipoNotaCredito, ivaYPercepciones, totalesOc, renglonesPrDeOc, monedaRenglonOc, prDeRenglones } from "../src/lib/compras-lazza";
 import { repartirEnvio } from "../src/lib/cargar-factura";
 
 // Neto
@@ -120,5 +120,22 @@ const m = renglonesPrDeOc([
   { id: "o4", codigo: null, descripcion: "Remera" },                // dos iguales: dudoso, no
 ], prIts, "VIEJO");
 assert.deepEqual([...m], [["o1", "p1"], ["o2", "p2"]]);
+
+// Moneda por renglón (19/10): la del renglón, si no la del costo del PR, si no la de la OC.
+assert.equal(monedaRenglonOc("USD", "ARS", "ARS"), "USD");
+assert.equal(monedaRenglonOc(null, "USD", "ARS"), "USD", "OC en ARS con un artículo en USD del PR");
+assert.equal(monedaRenglonOc(null, null, "USD"), "USD");
+assert.equal(monedaRenglonOc(undefined, "EUR", null), "ARS");
+
+// Renglón del PR: primero el atado al aprobar; las OC viejas por código / descripción.
+const atado = prDeRenglones([
+  { id: "a", codigo: "X1", descripcion: "Botín", presupuesto_item_id: "p9" },
+  { id: "b", codigo: "G2", descripcion: "Guante", presupuesto_item_id: null },
+  { id: "c", codigo: "Z", descripcion: "Otro", presupuesto_item_id: "borrado" },
+], [
+  { id: "p9", codigo: "X1", descripcion: "Botín", proveedor_id: "VIEJO" },
+  { id: "p2", codigo: "G2", descripcion: "Guante", proveedor_id: "VIEJO" },
+], "VIEJO");
+assert.deepEqual([...atado], [["a", "p9"], ["b", "p2"]], "el atado manda; el que no existe en el PR no se toca");
 
 console.log("test-compras-lazza OK");
