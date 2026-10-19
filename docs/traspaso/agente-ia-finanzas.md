@@ -3,7 +3,7 @@
 Para una sesión nueva sin el historial. Leer antes `CLAUDE.md`, la memoria (`C:\Users\lazza\.claude\projects\C--Users-lazza-lazzari\memory\MEMORY.md` y sus archivos) y, en `docs/ESTADO.md`, las entradas **"FINANZAS LAZZA"** (arriba de todo). Lo de más abajo en este archivo es el trabajo del banco del 16-17/10.
 
 ## Finanzas Lazza (pantalla nueva `/finanzas-lazza`, solo super_admin) — estado al 19/10/2026
-Todo publicado; producción en V1.1.534. Finanzas vieja sigue en el menú (no se reemplaza hasta que Augusto apruebe).
+Todo publicado; producción en V1.1.538. Finanzas vieja sigue en el menú (no se reemplaza hasta que Augusto apruebe).
 - **Tanda 1 — V1.1.526:** Reportes (mes), IVA (débito/crédito), Vencimientos. Solo lectura.
 - **Tanda 2 — V1.1.527:** inicio con 14 tarjetas; Facturas (`components/facturas-consulta.tsx` modo `completa`), Cuentas corrientes (una sola, clientes y proveedores), Vencimientos con filtros y orden, OP, Recibos, Retenciones, Movimientos, Objetivos.
 - **Tanda 3 — V1.1.528** (migración `20261019120000_finanzas_lazza_bancos.sql`, corrida): Bancos (cuentas, tarjetas con resumen leído por IA, préstamos debo/me deben), Cheques (en fecha, por estado, 4 semanas, pestaña Martín F., Subir Excel del banco). Correcciones 1 (Descargar/Enviar OP, Guardar y enviar), 2 (CC en una moneda según la ficha), 3 (editar vencimiento y días de pago), 5 (columna OP en facturas de compra).
@@ -14,7 +14,7 @@ Todo publicado; producción en V1.1.534. Finanzas vieja sigue en el menú (no se
 - Servidor local propio: `.claude/launch.json` → "crm-finanzas" (puerto 3005).
 
 ### Próximo
-- **Sin publicar (próxima tanda):** corrección de Recibos (columna Banco); Resumen de cuenta completo en la ficha de CC + Excel/PDF; Pagar sin facturas abre en "Pago a cuenta" (ver ESTADO).
+- **V1.1.538 (19/10, publicada y probada):** corrección de Recibos (columna Banco); Resumen de cuenta completo en la ficha de CC + Excel/PDF; Pagar sin facturas abre en "Pago a cuenta". Nada sin publicar.
 - **Tanda 4:** (19/10: propuestos 7 grupos de gastos, espera respuesta de Augusto; ver ESTADO) Gastos con todas las variantes + recibos numerados (1 recibo = 1 cobro con su N°, con migración aditiva + rollback) + Descargar (PDF, `generateReciboPDF`) y Enviar recibos por mail (corrección 4). Diseñar con Augusto antes de tocar.
 - **Tanda 5:** Facturar nuevo (no le gusta la de Ventas). A diseñar con Augusto.
 - Corrección 6 (formato/exportación de retenciones, SICORE v9.0): espera al contador.
