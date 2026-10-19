@@ -98,10 +98,10 @@ Idea: las OC quedan independientes de las facturas de compra; la OC solo control
 12. "¿Cómo se paga?" arranca sin ninguna marcada; para guardar hay que elegir "Va a Pagos" o "Ya pagada con Visa" (si no, la pregunta en rojo "Elegí cómo se paga").
 Al final: prueba en `scripts/test-compras-lazza.ts` (texto copiado, OC destino del renglón), tsc, hooks, local SIN guardar, ESTADO.md. No publicar hasta que Augusto lo pida.
 
-## 19/10: Estado Por enviar ⇄ Enviada con un clic (SIN PUBLICAR, sin migración)
+## 19/10: Estado Por enviar ⇄ Enviada con un clic (PUBLICADO en V1.1.535, commit bb88840, Vercel Ready; sin migración)
 - Augusto: "En el estado por enviar o enviada dejame que lo actualice yo con un click. Y ponele la fecha de la cual lo pedí."
 - `components/compras-lista-oc.tsx` (solo con `lazza`): el cartel del Estado es un botón cuando está en "Por enviar" o "Enviada". Clic en Por enviar → Enviada con la fecha de hoy (`pedido`, `pedido_at`, `pedido_via: "manual"` y `pedido_por`, los mismos campos de "Enviar al proveedor"). Clic en Enviada → vuelve a Por enviar y borra la fecha. "Enviada" muestra la fecha (ej. "Enviada 19/10/2026"). Parcial y Completo no cambian. Compras nueva queda igual.
-- tsc 0, hooks OK. NO probado en pantalla (el local pide iniciar sesión): mirarlo con Augusto después de publicar.
+- tsc 0, hooks OK. NO probado en pantalla (local y producción piden iniciar sesión): la primera vez, que Augusto mire que el clic cambia el estado y aparece la fecha.
 
 ## Próximos pasos
 1. **Primera factura real con V1.1.533: cargada por Augusto, "pasó bien" (19/10).** Falta la **primera OC donde cambie el proveedor de un artículo**: que el renglón pase a la OC correcta (o nueva), la vieja vacía quede cancelada y el PR cambie de proveedor.
