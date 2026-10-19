@@ -98,11 +98,18 @@ Idea: las OC quedan independientes de las facturas de compra; la OC solo control
 12. "¿Cómo se paga?" arranca sin ninguna marcada; para guardar hay que elegir "Va a Pagos" o "Ya pagada con Visa" (si no, la pregunta en rojo "Elegí cómo se paga").
 Al final: prueba en `scripts/test-compras-lazza.ts` (texto copiado, OC destino del renglón), tsc, hooks, local SIN guardar, ESTADO.md. No publicar hasta que Augusto lo pida.
 
+## 19/10: Estado Por enviar ⇄ Enviada con un clic (SIN PUBLICAR, sin migración)
+- Augusto: "En el estado por enviar o enviada dejame que lo actualice yo con un click. Y ponele la fecha de la cual lo pedí."
+- `components/compras-lista-oc.tsx` (solo con `lazza`): el cartel del Estado es un botón cuando está en "Por enviar" o "Enviada". Clic en Por enviar → Enviada con la fecha de hoy (`pedido`, `pedido_at`, `pedido_via: "manual"` y `pedido_por`, los mismos campos de "Enviar al proveedor"). Clic en Enviada → vuelve a Por enviar y borra la fecha. "Enviada" muestra la fecha (ej. "Enviada 19/10/2026"). Parcial y Completo no cambian. Compras nueva queda igual.
+- tsc 0, hooks OK. NO probado en pantalla (el local pide iniciar sesión): mirarlo con Augusto después de publicar.
+
 ## Próximos pasos
-1. **Mirar con Augusto la PRIMERA factura real con V1.1.533** (sin OC, a la cc del proveedor, con "¿Cómo se paga?"): Pagos o Visa, PDF, neto/IVA/percepciones. Y la **primera OC donde cambie el proveedor de un artículo**: que el renglón pase a la OC correcta (o nueva), la vieja vacía quede cancelada y el PR cambie de proveedor.
+1. **Primera factura real con V1.1.533: cargada por Augusto, "pasó bien" (19/10).** Falta la **primera OC donde cambie el proveedor de un artículo**: que el renglón pase a la OC correcta (o nueva), la vieja vacía quede cancelada y el PR cambie de proveedor.
 2. Cuando Compras Lazza esté probada: proponer ocultar del menú "Compras nueva" y "Compras" (que sigan andando por link).
 3. En pausa (Augusto: "dejalo como está"): Deshacer de una factura guardada. Si se retoma: solo para "me equivoqué al cargarla"; si el proveedor la anula, va con su NC, no con Deshacer.
 4. Sin definir con Augusto: artículo parecido pero distinto, talle cambiado y curva de talles en el PR.
+
+- Protector auditivo del PR-1247 ($918 costo / $529,58 venta): Augusto (19/10) "dejalo así, no pasa nada". Cerrado.
 
 ## ⚠️ Cuidado al publicar
 - `C:\Users\lazza\lz-pub-auto` y `C:\Users\lazza\lz-pub-lazza` tienen adentro un enlace (junction) al node_modules REAL. `crm/app/scripts/publicar-limpio.sh` hace `rm -rf` de lz-pub-auto: eso puede borrar el node_modules.
@@ -117,5 +124,5 @@ Al final: prueba en `scripts/test-compras-lazza.ts` (texto copiado, OC destino d
 
 ## Prompt para seguir en un chat nuevo
 ```
-Sos el chat de Compras del CRM Lazzari. Leé CLAUDE.md, docs/traspaso/compras-oc.md y en docs/ESTADO.md la entrada "COMPRAS LAZZA". Compras Lazza está publicada (V1.1.516) y su migración ya está corrida; el "+" de la columna Factura y "Sacar factura" salieron en V1.1.519; no queda nada sin publicar. Saludá a Augusto en corto y preguntale si ya cargaron la primera factura (o usaron "Sacar") con Compras Lazza para revisarla juntos (OC, costo en el PR, Pagos, Observar). No publiques nada sin que lo pida y ojo con lz-pub-auto (enlace a node_modules).
+Sos el chat de Compras del CRM Lazzari (siempre en Compras Lazza). Leé CLAUDE.md, la memoria (MEMORY.md y sus archivos), docs/traspaso/compras-oc.md y en docs/ESTADO.md la entrada "COMPRAS LAZZA: OC Y FACTURAS INDEPENDIENTES". V1.1.533 está publicada (OC independientes de facturas, moneda por artículo, precio de la OC pasa al PR, cambiar proveedor por artículo; migración 20261019180000 corrida). No queda nada de Compras sin publicar. La primera factura real ya se cargó bien (19/10). Preguntale a Augusto si ya cambiaron el proveedor de un artículo en una OC, para revisarlo juntos (Próximos pasos 1). Nunca inventes. No publiques sin su OK; para publicar usá crm/app/scripts/publicar-limpio.sh (ojo con lz-pub-auto: enlace a node_modules) y si falla el push no publiques en Vercel.
 ```
