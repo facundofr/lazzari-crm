@@ -1,10 +1,11 @@
 "use client";
 
-// Finanzas Lazza → Cuentas corrientes: clientes y proveedores en UNA lista (solo lectura).
+// Finanzas Lazza → Cuentas corrientes: clientes y proveedores en UNA lista.
+// Cobrar (19/10): en la ficha del cliente se tildan facturas → "Cobrar" (la misma liquidación de Finanzas, ver cobrar.tsx).
 // Opción "Moneda: la de cada cuenta" (Augusto 19/10): cada saldo pasado a su moneda al dólar BNA del día (lib unificarMoneda).
 // Saldos con las mismas reglas que Finanzas (lib/saldo-clientes y lib/saldo-proveedores); semáforo BCRA del último informe.
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2, Search, X } from "lucide-react";
+import { HandCoins, Loader2, Search, X } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
@@ -13,6 +14,7 @@ import { armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, unificarMoneda,
 import { clasificarMovimiento } from "@/lib/tipos-movimiento";
 import { elegirDolares } from "@/lib/dolar-presupuesto";
 import { traerDeudas } from "./datos";
+import { CobrarCliente } from "./cobrar";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -81,16 +83,26 @@ export function FinanzasLazzaCuentasCorrientes({ sociedadId }: { sociedadId: str
   const [enSuMoneda, setEnSuMoneda] = useState(false);
   const [abierta, setAbierta] = useState<FilaCuentaCorriente | null>(null);
   const [movs, setMovs] = useState<any[] | null>(null);
+  const [tildadas, setTildadas] = useState<Set<string>>(new Set());
+  const [cobrando, setCobrando] = useState(false);
+  const [recarga, setRecarga] = useState(0);
   const hoy = todayAR();
 
   useEffect(() => {
     let vivo = true;
     setDatos(null); setError(null);
     traerCuentas(sociedadId, hoy)
-      .then((d) => { if (vivo) setDatos(d); })
+      .then((d) => {
+        if (!vivo) return;
+        setDatos(d);
+        // Después de cobrar, la ficha abierta se actualiza con el saldo nuevo.
+        setAbierta((prev) => (prev ? d.filas.find((f) => f.entidadId === prev.entidadId && f.lado === prev.lado) ?? null : prev));
+      })
       .catch((e) => { console.error("Finanzas Lazza · Cuentas corrientes:", e); if (vivo) setError("No se pudieron cargar las cuentas corrientes. Recargá la página."); });
     return () => { vivo = false; };
-  }, [sociedadId, hoy]);
+  }, [sociedadId, hoy, recarga]);
+
+  useEffect(() => { setTildadas(new Set()); setCobrando(false); }, [abierta?.entidadId]);
 
   // Movimientos de la cuenta abierta (últimos 100).
   useEffect(() => {
@@ -193,13 +205,25 @@ export function FinanzasLazzaCuentasCorrientes({ sociedadId }: { sociedadId: str
               <div className="rounded-lg bg-zinc-50 p-2 dark:bg-zinc-800/60"><p className="text-xs text-zinc-500">Saldo</p><p className="font-mono font-semibold">{montos(abierta.saldo, "$ 0")}</p></div>
               <div className="rounded-lg bg-zinc-50 p-2 dark:bg-zinc-800/60"><p className="text-xs text-zinc-500">Vencido</p><p className="font-mono font-semibold text-red-600">{montos(abierta.vencido)}</p></div>
             </div>
-            <h3 className="mb-1 text-xs font-semibold uppercase text-zinc-500">Facturas con saldo</h3>
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <h3 className="text-xs font-semibold uppercase text-zinc-500">Facturas con saldo</h3>
+              {abierta.lado === "cliente" && (
+                <button type="button" onClick={() => setCobrando(true)} title={tildadas.size ? "Cobrar las facturas tildadas" : "Elegir facturas y cobrar"}
+                  className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1 text-xs font-medium text-white hover:bg-emerald-700">
+                  <HandCoins className="h-3.5 w-3.5" /> Cobrar{tildadas.size ? ` (${tildadas.size})` : ""}
+                </button>
+              )}
+            </div>
             {facturasAbierta.length === 0 ? <p className="mb-3 text-xs text-zinc-400">No tiene facturas con saldo.</p> : (
               <table className="mb-3 w-full text-xs">
-                <thead><tr className="text-left text-[10px] uppercase text-zinc-400"><th className="py-1">Fecha</th><th>Vence</th><th>Comprobante</th><th className="text-right">Total</th><th className="text-right">Saldo</th></tr></thead>
+                <thead><tr className="text-left text-[10px] uppercase text-zinc-400">{abierta.lado === "cliente" && <th className="w-6" />}<th className="py-1">Fecha</th><th>Vence</th><th>Comprobante</th><th className="text-right">Total</th><th className="text-right">Saldo</th></tr></thead>
                 <tbody>
                   {facturasAbierta.map((v) => (
-                    <tr key={v.id} className="border-t border-zinc-100 dark:border-zinc-800">
+                    <tr key={v.id} className={`border-t border-zinc-100 dark:border-zinc-800 ${tildadas.has(v.id) ? "bg-emerald-50 dark:bg-emerald-900/20" : ""}`}>
+                      {abierta.lado === "cliente" && (
+                        <td><input type="checkbox" aria-label={`Tildar ${v.comprobante}`} className="h-3.5 w-3.5 accent-orange-500" checked={tildadas.has(v.id)}
+                          onChange={(e) => setTildadas((prev) => { const n = new Set(prev); if (e.target.checked) n.add(v.id); else n.delete(v.id); return n; })} /></td>
+                      )}
                       <td className="py-1">{formatDate(v.fecha)}</td>
                       <td className={v.dias < 0 ? "font-semibold text-red-600" : ""}>{formatDate(v.vence)}</td>
                       <td className="font-mono">{v.comprobante}</td>
@@ -232,6 +256,10 @@ export function FinanzasLazzaCuentasCorrientes({ sociedadId }: { sociedadId: str
             )}
           </div>
         </div>
+      )}
+      {cobrando && abierta?.lado === "cliente" && (
+        <CobrarCliente sociedadId={sociedadId} clienteId={abierta.entidadId} clienteNombre={abierta.nombre} preseleccion={[...tildadas]} directo={tildadas.size > 0}
+          onClose={() => setCobrando(false)} onCobrado={() => { setTildadas(new Set()); setRecarga((n) => n + 1); }} />
       )}
     </div>
   );

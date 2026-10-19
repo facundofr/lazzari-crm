@@ -2,16 +2,18 @@
 
 // Finanzas Lazza → Vencimientos: SOLO facturas de venta y de compra con saldo, por fecha (sin cheques, fijos ni cuotas).
 // Saldos con la misma regla que Finanzas (lib/saldo-clientes y la de proveedores).
+// Cobrar (19/10): en facturas de venta, botón "Cobrar" → la misma liquidación de Finanzas con esa factura tildada (cobrar.tsx).
 // Augusto 19/10/2026: clic en "Vence" = cambiar la fecha de esa factura y los días de pago del cliente/proveedor
 // (clientes.dias_cuenta_corriente; proveedores dias_cuenta_corriente + condicion_pago/dias_pago), con la opción de
 // aplicar los días nuevos a sus facturas pendientes. En facturas de venta es solo el dato interno: no toca ARCA.
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Pencil, Search, X } from "lucide-react";
+import { HandCoins, Loader2, Pencil, Search, X } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { conVencimiento, filtrarVencimientos, sumarDias, type FilaVencimiento } from "@/lib/finanzas-lazza";
 import { supabase } from "@/lib/supabase/client";
 import { traerDeudas } from "./datos";
+import { CobrarCliente } from "./cobrar";
 
 type Filtro = "todo" | "venta" | "compra";
 
@@ -19,7 +21,7 @@ type Fila = FilaVencimiento & { facturaId: string };
 
 const db = supabase as any;
 
-const columnas = (editar: (f: Fila) => void): Column<Fila>[] => [
+const columnas = (editar: (f: Fila) => void, cobrar: (f: Fila) => void): Column<Fila>[] => [
   { key: "fecha", label: "Fecha de factura", sortable: true, sortValue: (f) => f.fecha, render: (f) => <span className="whitespace-nowrap">{formatDate(f.fecha)}</span> },
   { key: "vence", label: "Vence", sortable: true, sortValue: (f) => f.vence, render: (f) => (
     <button type="button" onClick={(e) => { e.stopPropagation(); editar(f); }} title="Cambiar el vencimiento o los días de pago"
@@ -34,6 +36,12 @@ const columnas = (editar: (f: Fila) => void): Column<Fila>[] => [
   { key: "moneda", label: "Moneda", sortable: true, sortValue: (f) => f.moneda, render: (f) => (f.moneda === "USD" ? "US$" : "$") },
   { key: "total", label: "Total", sortable: true, sortValue: (f) => f.total, className: "text-right", render: (f) => <span className="whitespace-nowrap font-mono text-zinc-500">{formatCurrency(f.total, f.moneda)}</span> },
   { key: "saldo", label: "Saldo", sortable: true, sortValue: (f) => f.saldo, className: "text-right", render: (f) => <span className="whitespace-nowrap font-mono font-semibold">{formatCurrency(f.saldo, f.moneda)}</span> },
+  { key: "accion", label: "", render: (f) => (f.lado === "venta" && f.entidadId ? (
+    <button type="button" onClick={(e) => { e.stopPropagation(); cobrar(f); }} title="Cobrar esta factura (podés sumar otras del cliente)"
+      className="inline-flex items-center gap-1 rounded-lg border border-emerald-300 px-2 py-0.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-950/30">
+      <HandCoins className="h-3.5 w-3.5" /> Cobrar
+    </button>
+  ) : null) },
 ];
 
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -49,6 +57,8 @@ export function FinanzasLazzaVencimientos({ sociedadId }: { sociedadId: string }
   const [desde, setDesde] = useState("");
   const [hasta, setHasta] = useState("");
   const [editando, setEditando] = useState<Fila | null>(null);
+  const [cobrando, setCobrando] = useState<Fila | null>(null);
+  const [recarga, setRecarga] = useState(0);
   const hoy = todayAR();
 
   useEffect(() => {
@@ -58,7 +68,7 @@ export function FinanzasLazzaVencimientos({ sociedadId }: { sociedadId: string }
       .then((d) => { if (vivo) setFilas(d.vencimientos); })
       .catch((e) => { console.error("Finanzas Lazza · Vencimientos:", e); if (vivo) setError("No se pudieron cargar los vencimientos. Recargá la página."); });
     return () => { vivo = false; };
-  }, [sociedadId, hoy]);
+  }, [sociedadId, hoy, recarga]);
 
   const visibles = useMemo<Fila[]>(() => filtrarVencimientos(filas || [], { lado: filtro, texto, moneda, situacion, campoFecha, desde, hasta })
     .map((f) => ({ ...f, facturaId: f.id, id: `${f.lado}-${f.id}` })), [filas, filtro, texto, moneda, situacion, campoFecha, desde, hasta]);
@@ -107,7 +117,7 @@ export function FinanzasLazzaVencimientos({ sociedadId }: { sociedadId: string }
         <p className="flex items-center gap-2 py-6 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Cargando…</p>
       ) : (
         <div className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-          <DataTable columns={columnas(setEditando)} data={visibles} emptyMessage="No hay facturas con saldo con ese filtro" />
+          <DataTable columns={columnas(setEditando, setCobrando)} data={visibles} emptyMessage="No hay facturas con saldo con ese filtro" />
           <div className="flex flex-wrap justify-end gap-x-6 gap-y-1 border-t border-zinc-200 px-3 py-2 text-xs dark:border-zinc-700">
             <span className="text-zinc-400">{visibles.length} facturas con saldo</span>
             {filtro !== "compra" && <span className="text-zinc-500">A cobrar <b className="font-mono text-emerald-700 dark:text-emerald-400">{montos(totales.venta)}</b></span>}
@@ -119,6 +129,10 @@ export function FinanzasLazzaVencimientos({ sociedadId }: { sociedadId: string }
         <EditarVencimiento fila={editando} sociedadId={sociedadId} pendientes={(filas || []).filter((f) => f.lado === editando.lado && f.entidadId && f.entidadId === editando.entidadId)}
           onClose={() => setEditando(null)}
           onCambio={(nuevas) => setFilas((prev) => (prev || []).map((f) => (nuevas[`${f.lado}-${f.id}`] ? conVencimiento(f, nuevas[`${f.lado}-${f.id}`], hoy) : f)))} />
+      )}
+      {cobrando?.entidadId && (
+        <CobrarCliente sociedadId={sociedadId} clienteId={cobrando.entidadId} clienteNombre={cobrando.nombre} preseleccion={[cobrando.facturaId]}
+          onClose={() => setCobrando(null)} onCobrado={() => setRecarga((n) => n + 1)} />
       )}
     </div>
   );

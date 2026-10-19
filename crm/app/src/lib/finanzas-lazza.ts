@@ -586,3 +586,47 @@ export function sumarDias(fecha: string, dias: number): string {
 export function conVencimiento(f: FilaVencimiento, vence: string, hoy: string): FilaVencimiento {
   return { ...f, vence, sinVencimiento: false, dias: diasEntre(hoy, vence) };
 }
+
+// ── Cobrar (19/10/2026): facturas de un cliente que se pueden cobrar ──
+// Misma regla de saldo que Cuentas corrientes / Finanzas (saldoFacturaVenta); sin NC ni anuladas; de la más vieja a la más nueva.
+
+export interface FacturaACobrar {
+  id: string;
+  numero: string;
+  fecha: string;
+  subtotal: number;
+  iva: number;
+  total: number;
+  total_acreditado: number;
+  saldo: number;
+  moneda: "ARS" | "USD";
+  tipo_cambio?: number;
+}
+
+export function facturasACobrar(
+  facturas: { id: string; tipo?: string | null; punto_venta?: number | null; numero?: string | number | null; fecha: string; estado?: string | null; moneda?: string | null; subtotal?: number | null; iva?: number | null; total?: number | null; total_acreditado?: number | null; tipo_cambio?: number | null }[],
+  cobrado: Record<string, number>,
+): FacturaACobrar[] {
+  const out: FacturaACobrar[] = [];
+  for (const f of facturas) {
+    if (f.estado === "anulada" || esNotaCredito(f.tipo || "")) continue;
+    const saldo = r2(Math.max(0, (Number(f.total) || 0) - (Number(f.total_acreditado) || 0) - (cobrado[f.id] || 0)));
+    if (saldo <= 0.005) continue;
+    out.push({
+      id: f.id,
+      numero: `${f.tipo || ""} ${String(f.punto_venta ?? 0).padStart(4, "0")}-${String(f.numero ?? "").padStart(8, "0")}`.trim(),
+      fecha: String(f.fecha).slice(0, 10),
+      subtotal: Number(f.subtotal) || 0, iva: Number(f.iva) || 0, total: Number(f.total) || 0,
+      total_acreditado: Number(f.total_acreditado) || 0, saldo,
+      moneda: normalizarMoneda(f.moneda) === "USD" ? "USD" : "ARS",
+      tipo_cambio: Number(f.tipo_cambio) || undefined,
+    });
+  }
+  return out.sort((a, b) => a.fecha.localeCompare(b.fecha) || a.numero.localeCompare(b.numero));
+}
+
+/** Moneda de lo tildado: "ARS" o "USD"; null si no hay nada o si mezcla monedas (no se pueden sumar en un mismo cobro). */
+export function monedaDelCobro(elegidas: Pick<FacturaACobrar, "moneda">[]): "ARS" | "USD" | null {
+  const monedas = new Set(elegidas.map((f) => f.moneda));
+  return monedas.size === 1 ? [...monedas][0] : null;
+}

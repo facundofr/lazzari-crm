@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { armarRetenciones, armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, armarTcDelDia, armarVencimientos, filtrarVencimientos, ivaDelMes, nivelObjetivo, reporteBasico, saldoFacturaCompra, unificarMoneda, sumarDias, conVencimiento, type FacturaVentaFL } from "../src/lib/finanzas-lazza";
+import { armarRetenciones, armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, armarTcDelDia, armarVencimientos, filtrarVencimientos, ivaDelMes, nivelObjetivo, reporteBasico, saldoFacturaCompra, unificarMoneda, sumarDias, conVencimiento, facturasACobrar, monedaDelCobro, type FacturaVentaFL } from "../src/lib/finanzas-lazza";
 
 const tcDia = armarTcDelDia([{ fecha: "2026-10-09", valor_venta: 1400 }, { fecha: "2026-10-14", valor_venta: 1500 }]);
 assert.equal(tcDia("2026-10-14"), 1500);
@@ -167,5 +167,19 @@ assert.equal(sumarDias("2026-10-19", 30), "2026-11-18");
 assert.equal(sumarDias("2026-02-27", 2), "2026-03-01");
 const fvto = { lado: "venta" as const, id: "x", entidadId: "c", fecha: "2026-10-01", vence: "2026-10-01", sinVencimiento: true, comprobante: "FA", nombre: "C", moneda: "ARS" as const, total: 1, saldo: 1, dias: -18 };
 assert.deepEqual([conVencimiento(fvto, "2026-10-31", "2026-10-19").dias, conVencimiento(fvto, "2026-10-31", "2026-10-19").sinVencimiento], [12, false]);
+
+// Cobrar: facturas con saldo del cliente (sin NC ni anuladas), de la más vieja a la más nueva
+const aCobrar = facturasACobrar([
+  { id: "f2", tipo: "FA", punto_venta: 15, numero: 123, fecha: "2026-10-10", estado: "emitida", moneda: "ARS", subtotal: 1000, iva: 210, total: 1210, total_acreditado: 10 },
+  { id: "f1", tipo: "FB", punto_venta: 15, numero: 99, fecha: "2026-10-01", estado: "parcial", moneda: "USD", subtotal: 100, iva: 21, total: 121, tipo_cambio: 1450 },
+  { id: "f3", tipo: "FA", punto_venta: 15, numero: 124, fecha: "2026-10-02", estado: "emitida", moneda: "ARS", total: 500 },
+  { id: "nc", tipo: "NCA", punto_venta: 15, numero: 5, fecha: "2026-10-03", estado: "emitida", moneda: "ARS", total: 300 },
+  { id: "an", tipo: "FA", punto_venta: 15, numero: 6, fecha: "2026-10-03", estado: "anulada", moneda: "ARS", total: 300 },
+], { f2: 200, f1: 21, f3: 500 });
+assert.deepEqual(aCobrar.map((f) => [f.id, f.numero, f.saldo, f.moneda]), [["f1", "FB 0015-00000099", 100, "USD"], ["f2", "FA 0015-00000123", 1000, "ARS"]]);
+assert.equal(aCobrar[0].tipo_cambio, 1450);
+assert.equal(monedaDelCobro([aCobrar[1]]), "ARS");
+assert.equal(monedaDelCobro(aCobrar), null);
+assert.equal(monedaDelCobro([]), null);
 
 console.log("test-finanzas-lazza OK");

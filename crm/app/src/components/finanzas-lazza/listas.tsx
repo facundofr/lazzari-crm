@@ -1,9 +1,10 @@
 "use client";
 
-// Finanzas Lazza → Órdenes de pago, Recibos, Retenciones y Movimientos (solo lectura).
+// Finanzas Lazza → Órdenes de pago, Recibos, Retenciones y Movimientos.
+// Recibos (19/10): "Nuevo cobro" → elegir cliente y facturas → la misma liquidación de Finanzas (cobrar.tsx).
 // Mismos datos y reglas que las pestañas de Finanzas; acá solo se miran, con filtros y orden por columna.
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Download, Loader2, Mail, MailCheck, Search } from "lucide-react";
+import { Download, HandCoins, Loader2, Mail, MailCheck, Search } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
@@ -12,6 +13,7 @@ import { clasificarMovimiento, esCobroDeCliente, type ClaseMovimiento } from "@/
 import { armarRetenciones, type FilaRetencion } from "@/lib/finanzas-lazza";
 import { useUser } from "@/lib/auth-context";
 import { descargarOP, EnviarOrdenPago } from "@/components/finanzas-lazza/orden-pago-doc";
+import { CobrarCliente } from "@/components/finanzas-lazza/cobrar";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -164,7 +166,9 @@ async function traerMovimientos(sociedadId: string): Promise<Mov[]> {
 }
 
 export function FinanzasLazzaRecibos({ sociedadId }: { sociedadId: string }) {
-  const { datos, error } = useCarga(() => traerMovimientos(sociedadId).then((m) => m.filter((x) => x.cobro)), [sociedadId]);
+  const [recarga, setRecarga] = useState(0);
+  const [cobrando, setCobrando] = useState(false);
+  const { datos, error } = useCarga(() => traerMovimientos(sociedadId).then((m) => m.filter((x) => x.cobro)), [sociedadId, recarga]);
   const [texto, setTexto] = useState("");
   const [desde, setDesde] = useState(primeroDelMes());
   const [hasta, setHasta] = useState("");
@@ -179,12 +183,19 @@ export function FinanzasLazzaRecibos({ sociedadId }: { sociedadId: string }) {
     { key: "conciliado", label: "Banco", sortable: true, sortValue: (m) => (m.conciliado ? 1 : 0), render: (m) => <span className={`text-xs ${m.conciliado ? "text-emerald-600" : "text-amber-600"}`}>{m.conciliado ? "Conciliado" : "Pendiente"}</span> },
   ];
   return (
-    <Marco error={error} cargando={!datos} filtros={<>
-      <Buscador valor={texto} cambiar={setTexto} placeholder="Buscar cliente o detalle" />
-      <Fechas desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} />
-    </>} pie={<><span>{visibles.length} cobros (hoy 1 recibo = 1 movimiento)</span><span>Cobrado <b className="font-mono text-emerald-700 dark:text-emerald-400">{sumar(visibles, (m) => m.monto, (m) => m.moneda)}</b></span></>}>
-      <DataTable columns={cols} data={visibles} emptyMessage="No hay cobros con ese filtro" />
-    </Marco>
+    <>
+      <Marco error={error} cargando={!datos} filtros={<>
+        <button type="button" onClick={() => setCobrando(true)}
+          className="inline-flex h-8 items-center gap-1 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700">
+          <HandCoins className="h-4 w-4" /> Nuevo cobro
+        </button>
+        <Buscador valor={texto} cambiar={setTexto} placeholder="Buscar cliente o detalle" />
+        <Fechas desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} />
+      </>} pie={<><span>{visibles.length} cobros (hoy 1 recibo = 1 movimiento)</span><span>Cobrado <b className="font-mono text-emerald-700 dark:text-emerald-400">{sumar(visibles, (m) => m.monto, (m) => m.moneda)}</b></span></>}>
+        <DataTable columns={cols} data={visibles} emptyMessage="No hay cobros con ese filtro" />
+      </Marco>
+      {cobrando && <CobrarCliente sociedadId={sociedadId} onClose={() => setCobrando(false)} onCobrado={() => setRecarga((n) => n + 1)} />}
+    </>
   );
 }
 
