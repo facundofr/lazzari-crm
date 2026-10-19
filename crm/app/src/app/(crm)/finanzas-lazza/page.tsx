@@ -21,6 +21,7 @@ import { FinanzasLazzaObjetivos, FinanzasLazzaReportes } from "@/components/fina
 import { FinanzasLazzaIva } from "@/components/finanzas-lazza/iva";
 import { FinanzasLazzaVencimientos } from "@/components/finanzas-lazza/vencimientos";
 import { FinanzasLazzaCuentasCorrientes } from "@/components/finanzas-lazza/cuentas-corrientes";
+import { FinanzasLazzaCobrar } from "@/components/finanzas-lazza/cobrar";
 import { FinanzasLazzaCheques } from "@/components/finanzas-lazza/cheques";
 import { FinanzasLazzaBancos } from "@/components/finanzas-lazza/bancos";
 import { FinanzasLazzaMovimientos, FinanzasLazzaOrdenesPago, FinanzasLazzaRecibos, FinanzasLazzaRetenciones } from "@/components/finanzas-lazza/listas";
@@ -28,6 +29,7 @@ import { FinanzasLazzaMovimientos, FinanzasLazzaOrdenesPago, FinanzasLazzaRecibo
 /** Pantallas nuevas que todavía no están (se diseñan con Augusto en las próximas tandas). */
 const EN_ARMADO: Partial<Record<SeccionFL, string>> = {
   facturar: "La pantalla nueva de Facturar se diseña con vos en la Tanda 5.",
+  pagar: "Pagar (órdenes de pago a proveedores desde acá) se arma en la próxima tanda. Mientras tanto las OP se hacen en Finanzas.",
   gastos: "Gastos con todas las variantes (grupos, fijos/eventuales, débito automático, editable) se arma en la Tanda 4.",
 };
 
@@ -65,6 +67,7 @@ export default function FinanzasLazzaPage() {
       </div>
     );
     switch (vista) {
+      case "cobrar": return <FinanzasLazzaCobrar sociedadId={sociedadId} />;
       case "facturas": return <FacturasConsulta completa />;
       case "cuentas": return <FinanzasLazzaCuentasCorrientes sociedadId={sociedadId} />;
       case "vencimientos": return <FinanzasLazzaVencimientos sociedadId={sociedadId} />;

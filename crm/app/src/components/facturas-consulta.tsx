@@ -5,6 +5,7 @@
 // No emite, no cobra, no paga, no anula: eso sigue en Finanzas (solo administración).
 // La usan el menú "Facturas" (/consulta-facturas) y Finanzas Lazza (`completa`: pestaña "Todas" + filtros de estado, moneda y fechas,
 // y en compras la columna "OP" al final para descargar la orden de pago que la pagó — Augusto 19/10/2026).
+// En Finanzas Lazza (`completa`) las facturas de venta con saldo tienen "Cobrar": la misma liquidación de Finanzas (finanzas-lazza/cobrar.tsx).
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -20,7 +21,8 @@ import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { estadoVisibleFactura } from "@/lib/estado-factura-venta";
 import { emisorDeSociedad } from "@/lib/emisor-sociedad";
 import { cargarOPsDeFacturas, abrirOrdenPagoPDF, opsPorFactura, type OPResumen } from "@/lib/orden-pago-pdf";
-import { Download, FileText, Mail, Paperclip, Search, X } from "lucide-react";
+import { Download, FileText, HandCoins, Mail, Paperclip, Search, X } from "lucide-react";
+import { CobrarCliente } from "@/components/finanzas-lazza/cobrar";
 import { destinatariosCortos } from "@/lib/envio-factura-texto";
 
 type Moneda = "ARS" | "USD";
@@ -130,6 +132,7 @@ export function FacturasConsulta({ completa = false }: { completa?: boolean }) {
   const [opsCompra, setOpsCompra] = useState<OPResumen[] | null>(null);
   const [bajandoOP, setBajandoOP] = useState<string | null>(null);
   const [opsDeFC, setOpsDeFC] = useState<Map<string, OPResumen[]>>(new Map());
+  const [cobrando, setCobrando] = useState<FacturaVenta | null>(null);
   const [mail, setMail] = useState<{ open: boolean; to: string; subject: string; body: string; filename: string; sugeridos: { email: string; label?: string }[] }>({ open: false, to: "", subject: "", body: "", filename: "", sugeridos: [] });
 
   const cargar = useCallback(async () => {
@@ -293,6 +296,15 @@ export function FacturasConsulta({ completa = false }: { completa?: boolean }) {
     });
   }
 
+  // Cobrar (solo Finanzas Lazza): facturas de venta impagas; el saldo real lo verifica la ventana de cobro.
+  const cobrable = (f: FacturaVenta) => completa && !!f.cliente_id && ["emitida", "parcial", "vencida"].includes(f.estado) && !String(f.tipo || "").toUpperCase().startsWith("NC");
+  const botonCobrar = (f: FacturaVenta) => (cobrable(f) ? (
+    <button type="button" onClick={(e) => { e.stopPropagation(); setCobrando(f); }} title="Cobrar esta factura (podés sumar otras del cliente)"
+      className="inline-flex items-center gap-1 rounded-lg border border-emerald-300 px-2 py-0.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-950/30">
+      <HandCoins className="h-3.5 w-3.5" /> Cobrar
+    </button>
+  ) : null);
+
   const colVentas: Column<FacturaVenta>[] = [
     { key: "fecha", label: "Fecha", sortable: true, sortValue: (f) => f.fecha, render: (f) => formatDate(f.fecha) },
     { key: "comp", label: "Comprobante", sortable: true, sortValue: (f) => `${f.tipo}${String(f.numero).padStart(8, "0")}`, render: (f) => <span className="font-mono text-xs">{comprobante(f.tipo, f.punto_venta, f.numero)}</span> },
@@ -306,6 +318,7 @@ export function FacturasConsulta({ completa = false }: { completa?: boolean }) {
         {destinatariosCortos(f.email_enviado_a) && <span className="block truncate text-[10px] text-zinc-400">{destinatariosCortos(f.email_enviado_a)}</span>}
       </span>
     ) : <span className="text-xs text-zinc-400">—</span> },
+    ...(completa ? [{ key: "cobrar", label: "", render: botonCobrar }] : []),
   ];
 
   // Columna OP: cada orden de pago (sin anuladas) que pagó la factura, con su PDF.
@@ -343,7 +356,7 @@ export function FacturasConsulta({ completa = false }: { completa?: boolean }) {
     { key: "ref", label: "PR / OC", render: (f) => <span className="text-xs text-zinc-500">{f.ref || "—"}</span> },
     { key: "total", label: "Total", sortable: true, sortValue: (f) => f.total, className: "text-right", render: (f) => <span className="tabular-nums">{formatCurrency(f.total, f.moneda)}</span> },
     { key: "estado", label: "Estado", sortable: true, sortValue: (f) => f.estado.label, render: (f) => <Badge variant={f.estado.variant}>{f.estado.label}</Badge> },
-    ...(completa ? [{ key: "op", label: "OP", render: (f: FilaTodas) => (f.compra ? celdaOP(f.compra.id) : null) }] : []),
+    ...(completa ? [{ key: "op", label: "OP / Cobrar", render: (f: FilaTodas) => (f.compra ? celdaOP(f.compra.id) : f.venta ? botonCobrar(f.venta) : null) }] : []),
   ];
 
   const fila = (label: React.ReactNode, valor: React.ReactNode) => (
@@ -411,6 +424,7 @@ export function FacturasConsulta({ completa = false }: { completa?: boolean }) {
             <div className="mb-3 flex flex-wrap gap-2">
               <button type="button" onClick={() => verPdf(venta)} className="inline-flex items-center gap-1 rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800"><Download className="h-4 w-4" /> Ver / bajar PDF</button>
               <button type="button" onClick={() => prepararMail(venta)} className="inline-flex items-center gap-1 rounded-lg bg-orange-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-600"><Mail className="h-4 w-4" /> Reenviar al cliente</button>
+              {cobrable(venta) && <button type="button" onClick={() => setCobrando(venta)} className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700"><HandCoins className="h-4 w-4" /> Cobrar</button>}
             </div>
             <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
               {fila("Fecha", formatDate(venta.fecha))}
@@ -523,6 +537,10 @@ export function FacturasConsulta({ completa = false }: { completa?: boolean }) {
           await cargar();
         }}
       />
+      {cobrando && sociedadActiva?.id && (
+        <CobrarCliente sociedadId={sociedadActiva.id} clienteId={cobrando.cliente_id} clienteNombre={cobrando.clientes?.razon_social || ""} preseleccion={[cobrando.id]}
+          onClose={() => setCobrando(null)} onCobrado={() => { setVenta(null); void cargar(); }} />
+      )}
     </>
   );
 }

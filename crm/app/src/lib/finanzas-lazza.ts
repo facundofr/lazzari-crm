@@ -630,3 +630,31 @@ export function monedaDelCobro(elegidas: Pick<FacturaACobrar, "moneda">[]): "ARS
   const monedas = new Set(elegidas.map((f) => f.moneda));
   return monedas.size === 1 ? [...monedas][0] : null;
 }
+
+/** Pantalla Cobrar (19/10/2026): un renglón por cliente con facturas de venta con saldo (sale de Vencimientos). */
+export interface ClienteACobrar {
+  clienteId: string;
+  nombre: string;
+  facturas: number;
+  saldo: { ARS: number; USD: number };
+  vencido: { ARS: number; USD: number };
+  /** Vencimiento más viejo (o el próximo). */
+  primerVence: string;
+  /** Días del vencimiento más viejo (negativo = vencido). */
+  dias: number;
+}
+
+export function clientesACobrar(vencimientos: FilaVencimiento[]): ClienteACobrar[] {
+  const porCliente = new Map<string, ClienteACobrar>();
+  for (const v of vencimientos) {
+    if (v.lado !== "venta" || !v.entidadId || v.saldo <= 0.005) continue;
+    const c = porCliente.get(v.entidadId) ?? { clienteId: v.entidadId, nombre: v.nombre, facturas: 0, saldo: { ARS: 0, USD: 0 }, vencido: { ARS: 0, USD: 0 }, primerVence: v.vence, dias: v.dias };
+    c.facturas += 1;
+    c.saldo[v.moneda] = r2(c.saldo[v.moneda] + v.saldo);
+    if (v.dias < 0) c.vencido[v.moneda] = r2(c.vencido[v.moneda] + v.saldo);
+    if (v.vence < c.primerVence) { c.primerVence = v.vence; c.dias = v.dias; }
+    porCliente.set(v.entidadId, c);
+  }
+  // Primero los que tienen la deuda más vieja.
+  return [...porCliente.values()].sort((a, b) => a.primerVence.localeCompare(b.primerVence) || a.nombre.localeCompare(b.nombre));
+}

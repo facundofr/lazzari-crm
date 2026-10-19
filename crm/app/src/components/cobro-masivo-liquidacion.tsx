@@ -9,6 +9,7 @@ import { buildOrdenPagoPlan, type OpParsed } from "@/lib/orden-pago-plan";
 import { fechaMedioCobro, avisoFechaCobroFutura } from "@/lib/fecha-cobro";
 import { repartirCobro, avisoDiferenciaCobro, facturasParaRegistrar } from "@/lib/cobro-reparto";
 import { guardarRevisar } from "@/components/dejar-revisar";
+import { ZonaArchivos } from "@/components/ui/zona-archivos";
 
 // ── Types ────────────────────────────────────────────────
 export interface LiquidacionFactura {
@@ -189,7 +190,7 @@ export default function CobroMasivoLiquidacion({
     setParsingOP(true);
     setOpParseMessage("");
     setError("");
-    setOpFiles(files);
+    setOpFiles((prev) => [...prev, ...files]);
     try {
       const form = new FormData();
       files.forEach((file) => form.append("file", file));
@@ -248,6 +249,9 @@ export default function CobroMasivoLiquidacion({
         };
       });
       setOpConOtras(plan.otras.length && !ordenPagoAvisos ? ordenLeida : null);
+      // Una transferencia o un cheque suelto no trae detalle de facturas: ese aviso es solo para órdenes de pago.
+      const esOrden = !!parsed.orden_pago_cliente || (parsed.facturas_pagadas || []).length > 0;
+      const avisosPlan = esOrden ? plan.avisos : plan.avisos.filter((a) => !a.startsWith("La IA no encontró el detalle de facturas"));
       const otrasLineas = ordenPagoAvisos ? ordenPagoAvisos : plan.otras.map((o) => `La orden también paga ${o.comprobante} por ${formatCurrency(o.importe, "ARS")}: cobrala aparte (${formatCurrency(o.medios, "ARS")} del pago + ${formatCurrency(o.retenciones.reduce((s, r) => s + r.monto, 0), "ARS")} de retenciones).`);
 
       if (parsedMedios.length) {
@@ -256,7 +260,7 @@ export default function CobroMasivoLiquidacion({
       if (parsedRetenciones.length) setRetenciones((current) => [...current, ...parsedRetenciones]);
       if (parsed.orden_pago_cliente) setOpReferencia(String(parsed.orden_pago_cliente));
       if (!parsedMedios.length && !parsedRetenciones.length) throw new Error("La IA no encontró medios de pago ni retenciones en el archivo.");
-      setOpParseMessage([`IA completó ${parsedMedios.length} medio${parsedMedios.length === 1 ? "" : "s"} y ${parsedRetenciones.length} retención${parsedRetenciones.length === 1 ? "" : "es"}. Revisá los datos antes de confirmar.`, ...otrasLineas, ...plan.avisos].join(" "));
+      setOpParseMessage([`IA completó ${parsedMedios.length} medio${parsedMedios.length === 1 ? "" : "s"} y ${parsedRetenciones.length} retención${parsedRetenciones.length === 1 ? "" : "es"}. Revisá los datos antes de confirmar.`, ...otrasLineas, ...avisosPlan].join(" "));
     } catch (parseError) {
       setOpParseMessage(parseError instanceof Error ? parseError.message : "No se pudo aplicar la orden de pago");
     }
@@ -463,8 +467,9 @@ export default function CobroMasivoLiquidacion({
           {/* ── 2. Orden de pago (opcional) ── */}
           <section>
             <h3 className="text-xs font-bold uppercase tracking-wider text-orange-600 mb-3">
-              Orden de pago del cliente <span className="text-zinc-400 font-normal">(opcional)</span>
+              Orden de pago y comprobantes <span className="text-zinc-400 font-normal">(opcional)</span>
             </h3>
+            <ZonaArchivos onArchivos={(files) => void parseClientPaymentOrder(files)} disabled={parsingOP} className="p-3">
             <div className="flex flex-wrap items-center gap-3">
               <input
                 type="text"
@@ -475,7 +480,7 @@ export default function CobroMasivoLiquidacion({
               />
               <label className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border border-orange-300 bg-orange-50 px-3 py-2 text-sm font-semibold text-orange-700 hover:bg-orange-100 dark:border-orange-800 dark:bg-orange-950/30 dark:text-orange-300 ${parsingOP ? "pointer-events-none opacity-60" : ""}`}>
                 {parsingOP ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Upload className="h-4 w-4" /><Sparkles className="h-3.5 w-3.5" /></>}
-                {parsingOP ? "Leyendo con IA..." : "Adjuntar OP y leer con IA"}
+                {parsingOP ? "Leyendo con IA..." : "Adjuntar comprobante y leer con IA"}
                 <input
                   type="file"
                   multiple
@@ -490,6 +495,8 @@ export default function CobroMasivoLiquidacion({
                 />
               </label>
             </div>
+            <p className="mt-2 text-xs text-zinc-500">Arrastrá acá (o pegá con Ctrl+V) la OP del cliente, la transferencia, el cheque o la retención: la IA completa los medios y las retenciones.</p>
+            </ZonaArchivos>
             {opFiles.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-2">
                 {opFiles.map((file) => <span key={`${file.name}-${file.size}`} className="inline-flex items-center gap-1 rounded bg-zinc-100 px-2 py-1 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"><FileCheck2 className="h-3.5 w-3.5" />{file.name}</span>)}

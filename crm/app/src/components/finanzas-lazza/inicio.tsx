@@ -1,10 +1,11 @@
 "use client";
 
 // Finanzas Lazza → inicio: las 14 tarjetas (Augusto 18/10: "juntá la A y la B"). Ícono + nombre + qué es + un dato clave.
+// Arriba, "Cobrar y pagar" (Augusto 19/10: cobrar y pagar centralizados en un solo lugar; Pagar se arma en la próxima tanda).
 // Cada dato se calcula aparte (si uno falla, esa tarjeta queda con "—" y el resto anda). Solo lectura.
 import { useEffect, useState } from "react";
 import {
-  BarChart3, Banknote, Building2, CalendarClock, FileSpreadsheet, FileText, Files, List, Percent, Receipt, ReceiptText, ShoppingBag, Target, Users,
+  BarChart3, Banknote, HandCoins, Wallet, Building2, CalendarClock, FileSpreadsheet, FileText, Files, List, Percent, Receipt, ReceiptText, ShoppingBag, Target, Users,
   type LucideIcon,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
@@ -17,15 +18,18 @@ import { traerComprasDelMes, traerDatosReporte, traerDeudas, traerTcDelDia, trae
 const db = supabase as any;
 
 export type SeccionFL =
+  | "cobrar" | "pagar"
   | "facturar" | "facturas" | "cuentas" | "vencimientos"
   | "ordenes_pago" | "recibos" | "retenciones" | "iva"
   | "bancos" | "cheques" | "gastos" | "movimientos"
   | "objetivos" | "reportes";
 
-type Grupo = "ventas" | "pagos" | "tesoreria" | "informes";
+type Grupo = "acciones" | "ventas" | "pagos" | "tesoreria" | "informes";
 export interface TarjetaDef { id: SeccionFL; nombre: string; que: string; icono: LucideIcon; grupo: Grupo }
 
 export const TARJETAS: TarjetaDef[] = [
+  { id: "cobrar", nombre: "Cobrar", que: "Clientes con facturas a cobrar", icono: HandCoins, grupo: "acciones" },
+  { id: "pagar", nombre: "Pagar", que: "Proveedores con facturas a pagar", icono: Wallet, grupo: "acciones" },
   { id: "facturar", nombre: "Facturar", que: "PR listos para facturar", icono: FileText, grupo: "ventas" },
   { id: "facturas", nombre: "Facturas", que: "Venta y compra", icono: Files, grupo: "ventas" },
   { id: "cuentas", nombre: "Cuentas corrientes", que: "Clientes y proveedores", icono: Users, grupo: "ventas" },
@@ -43,6 +47,7 @@ export const TARJETAS: TarjetaDef[] = [
 ];
 
 const GRUPOS: { id: Grupo; nombre: string; icono: string; borde: string }[] = [
+  { id: "acciones", nombre: "Cobrar y pagar", icono: "bg-orange-50 text-orange-700 dark:bg-orange-950/50 dark:text-orange-300", borde: "hover:border-orange-300" },
   { id: "ventas", nombre: "Ventas", icono: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300", borde: "hover:border-emerald-300" },
   { id: "pagos", nombre: "Pagos, cobros e impuestos", icono: "bg-blue-50 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300", borde: "hover:border-blue-300" },
   { id: "tesoreria", nombre: "Tesorería", icono: "bg-violet-50 text-violet-700 dark:bg-violet-950/50 dark:text-violet-300", borde: "hover:border-violet-300" },
@@ -57,7 +62,7 @@ const mas = (ars: number, usd: number) => `${millones(ars)}${Math.abs(usd) >= 1 
 
 /** Tarjetas que llena cada loader (mismo orden que `loaders`): si uno falla, esas quedan con "—". */
 const TARJETAS_DE_LOADER: SeccionFL[][] = [
-  ["reportes", "gastos", "objetivos"], ["vencimientos", "cuentas"], ["iva", "facturas"], ["facturar"],
+  ["reportes", "gastos", "objetivos"], ["vencimientos", "cuentas", "cobrar", "pagar"], ["iva", "facturas"], ["facturar"],
   ["ordenes_pago", "retenciones"], ["recibos", "movimientos"], ["bancos"], ["cheques"],
 ];
 
@@ -80,7 +85,16 @@ function loaders(sociedadId: string, periodo: string, hoy: string): (() => Promi
       const vencidas = d.vencimientos.filter((v) => v.dias < 0);
       let ars = 0, usd = 0;
       for (const s of Object.values(d.saldosClientes)) { if (s.ARS.saldo > 0) ars += s.ARS.saldo; if (s.USD.saldo > 0) usd += s.USD.saldo; }
+      const deLado = (lado: "venta" | "compra") => {
+        const l = d.vencimientos.filter((v) => v.lado === lado);
+        const venc = { ARS: 0, USD: 0 };
+        for (const v of l) if (v.dias < 0) venc[v.moneda] += v.saldo;
+        return { n: l.length, entidades: new Set(l.map((v) => v.entidadId)).size, venc };
+      };
+      const cob = deLado("venta"), pag = deLado("compra");
       return {
+        cobrar: { valor: `${cob.entidades} clientes`, sub: `${cob.n} facturas · vencido ${mas(cob.venc.ARS, cob.venc.USD)}`, tono: cob.venc.ARS || cob.venc.USD ? "rojo" : undefined },
+        pagar: { valor: `${pag.entidades} proveedores`, sub: `${pag.n} facturas · vencido ${mas(pag.venc.ARS, pag.venc.USD)}` },
         vencimientos: { valor: `${vencidas.length} vencidas`, sub: `${d.vencimientos.length} con saldo`, tono: vencidas.length ? "rojo" : undefined },
         cuentas: { valor: mas(ars, usd), sub: "nos deben" },
       };

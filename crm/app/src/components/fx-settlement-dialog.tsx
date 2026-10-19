@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { Modal } from "@/components/ui/modal";
+import { ZonaArchivos } from "@/components/ui/zona-archivos";
 import { supabase } from "@/lib/supabase/client";
 import { formatCurrency, todayAR } from "@/lib/utils";
 import { parseDecimalInput, toDecimalInput } from "@/lib/decimal-input";
@@ -180,7 +181,9 @@ export function FxSettlementDialog({ kind, sociedadId, counterpartyId, documents
         const det = o.retenciones.map(r => `${retentionTypes.find(t => t.value === r.tipo)?.label || r.tipo} ${ars(r.monto)}`).join(", ");
         lineas.push(`La orden también paga ${o.comprobante} por ${ars(o.importe)}: cobrala aparte con ${ars(o.medios)} del pago${det ? ` + retenciones ${det}` : ""}.`);
       }
-      lineas.push(...plan.avisos);
+      // Una transferencia o un cheque suelto no trae detalle de facturas: ese aviso es solo para órdenes de pago.
+      const esOrden = !!parsed.orden_pago_cliente || (parsed.facturas_pagadas || []).length > 0;
+      lineas.push(...(esOrden ? plan.avisos : plan.avisos.filter(a => !a.startsWith("La IA no encontró el detalle de facturas"))));
       setOpMensaje({ ok: true, lineas: [`IA leyó la orden de pago${plan.referencia ? ` N° ${plan.referencia}` : ""}. Revisá los datos antes de confirmar.`, ...lineas] });
     } catch (e) {
       setOpMensaje({ ok: false, lineas: [e instanceof Error ? e.message : "No se pudo aplicar la orden de pago."] });
@@ -312,15 +315,15 @@ export function FxSettlementDialog({ kind, sociedadId, counterpartyId, documents
     {error && <p role="alert" className="mb-4 rounded-lg border border-red-300 p-3 text-sm text-red-700 dark:text-red-400">{error}</p>}
     {submitted && <p className="mb-3 text-sm text-amber-700 dark:text-amber-400">Operación enviada: los datos quedan bloqueados hasta confirmar su resultado. Reintentar no genera una liquidación nueva.</p>}
     <fieldset disabled={saving || submitted} className="space-y-5 dark:text-zinc-200">
-      <div className="rounded-lg border border-dashed border-orange-300 p-3 dark:border-orange-800">
+      <ZonaArchivos onArchivos={(files) => void leerOrdenPago(files)} disabled={leyendoOp || saving || submitted} className="p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm">¿Tenés la orden de pago del cliente? La IA la lee y completa todo.</p>
-          <button type="button" className={`${button} inline-flex items-center gap-2 border-orange-400 text-orange-700 dark:text-orange-400`} disabled={leyendoOp} onClick={() => opFileRef.current?.click()}><Sparkles className="h-4 w-4" />{leyendoOp ? "Leyendo orden de pago…" : "Leer orden de pago con IA"}</button>
+          <p className="text-sm">¿Tenés la OP, la transferencia o la retención? Arrastrala acá o pegala con Ctrl+V: la IA la lee y completa todo.</p>
+          <button type="button" className={`${button} inline-flex items-center gap-2 border-orange-400 text-orange-700 dark:text-orange-400`} disabled={leyendoOp} onClick={() => opFileRef.current?.click()}><Sparkles className="h-4 w-4" />{leyendoOp ? "Leyendo comprobante…" : "Adjuntar comprobante y leer con IA"}</button>
           <input ref={opFileRef} type="file" accept="application/pdf,image/png,image/jpeg,image/webp" multiple className="hidden" onChange={e => void leerOrdenPago(Array.from(e.target.files || []))} />
         </div>
         {opMensaje && <ul className={`mt-2 list-disc space-y-1 pl-5 text-xs ${opMensaje.ok ? "text-emerald-700 dark:text-emerald-400" : "text-red-700 dark:text-red-400"}`}>{opMensaje.lineas.map((l, i) => <li key={i}>{l}</li>)}</ul>}
         {opConOtras && onCobrarOrdenCompleta && <button type="button" className="mt-2 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white" onClick={() => onCobrarOrdenCompleta(opConOtras)}>Cobrar todas las facturas de esta orden de pago</button>}
-      </div>
+      </ZonaArchivos>
       <div className="grid gap-3 sm:grid-cols-3"><label className="text-sm">Fecha de la operación<input className={input} type="date" value={fecha} onChange={e => { const v = e.target.value; setFecha(v); setMedios(p => p.map(m => ({ ...m, fecha: v }))); changeQuote(); setCotizacionFecha(diaHabilAnterior(v)); }} /></label><label className="text-sm">Fecha de cotización<input className={input} type="date" value={cotizacionFecha} onChange={e => { changeQuote(); setCotizacionFecha(e.target.value); }} /></label><label className="text-sm">Cotización ARS por USD<input className={input} type="text" inputMode="decimal" placeholder="Ej: 1.530,50" value={cotizacion} readOnly={modalidad !== "manual"} onChange={e => { tcElegido.current = true; setCotizacion(e.target.value); }} /></label></div>
       <div className="flex flex-wrap items-center gap-2">{(["divisas", "billetes", "manual"] as const).map(m => <button type="button" key={m} className={`${button} ${modalidad === m ? "border-orange-500 bg-orange-50 text-orange-700 dark:bg-orange-950" : ""}`} onClick={() => { tcElegido.current = true; changeQuote(); setModalidad(m); }}>{m === "divisas" ? "Divisas" : m === "billetes" ? "Billetes" : "Manual"}</button>)}<button type="button" className={button} disabled={modalidad === "manual" || loadingQuote} onClick={consultarBna}>{loadingQuote ? "Consultando…" : "Consultar BNA para esa fecha"}</button>{singleDocumentRate && <button type="button" className={`${button} ${modalidad === "manual" && Math.abs(rate - singleDocumentRate) < 0.000001 ? "border-green-600 text-green-700 dark:text-green-400" : ""}`} onClick={() => { tcElegido.current = true; applyRate(singleDocumentRate); }}>Usar TC de la factura ({formatCurrency(singleDocumentRate, "ARS")})</button>}</div>
       <div className="space-y-3"><h3 className="font-medium">USD a cancelar por factura</h3>{documents.map(d => {

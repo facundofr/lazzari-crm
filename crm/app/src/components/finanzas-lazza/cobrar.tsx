@@ -3,18 +3,21 @@
 // Finanzas Lazza → Cobrar (19/10/2026). NO es una pantalla nueva de cobro: reusa las MISMAS ventanas que Finanzas
 // (CobroMasivoLiquidacion para $: medios, retenciones, cheques, diferencia a CC, leer la OP del cliente con IA;
 // FxSettlementDialog para US$). Acá solo se elige el cliente y las facturas.
-// Se abre desde Cuentas corrientes (ficha del cliente), Vencimientos (facturas de venta) y Recibos ("Nuevo cobro").
+// Lugar central: tarjeta "Cobrar" del inicio (FinanzasLazzaCobrar: clientes que deben → Cobrar). Atajos a la misma ventana:
+// Cuentas corrientes (ficha del cliente), Vencimientos y Facturas (facturas de venta) y Recibos ("Nuevo cobro").
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Loader2, X } from "lucide-react";
+import { AlertTriangle, HandCoins, Loader2, Search, X } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
+import { DataTable, type Column } from "@/components/ui/data-table";
 import { useUser } from "@/lib/auth-context";
 import { Autocompletar } from "@/components/ui/autocompletar";
 import CobroMasivoLiquidacion from "@/components/cobro-masivo-liquidacion";
 import { FxSettlementDialog } from "@/components/fx-settlement-dialog";
 import { cobradoPorFactura } from "@/lib/saldo-clientes";
-import { facturasACobrar, monedaDelCobro, type FacturaACobrar } from "@/lib/finanzas-lazza";
+import { clientesACobrar, facturasACobrar, monedaDelCobro, type ClienteACobrar, type FacturaACobrar } from "@/lib/finanzas-lazza";
+import { traerDeudas } from "./datos";
 
 const db = supabase as any;
 
@@ -186,6 +189,100 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── Pantalla Cobrar (tarjeta del inicio) ─────────────────────────────
+
+const montos = (m: { ARS: number; USD: number }, cero = "—") => {
+  const partes = [m.ARS >= 0.01 ? formatCurrency(m.ARS) : null, m.USD >= 0.01 ? formatCurrency(m.USD, "USD") : null].filter(Boolean);
+  return partes.length ? partes.join(" + ") : cero;
+};
+const sinAcentos = (t: string) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+export function FinanzasLazzaCobrar({ sociedadId }: { sociedadId: string }) {
+  const [filas, setFilas] = useState<ClienteACobrar[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [texto, setTexto] = useState("");
+  const [soloVencidos, setSoloVencidos] = useState(false);
+  const [cobrando, setCobrando] = useState<{ id: string | null; nombre: string } | null>(null);
+  const [recarga, setRecarga] = useState(0);
+  const hoy = todayAR();
+
+  useEffect(() => {
+    let vivo = true;
+    setFilas(null); setError(null);
+    traerDeudas(sociedadId, hoy)
+      .then((d) => { if (vivo) setFilas(clientesACobrar(d.vencimientos)); })
+      .catch((e) => { console.error("Finanzas Lazza · Cobrar:", e); if (vivo) setError("No se pudo cargar lo que hay para cobrar. Recargá la página."); });
+    return () => { vivo = false; };
+  }, [sociedadId, hoy, recarga]);
+
+  const q = sinAcentos(texto.trim());
+  const visibles = useMemo(() => (filas || [])
+    .filter((f) => !q || sinAcentos(f.nombre).includes(q))
+    .filter((f) => !soloVencidos || f.dias < 0)
+    .map((f) => ({ ...f, id: f.clienteId })), [filas, q, soloVencidos]);
+  const total = useMemo(() => {
+    const t = { saldo: { ARS: 0, USD: 0 }, vencido: { ARS: 0, USD: 0 } };
+    for (const f of visibles) { t.saldo.ARS += f.saldo.ARS; t.saldo.USD += f.saldo.USD; t.vencido.ARS += f.vencido.ARS; t.vencido.USD += f.vencido.USD; }
+    return t;
+  }, [visibles]);
+
+  // Orden por plata: US$ a un dólar de referencia solo para ordenar.
+  const enPesos = (m: { ARS: number; USD: number }) => m.ARS + m.USD * 1500;
+  const cols: Column<ClienteACobrar & { id: string }>[] = [
+    { key: "nombre", label: "Cliente", sortable: true, sortValue: (f) => f.nombre, render: (f) => <span>{f.nombre}<span className="block text-[10px] text-zinc-400">{f.facturas} factura{f.facturas === 1 ? "" : "s"}</span></span> },
+    { key: "saldo", label: "Saldo", sortable: true, sortValue: (f) => enPesos(f.saldo), className: "text-right", render: (f) => <span className="whitespace-nowrap font-mono font-semibold">{montos(f.saldo)}</span> },
+    { key: "vencido", label: "Vencido", sortable: true, sortValue: (f) => enPesos(f.vencido), className: "text-right", render: (f) => <span className={`whitespace-nowrap font-mono ${f.vencido.ARS || f.vencido.USD ? "text-red-600" : "text-zinc-400"}`}>{montos(f.vencido)}</span> },
+    { key: "vence", label: "Más vieja vence", sortable: true, sortValue: (f) => f.primerVence, render: (f) => (
+      <span className={`whitespace-nowrap ${f.dias < 0 ? "font-semibold text-red-600" : f.dias <= 7 ? "text-amber-600" : ""}`}>
+        {formatDate(f.primerVence)}<span className="block text-[10px] font-normal text-zinc-400">{f.dias < 0 ? `vencida hace ${-f.dias} d` : f.dias === 0 ? "hoy" : `en ${f.dias} d`}</span>
+      </span>
+    ) },
+    { key: "accion", label: "", render: (f) => (
+      <button type="button" onClick={(e) => { e.stopPropagation(); setCobrando({ id: f.clienteId, nombre: f.nombre }); }}
+        className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1 text-xs font-medium text-white hover:bg-emerald-700">
+        <HandCoins className="h-3.5 w-3.5" /> Cobrar
+      </button>
+    ) },
+  ];
+
+  if (error) return <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30">{error}</p>;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <button type="button" onClick={() => setCobrando({ id: null, nombre: "" })}
+          className="inline-flex h-8 items-center gap-1 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700">
+          <HandCoins className="h-4 w-4" /> Nuevo cobro
+        </button>
+        <div className="relative min-w-[200px] flex-1">
+          <Search className="absolute left-2.5 top-2 h-4 w-4 text-zinc-400" />
+          <input value={texto} onChange={(e) => setTexto(e.target.value)} placeholder="Buscar cliente"
+            className="h-8 w-full rounded-lg border border-zinc-200 bg-white px-2 pl-8 text-sm dark:border-zinc-700 dark:bg-zinc-900" />
+        </div>
+        <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-300">
+          <input type="checkbox" checked={soloVencidos} onChange={(e) => setSoloVencidos(e.target.checked)} className="h-4 w-4 accent-orange-500" /> Solo con vencidas
+        </label>
+      </div>
+      {!filas ? (
+        <p className="flex items-center gap-2 py-6 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Cargando…</p>
+      ) : (
+        <div className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+          <DataTable columns={cols} data={visibles} onRowClick={(f) => setCobrando({ id: f.clienteId, nombre: f.nombre })} emptyMessage="No hay clientes con facturas para cobrar" />
+          <div className="flex flex-wrap justify-end gap-x-6 gap-y-1 border-t border-zinc-200 px-3 py-2 text-xs text-zinc-500 dark:border-zinc-700">
+            <span className="text-zinc-400">{visibles.length} clientes</span>
+            <span>A cobrar <b className="font-mono text-emerald-700 dark:text-emerald-400">{montos(total.saldo, "$ 0")}</b></span>
+            <span>Vencido <b className="font-mono text-red-600">{montos(total.vencido, "$ 0")}</b></span>
+          </div>
+        </div>
+      )}
+      {cobrando && (
+        <CobrarCliente sociedadId={sociedadId} clienteId={cobrando.id} clienteNombre={cobrando.nombre}
+          onClose={() => setCobrando(null)} onCobrado={() => setRecarga((n) => n + 1)} />
+      )}
     </div>
   );
 }

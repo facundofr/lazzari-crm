@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { armarRetenciones, armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, armarTcDelDia, armarVencimientos, filtrarVencimientos, ivaDelMes, nivelObjetivo, reporteBasico, saldoFacturaCompra, unificarMoneda, sumarDias, conVencimiento, facturasACobrar, monedaDelCobro, type FacturaVentaFL } from "../src/lib/finanzas-lazza";
+import { armarRetenciones, armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, armarTcDelDia, armarVencimientos, filtrarVencimientos, ivaDelMes, nivelObjetivo, reporteBasico, saldoFacturaCompra, unificarMoneda, sumarDias, conVencimiento, facturasACobrar, monedaDelCobro, clientesACobrar, type FacturaVentaFL, type FilaVencimiento } from "../src/lib/finanzas-lazza";
 
 const tcDia = armarTcDelDia([{ fecha: "2026-10-09", valor_venta: 1400 }, { fecha: "2026-10-14", valor_venta: 1500 }]);
 assert.equal(tcDia("2026-10-14"), 1500);
@@ -181,5 +181,19 @@ assert.equal(aCobrar[0].tipo_cambio, 1450);
 assert.equal(monedaDelCobro([aCobrar[1]]), "ARS");
 assert.equal(monedaDelCobro(aCobrar), null);
 assert.equal(monedaDelCobro([]), null);
+
+// Pantalla Cobrar: un renglón por cliente, la deuda más vieja primero
+const vv = (x: Partial<FilaVencimiento>): FilaVencimiento => ({ ...fvto, ...x });
+const porCliente = clientesACobrar([
+  vv({ id: "1", entidadId: "a", nombre: "A", vence: "2026-10-25", dias: 6, saldo: 100 }),
+  vv({ id: "2", entidadId: "a", nombre: "A", vence: "2026-10-01", dias: -18, saldo: 50, moneda: "USD" }),
+  vv({ id: "3", entidadId: "b", nombre: "B", vence: "2026-10-10", dias: -9, saldo: 30 }),
+  vv({ id: "4", lado: "compra", entidadId: "p", nombre: "P", vence: "2026-09-01", dias: -48, saldo: 999 }),
+  vv({ id: "5", entidadId: null, nombre: "?", saldo: 5 }),
+]);
+assert.deepEqual(porCliente.map((c) => [c.clienteId, c.facturas, c.saldo, c.vencido, c.dias]), [
+  ["a", 2, { ARS: 100, USD: 50 }, { ARS: 0, USD: 50 }, -18],
+  ["b", 1, { ARS: 30, USD: 0 }, { ARS: 30, USD: 0 }, -9],
+]);
 
 console.log("test-finanzas-lazza OK");
