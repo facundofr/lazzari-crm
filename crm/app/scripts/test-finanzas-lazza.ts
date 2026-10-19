@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { armarRetenciones, armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, armarTcDelDia, armarVencimientos, filtrarVencimientos, ivaDelMes, nivelObjetivo, reporteBasico, saldoFacturaCompra, unificarMoneda, sumarDias, conVencimiento, facturasACobrar, monedaDelCobro, clientesACobrar, type FacturaVentaFL, type FilaVencimiento } from "../src/lib/finanzas-lazza";
+import { armarRetenciones, armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, armarTcDelDia, armarVencimientos, filtrarVencimientos, ivaDelMes, nivelObjetivo, reporteBasico, saldoFacturaCompra, unificarMoneda, sumarDias, conVencimiento, facturasACobrar, monedaDelCobro, clientesACobrar, proveedoresAPagar, type FacturaVentaFL, type FilaVencimiento } from "../src/lib/finanzas-lazza";
 
 const tcDia = armarTcDelDia([{ fecha: "2026-10-09", valor_venta: 1400 }, { fecha: "2026-10-14", valor_venta: 1500 }]);
 assert.equal(tcDia("2026-10-14"), 1500);
@@ -194,6 +194,19 @@ const porCliente = clientesACobrar([
 assert.deepEqual(porCliente.map((c) => [c.clienteId, c.facturas, c.saldo, c.vencido, c.dias]), [
   ["a", 2, { ARS: 100, USD: 50 }, { ARS: 0, USD: 50 }, -18],
   ["b", 1, { ARS: 30, USD: 0 }, { ARS: 30, USD: 0 }, -9],
+]);
+
+// Pantalla Pagar: lo mismo del lado de compras (proveedores)
+const porProveedor = proveedoresAPagar([
+  vv({ id: "1", entidadId: "a", nombre: "A", vence: "2026-10-25", dias: 6, saldo: 100 }),
+  vv({ id: "4", lado: "compra", entidadId: "p", nombre: "P", vence: "2026-10-20", dias: 1, saldo: 200 }),
+  vv({ id: "6", lado: "compra", entidadId: "p", nombre: "P", vence: "2026-09-01", dias: -48, saldo: 999.5, moneda: "USD" }),
+  vv({ id: "7", lado: "compra", entidadId: "q", nombre: "Q", vence: "2026-10-30", dias: 11, saldo: 10 }),
+  vv({ id: "8", lado: "compra", entidadId: "q", nombre: "Q", vence: "2026-10-30", dias: 11, saldo: 0 }),
+]);
+assert.deepEqual(porProveedor.map((p) => [p.proveedorId, p.facturas, p.saldo, p.vencido, p.dias]), [
+  ["p", 2, { ARS: 200, USD: 999.5 }, { ARS: 0, USD: 999.5 }, -48],
+  ["q", 1, { ARS: 10, USD: 0 }, { ARS: 0, USD: 0 }, 11],
 ]);
 
 console.log("test-finanzas-lazza OK");

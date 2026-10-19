@@ -8,7 +8,6 @@
  *   lo carga como recibido en la OC (solo si está segura; si no, lo deja listo para confirmar), guarda la foto,
  *   avisa al vendedor y pregunta por lo que falta. Con Deshacer. No mueve stock.
  * - Preguntas: renglones sin proveedor, con proveedores sugeridos (lista de costos, compras anteriores e IA).
- * - "Decile a la IA": centralizar, sin stock, cambiar de proveedor → muestra el antes/después y se confirma.
  * Nunca toca el PR (ni su precio ni su total): solo mueve renglones entre OC sin mandar. Todo es sugerencia: nada frena.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -54,7 +53,6 @@ type Item = {
 type PRItem = { id: string; precio_venta: number; descuento_porcentaje: number | null; costo_moneda: string | null };
 type FilaLista = FilaCatalogo & { costo: number; moneda: string };
 type Contacto = { email: string; whatsapp: string };
-type Movimiento = { item_ids: string[]; proveedor_id: string | null; motivo: string };
 type Deshacer = { id: number; texto: string; fn: () => Promise<void> };
 type RemitoOC = { id: string; orden_id: string; numero_remito: string | null; foto_url: string | null; created_at: string };
 type LeidoRemito = {
@@ -118,9 +116,6 @@ export default function ComprasNuevaPage() {
   const [ocupado, setOcupado] = useState<string | null>(null);
   const [sugIA, setSugIA] = useState<Record<string, ProveedorSugerido[]>>({});
   const [buscandoIA, setBuscandoIA] = useState(false);
-  const [instruccion, setInstruccion] = useState("");
-  const [pensando, setPensando] = useState(false);
-  const [propuesta, setPropuesta] = useState<{ explicacion: string; movimientos: Movimiento[] } | null>(null);
   const [enviarIds, setEnviarIds] = useState<string[] | null>(null);
   // Reclamo de lo que falta (sin precios): OC abierta y texto editable.
   const [reclamo, setReclamo] = useState<{ id: string; texto: string } | null>(null);
@@ -476,49 +471,6 @@ export default function ComprasNuevaPage() {
     }
   }
 
-  async function preguntarIA() {
-    const texto = instruccion.trim();
-    if (!texto) return;
-    const sinMandar = [...paraPedir, ...ocsSinProveedor];
-    if (!sinMandar.length) { toast.info("No hay pedidos sin mandar para cambiar"); return; }
-    setPensando(true);
-    setPropuesta(null);
-    try {
-      const res = await fetch("/api/compras/instruccion", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          instruccion: texto,
-          pedidos: sinMandar.map((o) => ({
-            numero: o.numero, proveedor_id: o.proveedor_id, proveedor: o.proveedor_id ? nombreProv(o.proveedores) : null,
-            pr_numero: o.presupuesto_origen?.numero, cliente: clientes[o.presupuesto_origen?.cliente_id || ""], total: o.total, moneda: o.moneda,
-            items: (itemsDe[o.id] || []).map((it) => ({ id: it.id, codigo: it.codigo, descripcion: it.descripcion, cantidad: it.cantidad })),
-          })),
-          proveedores: proveedores.map((p) => ({ id: p.id, nombre: nombreProv(p) + (p.nombre_fantasia && p.nombre_fantasia !== p.razon_social ? ` (${p.razon_social})` : "") })),
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "La IA no respondió");
-      setPropuesta({ explicacion: data.explicacion || "", movimientos: data.movimientos || [] });
-    } catch (e: any) {
-      toast.error(e?.message || "La IA no respondió");
-    } finally {
-      setPensando(false);
-    }
-  }
-
-  async function aplicarPropuesta() {
-    if (!propuesta) return;
-    setOcupado("ia");
-    let ok = 0;
-    const creadas = new Map<string, string>();
-    for (const m of propuesta.movimientos) if (await moverRenglones(m.item_ids, m.proveedor_id, m.motivo ? `IA: ${m.motivo}` : "Pedido a la IA", creadas)) ok++;
-    setOcupado(null);
-    setPropuesta(null);
-    setInstruccion("");
-    toast.success(`Listo: ${ok} de ${propuesta.movimientos.length} cambio(s) hechos`);
-    await cargar();
-  }
-
   // ── Foto del remito del proveedor ──────────────────────────────
   const anotarDeshacer = useCallback((texto: string, fn: () => Promise<void>) => {
     contador.current += 1;
@@ -810,39 +762,6 @@ export default function ComprasNuevaPage() {
     <div>
       <Header title="Compras nueva" subtitle="Los pedidos se arman solos al aprobar un PR. Vos los mandás con un clic." />
       <div className="mx-auto max-w-6xl space-y-3 p-4 md:p-6">
-        {/* Decile a la IA */}
-        <div className="rounded-lg border border-violet-200 bg-violet-50/50 p-2 dark:border-violet-900 dark:bg-violet-950/20">
-          <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); void preguntarIA(); }}>
-            <Sparkles className="mt-1.5 h-4 w-4 shrink-0 text-violet-500" />
-            <input value={instruccion} onChange={(e) => setInstruccion(e.target.value)} placeholder='Decile a la IA: "centralizá lo del PR-1234 en Funcional", "Mediglove no tiene guantes, pedíselos a Bioseif"…'
-              className="min-w-0 flex-1 rounded border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-600 dark:bg-zinc-900" />
-            <button type="submit" disabled={pensando || !instruccion.trim()} className={`${btn} bg-violet-600 text-white hover:bg-violet-700`}>
-              {pensando ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />} Ver qué haría
-            </button>
-          </form>
-          {propuesta && (
-            <div className="mt-2 rounded border border-violet-200 bg-white p-2 text-sm dark:border-violet-900 dark:bg-zinc-900">
-              {propuesta.explicacion && <p className="mb-1 text-zinc-700 dark:text-zinc-300">{propuesta.explicacion}</p>}
-              {propuesta.movimientos.length ? (
-                <ul className="mb-2 space-y-0.5 text-xs">
-                  {propuesta.movimientos.map((m, i) => (
-                    <li key={i}>
-                      {(() => { const ds = m.item_ids.map((id) => itemPorId(id)?.descripcion).filter(Boolean); return `${ds.length > 1 ? `${ds.length} renglones: ` : ""}${ds.slice(0, 3).join(", ")}${ds.length > 3 ? "…" : ""}`; })()}
-                      <span className="text-zinc-400"> · de {[...new Set(m.item_ids.map((id) => { const o = ocDeItem(id); return o?.proveedor_id ? nombreProv(o.proveedores) : "sin proveedor"; }))].join(", ")} → </span>
-                      <b>{m.proveedor_id ? nombreProv(provPorId[m.proveedor_id]) : "sin proveedor (Preguntas)"}</b>
-                      {m.motivo && <span className="text-zinc-400"> ({m.motivo})</span>}
-                    </li>
-                  ))}
-                </ul>
-              ) : <p className="mb-2 text-xs text-zinc-500">No hay cambios para hacer.</p>}
-              <div className="flex gap-2">
-                {!!propuesta.movimientos.length && <button onClick={() => void aplicarPropuesta()} disabled={ocupado === "ia"} className={`${btn} bg-violet-600 text-white`}>{ocupado === "ia" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Hacerlo</button>}
-                <button onClick={() => setPropuesta(null)} className={`${btn} border border-zinc-300 dark:border-zinc-600`}>Descartar</button>
-              </div>
-            </div>
-          )}
-        </div>
-
         {/* Pestañas */}
         <div className="flex flex-wrap items-center gap-1 border-b border-zinc-200 dark:border-zinc-700">
           {([["pedir", "Para pedir", paraPedirVer.length], ["oc", "OC", ocs.length], ["preguntas", "Preguntas", preguntasVer]] as const).map(([k, t, n]) => (

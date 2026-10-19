@@ -2,10 +2,11 @@
 
 // Finanzas Lazza → Cuentas corrientes: clientes y proveedores en UNA lista.
 // Cobrar (19/10): en la ficha del cliente se tildan facturas → "Cobrar" (la misma liquidación de Finanzas, ver cobrar.tsx).
+// Pagar (19/10): en la ficha del proveedor se tildan facturas → "Pagar" (la misma OP de Finanzas, ver pagar.tsx).
 // Opción "Moneda: la de cada cuenta" (Augusto 19/10): cada saldo pasado a su moneda al dólar BNA del día (lib unificarMoneda).
 // Saldos con las mismas reglas que Finanzas (lib/saldo-clientes y lib/saldo-proveedores); semáforo BCRA del último informe.
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { HandCoins, Loader2, Search, X } from "lucide-react";
+import { HandCoins, Loader2, Search, Wallet, X } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
@@ -15,6 +16,7 @@ import { clasificarMovimiento } from "@/lib/tipos-movimiento";
 import { elegirDolares } from "@/lib/dolar-presupuesto";
 import { traerDeudas } from "./datos";
 import { CobrarCliente } from "./cobrar";
+import { PagarProveedor } from "./pagar";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -207,23 +209,26 @@ export function FinanzasLazzaCuentasCorrientes({ sociedadId }: { sociedadId: str
             </div>
             <div className="mb-1 flex items-center justify-between gap-2">
               <h3 className="text-xs font-semibold uppercase text-zinc-500">Facturas con saldo</h3>
-              {abierta.lado === "cliente" && (
+              {abierta.lado === "cliente" ? (
                 <button type="button" onClick={() => setCobrando(true)} title={tildadas.size ? "Cobrar las facturas tildadas" : "Elegir facturas y cobrar"}
                   className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1 text-xs font-medium text-white hover:bg-emerald-700">
                   <HandCoins className="h-3.5 w-3.5" /> Cobrar{tildadas.size ? ` (${tildadas.size})` : ""}
+                </button>
+              ) : (
+                <button type="button" onClick={() => setCobrando(true)} title={tildadas.size ? "Pagar las facturas tildadas" : "Elegir facturas y pagar"}
+                  className="inline-flex items-center gap-1 rounded-lg bg-orange-500 px-3 py-1 text-xs font-medium text-white hover:bg-orange-600">
+                  <Wallet className="h-3.5 w-3.5" /> Pagar{tildadas.size ? ` (${tildadas.size})` : ""}
                 </button>
               )}
             </div>
             {facturasAbierta.length === 0 ? <p className="mb-3 text-xs text-zinc-400">No tiene facturas con saldo.</p> : (
               <table className="mb-3 w-full text-xs">
-                <thead><tr className="text-left text-[10px] uppercase text-zinc-400">{abierta.lado === "cliente" && <th className="w-6" />}<th className="py-1">Fecha</th><th>Vence</th><th>Comprobante</th><th className="text-right">Total</th><th className="text-right">Saldo</th></tr></thead>
+                <thead><tr className="text-left text-[10px] uppercase text-zinc-400"><th className="w-6" /><th className="py-1">Fecha</th><th>Vence</th><th>Comprobante</th><th className="text-right">Total</th><th className="text-right">Saldo</th></tr></thead>
                 <tbody>
                   {facturasAbierta.map((v) => (
                     <tr key={v.id} className={`border-t border-zinc-100 dark:border-zinc-800 ${tildadas.has(v.id) ? "bg-emerald-50 dark:bg-emerald-900/20" : ""}`}>
-                      {abierta.lado === "cliente" && (
-                        <td><input type="checkbox" aria-label={`Tildar ${v.comprobante}`} className="h-3.5 w-3.5 accent-orange-500" checked={tildadas.has(v.id)}
-                          onChange={(e) => setTildadas((prev) => { const n = new Set(prev); if (e.target.checked) n.add(v.id); else n.delete(v.id); return n; })} /></td>
-                      )}
+                      <td><input type="checkbox" aria-label={`Tildar ${v.comprobante}`} className="h-3.5 w-3.5 accent-orange-500" checked={tildadas.has(v.id)}
+                        onChange={(e) => setTildadas((prev) => { const n = new Set(prev); if (e.target.checked) n.add(v.id); else n.delete(v.id); return n; })} /></td>
                       <td className="py-1">{formatDate(v.fecha)}</td>
                       <td className={v.dias < 0 ? "font-semibold text-red-600" : ""}>{formatDate(v.vence)}</td>
                       <td className="font-mono">{v.comprobante}</td>
@@ -260,6 +265,10 @@ export function FinanzasLazzaCuentasCorrientes({ sociedadId }: { sociedadId: str
       {cobrando && abierta?.lado === "cliente" && (
         <CobrarCliente sociedadId={sociedadId} clienteId={abierta.entidadId} clienteNombre={abierta.nombre} preseleccion={[...tildadas]} directo={tildadas.size > 0}
           onClose={() => setCobrando(false)} onCobrado={() => { setTildadas(new Set()); setRecarga((n) => n + 1); }} />
+      )}
+      {cobrando && abierta?.lado === "proveedor" && (
+        <PagarProveedor sociedadId={sociedadId} proveedorId={abierta.entidadId} facturaIds={[...tildadas]}
+          onClose={() => setCobrando(false)} onPagado={() => { setTildadas(new Set()); setRecarga((n) => n + 1); }} />
       )}
     </div>
   );

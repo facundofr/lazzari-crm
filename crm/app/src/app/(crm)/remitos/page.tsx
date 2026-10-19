@@ -365,8 +365,8 @@ export default function RemitosPage() {
   }
 
   /**
-   * Foto del remito firmado (no es obligatoria): se achica, se guarda en comprobantes/remitos/... y la IA lee quién recibió
-   * y lo anotado a mano. Es solo comprobante: no cambia el estado (el remito se hace para entregar).
+   * Foto del remito firmado (no es obligatoria): se achica y se guarda en comprobantes/remitos/... (sin lectura de la IA).
+   * Es solo comprobante: no cambia el estado (el remito se hace para entregar).
    * La primera foto le avisa al vendedor del PR.
    */
   async function subirFoto(r: RemitoRow, file: File) {
@@ -378,30 +378,18 @@ export default function RemitosPage() {
       const { error: eS } = await supabase.storage.from("comprobantes").upload(ruta, prep.blob, { contentType: prep.mediaType, upsert: false });
       if (eS) throw eS;
       const url = supabase.storage.from("comprobantes").getPublicUrl(ruta).data.publicUrl;
-      let leido: any = null;
-      try {
-        const { data: its } = await (supabase as any).from("remito_items").select("presupuesto_item_id, descripcion, cantidad").eq("remito_id", r.id);
-        const res = await fetch("/api/remitos/leer-foto", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ base64: prep.base64, mediaType: prep.mediaType, remitos: [{ id: r.id, numero: r.numero, cai: r.nro_comprobante_cai, cliente: r.clienteNombre, fecha: r.fecha, items: its || [] }] }),
-        });
-        if (res.ok) leido = await res.json();
-      } catch { /* sin lectura de la IA: la foto queda igual */ }
-      const cambios: Record<string, unknown> = { foto_url: url, foto_ia: leido };
-      if (leido?.recibio) cambios.recibio = leido.recibio;
-      if (leido?.anotaciones) cambios.nota_ia = leido.anotaciones;
+      const cambios: Record<string, unknown> = { foto_url: url };
       const primera = !r.foto_url;
       const { error } = await (supabase as any).from("remitos").update(cambios).eq("id", r.id).eq("sociedad_id", sociedadActiva.id);
       if (error) throw error;
       if (primera && r.presupuesto_vendedor && r.presupuesto_vendedor !== profile?.id) {
         await (supabase as any).from("alertas").insert({
           tipo: "seguimiento", title: `Remito firmado: ${r.presupuesto_numero || r.numero}`,
-          description: `${profile?.full_name || "Alguien"} subió el remito firmado ${r.numero} de ${r.clienteNombre}${leido?.recibio ? ` · recibió ${leido.recibio}` : ""}`,
+          description: `${profile?.full_name || "Alguien"} subió el remito firmado ${r.numero} de ${r.clienteNombre}`,
           entity_id: r.id, entity_type: "remito", module: "remitos", user_id: r.presupuesto_vendedor, sociedad_id: sociedadActiva.id,
         }).then(() => {}, () => {});
       }
-      toast.success(`Foto guardada en ${r.numero}${leido?.recibio ? ` · recibió ${leido.recibio}` : ""}`);
-      if (leido?.anotaciones) toast.warning(`Anotaron a mano: ${leido.anotaciones}`);
+      toast.success(`Foto guardada en ${r.numero}`);
       await fetchData();
     } catch (err) {
       toast.error(`No se pudo subir la foto: ${err instanceof Error ? err.message : "error"}`);

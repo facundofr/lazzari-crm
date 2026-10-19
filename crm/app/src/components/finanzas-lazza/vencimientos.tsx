@@ -3,17 +3,19 @@
 // Finanzas Lazza → Vencimientos: SOLO facturas de venta y de compra con saldo, por fecha (sin cheques, fijos ni cuotas).
 // Saldos con la misma regla que Finanzas (lib/saldo-clientes y la de proveedores).
 // Cobrar (19/10): en facturas de venta, botón "Cobrar" → la misma liquidación de Finanzas con esa factura tildada (cobrar.tsx).
+// Pagar (19/10): en facturas de compra, botón "Pagar" → la misma OP de Finanzas con esa factura tildada (pagar.tsx).
 // Augusto 19/10/2026: clic en "Vence" = cambiar la fecha de esa factura y los días de pago del cliente/proveedor
 // (clientes.dias_cuenta_corriente; proveedores dias_cuenta_corriente + condicion_pago/dias_pago), con la opción de
 // aplicar los días nuevos a sus facturas pendientes. En facturas de venta es solo el dato interno: no toca ARCA.
 import { useEffect, useMemo, useState } from "react";
-import { HandCoins, Loader2, Pencil, Search, X } from "lucide-react";
+import { HandCoins, Loader2, Pencil, Search, Wallet, X } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { conVencimiento, filtrarVencimientos, sumarDias, type FilaVencimiento } from "@/lib/finanzas-lazza";
 import { supabase } from "@/lib/supabase/client";
 import { traerDeudas } from "./datos";
 import { CobrarCliente } from "./cobrar";
+import { PagarProveedor } from "./pagar";
 
 type Filtro = "todo" | "venta" | "compra";
 
@@ -21,7 +23,7 @@ type Fila = FilaVencimiento & { facturaId: string };
 
 const db = supabase as any;
 
-const columnas = (editar: (f: Fila) => void, cobrar: (f: Fila) => void): Column<Fila>[] => [
+const columnas = (editar: (f: Fila) => void, cobrar: (f: Fila) => void, pagar: (f: Fila) => void): Column<Fila>[] => [
   { key: "fecha", label: "Fecha de factura", sortable: true, sortValue: (f) => f.fecha, render: (f) => <span className="whitespace-nowrap">{formatDate(f.fecha)}</span> },
   { key: "vence", label: "Vence", sortable: true, sortValue: (f) => f.vence, render: (f) => (
     <button type="button" onClick={(e) => { e.stopPropagation(); editar(f); }} title="Cambiar el vencimiento o los días de pago"
@@ -41,6 +43,11 @@ const columnas = (editar: (f: Fila) => void, cobrar: (f: Fila) => void): Column<
       className="inline-flex items-center gap-1 rounded-lg border border-emerald-300 px-2 py-0.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-950/30">
       <HandCoins className="h-3.5 w-3.5" /> Cobrar
     </button>
+  ) : f.lado === "compra" && f.entidadId ? (
+    <button type="button" onClick={(e) => { e.stopPropagation(); pagar(f); }} title="Pagar esta factura (podés sumar otras del proveedor)"
+      className="inline-flex items-center gap-1 rounded-lg border border-orange-300 px-2 py-0.5 text-xs font-medium text-orange-700 hover:bg-orange-50 dark:border-orange-800 dark:text-orange-300 dark:hover:bg-orange-950/30">
+      <Wallet className="h-3.5 w-3.5" /> Pagar
+    </button>
   ) : null) },
 ];
 
@@ -58,6 +65,7 @@ export function FinanzasLazzaVencimientos({ sociedadId }: { sociedadId: string }
   const [hasta, setHasta] = useState("");
   const [editando, setEditando] = useState<Fila | null>(null);
   const [cobrando, setCobrando] = useState<Fila | null>(null);
+  const [pagando, setPagando] = useState<Fila | null>(null);
   const [recarga, setRecarga] = useState(0);
   const hoy = todayAR();
 
@@ -117,7 +125,7 @@ export function FinanzasLazzaVencimientos({ sociedadId }: { sociedadId: string }
         <p className="flex items-center gap-2 py-6 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Cargando…</p>
       ) : (
         <div className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-          <DataTable columns={columnas(setEditando, setCobrando)} data={visibles} emptyMessage="No hay facturas con saldo con ese filtro" />
+          <DataTable columns={columnas(setEditando, setCobrando, setPagando)} data={visibles} emptyMessage="No hay facturas con saldo con ese filtro" />
           <div className="flex flex-wrap justify-end gap-x-6 gap-y-1 border-t border-zinc-200 px-3 py-2 text-xs dark:border-zinc-700">
             <span className="text-zinc-400">{visibles.length} facturas con saldo</span>
             {filtro !== "compra" && <span className="text-zinc-500">A cobrar <b className="font-mono text-emerald-700 dark:text-emerald-400">{montos(totales.venta)}</b></span>}
@@ -133,6 +141,10 @@ export function FinanzasLazzaVencimientos({ sociedadId }: { sociedadId: string }
       {cobrando?.entidadId && (
         <CobrarCliente sociedadId={sociedadId} clienteId={cobrando.entidadId} clienteNombre={cobrando.nombre} preseleccion={[cobrando.facturaId]}
           onClose={() => setCobrando(null)} onCobrado={() => setRecarga((n) => n + 1)} />
+      )}
+      {pagando?.entidadId && (
+        <PagarProveedor sociedadId={sociedadId} proveedorId={pagando.entidadId} facturaIds={[pagando.facturaId]}
+          onClose={() => setPagando(null)} onPagado={() => setRecarga((n) => n + 1)} />
       )}
     </div>
   );

@@ -1,7 +1,7 @@
 "use client";
 
 // Finanzas Lazza → inicio: las 14 tarjetas (Augusto 18/10: "juntá la A y la B"). Ícono + nombre + qué es + un dato clave.
-// Arriba, "Cobrar y pagar" (Augusto 19/10: cobrar y pagar centralizados en un solo lugar; Pagar se arma en la próxima tanda).
+// Arriba, "Cobrar y pagar" (Augusto 19/10: cobrar y pagar centralizados en un solo lugar; cobrar.tsx y pagar.tsx).
 // Cada dato se calcula aparte (si uno falla, esa tarjeta queda con "—" y el resto anda). Solo lectura.
 import { useEffect, useState } from "react";
 import {

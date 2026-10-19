@@ -644,17 +644,31 @@ export interface ClienteACobrar {
   dias: number;
 }
 
-export function clientesACobrar(vencimientos: FilaVencimiento[]): ClienteACobrar[] {
-  const porCliente = new Map<string, ClienteACobrar>();
+type DeudaPorEntidad = Omit<ClienteACobrar, "clienteId"> & { entidadId: string };
+
+/** Un renglón por cliente (venta) o proveedor (compra) con facturas con saldo; primero la deuda más vieja. */
+function deudaPorEntidad(vencimientos: FilaVencimiento[], lado: FilaVencimiento["lado"]): DeudaPorEntidad[] {
+  const porEntidad = new Map<string, DeudaPorEntidad>();
   for (const v of vencimientos) {
-    if (v.lado !== "venta" || !v.entidadId || v.saldo <= 0.005) continue;
-    const c = porCliente.get(v.entidadId) ?? { clienteId: v.entidadId, nombre: v.nombre, facturas: 0, saldo: { ARS: 0, USD: 0 }, vencido: { ARS: 0, USD: 0 }, primerVence: v.vence, dias: v.dias };
+    if (v.lado !== lado || !v.entidadId || v.saldo <= 0.005) continue;
+    const c = porEntidad.get(v.entidadId) ?? { entidadId: v.entidadId, nombre: v.nombre, facturas: 0, saldo: { ARS: 0, USD: 0 }, vencido: { ARS: 0, USD: 0 }, primerVence: v.vence, dias: v.dias };
     c.facturas += 1;
     c.saldo[v.moneda] = r2(c.saldo[v.moneda] + v.saldo);
     if (v.dias < 0) c.vencido[v.moneda] = r2(c.vencido[v.moneda] + v.saldo);
     if (v.vence < c.primerVence) { c.primerVence = v.vence; c.dias = v.dias; }
-    porCliente.set(v.entidadId, c);
+    porEntidad.set(v.entidadId, c);
   }
   // Primero los que tienen la deuda más vieja.
-  return [...porCliente.values()].sort((a, b) => a.primerVence.localeCompare(b.primerVence) || a.nombre.localeCompare(b.nombre));
+  return [...porEntidad.values()].sort((a, b) => a.primerVence.localeCompare(b.primerVence) || a.nombre.localeCompare(b.nombre));
+}
+
+export function clientesACobrar(vencimientos: FilaVencimiento[]): ClienteACobrar[] {
+  return deudaPorEntidad(vencimientos, "venta").map(({ entidadId, ...resto }) => ({ clienteId: entidadId, ...resto }));
+}
+
+/** Pantalla Pagar (19/10/2026): un renglón por proveedor con facturas de compra con saldo (sale de Vencimientos). */
+export type ProveedorAPagar = Omit<ClienteACobrar, "clienteId"> & { proveedorId: string };
+
+export function proveedoresAPagar(vencimientos: FilaVencimiento[]): ProveedorAPagar[] {
+  return deudaPorEntidad(vencimientos, "compra").map(({ entidadId, ...resto }) => ({ proveedorId: entidadId, ...resto }));
 }

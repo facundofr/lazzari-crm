@@ -2,9 +2,10 @@
 
 // Finanzas Lazza → Órdenes de pago, Recibos, Retenciones y Movimientos.
 // Recibos (19/10): "Nuevo cobro" → elegir cliente y facturas → la misma liquidación de Finanzas (cobrar.tsx).
+// Órdenes de pago (19/10): "Nueva OP" → la misma ventana de OP de Finanzas (pagar.tsx).
 // Mismos datos y reglas que las pestañas de Finanzas; acá solo se miran, con filtros y orden por columna.
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Download, HandCoins, Loader2, Mail, MailCheck, Search } from "lucide-react";
+import { Download, HandCoins, Loader2, Mail, MailCheck, Search, Wallet } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
@@ -14,6 +15,7 @@ import { armarRetenciones, type FilaRetencion } from "@/lib/finanzas-lazza";
 import { useUser } from "@/lib/auth-context";
 import { descargarOP, EnviarOrdenPago } from "@/components/finanzas-lazza/orden-pago-doc";
 import { CobrarCliente } from "@/components/finanzas-lazza/cobrar";
+import { PagarProveedor } from "@/components/finanzas-lazza/pagar";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -87,6 +89,8 @@ const sumar = <T,>(filas: T[], monto: (f: T) => number, moneda: (f: T) => "ARS" 
 interface OP { id: string; numero: string; fecha: string; proveedor: string; cuit: string; bruto: number; retGan: number; retPct: number | null; neto: number; moneda: "ARS" | "USD"; medios: string[]; estado: string; enviada: string | null; sobreVerde: boolean }
 
 export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string }) {
+  const [recarga, setRecarga] = useState(0);
+  const [pagando, setPagando] = useState(false);
   const { datos, error } = useCarga<OP[]>(async () => {
     const rows = await traerTodo<any>(() => db.from("ordenes_pago").select("*, proveedores(razon_social, cuit)").eq("sociedad_id", sociedadId).order("fecha", { ascending: false }).order("id"));
     return rows.map((r) => {
@@ -100,7 +104,7 @@ export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string })
         estado: r.estado || "pendiente", enviada: r.email_enviado_at || null, sobreVerde: !!r.sobre_verde,
       };
     });
-  }, [sociedadId]);
+  }, [sociedadId, recarga]);
   const { sociedadActiva } = useUser();
   const [enviando, setEnviando] = useState<string | null>(null);
   const [enviadas, setEnviadas] = useState<Record<string, string>>({});
@@ -136,6 +140,10 @@ export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string })
   ];
   return (
     <Marco error={error} cargando={!datos} filtros={<>
+      <button type="button" onClick={() => setPagando(true)}
+        className="inline-flex h-8 items-center gap-1 rounded-lg bg-orange-500 px-3 text-sm font-medium text-white hover:bg-orange-600">
+        <Wallet className="h-4 w-4" /> Nueva OP
+      </button>
       <Buscador valor={texto} cambiar={setTexto} placeholder="Buscar N°, proveedor, CUIT o medio" />
       <select value={estado} onChange={(e) => setEstado(e.target.value)} className={control}><option value="">Todos los estados</option><option value="pendiente">Pendientes</option><option value="pagada">Pagadas</option><option value="anulada">Anuladas</option></select>
       <select value={envio} onChange={(e) => setEnvio(e.target.value)} className={control}><option value="">Enviadas y no</option><option value="si">Enviadas por mail</option><option value="no">No enviadas</option></select>
@@ -143,6 +151,7 @@ export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string })
     </>} pie={<><span>{visibles.length} órdenes</span><span>Entregado <b className="font-mono">{sumar(visibles.filter((o) => o.estado !== "anulada"), (o) => o.neto, (o) => o.moneda)}</b></span></>}>
       <DataTable columns={cols} data={visibles} emptyMessage="No hay órdenes de pago con ese filtro" />
       <EnviarOrdenPago opId={enviando} onClose={() => setEnviando(null)} onEnviada={(id, fecha) => setEnviadas((e) => ({ ...e, [id]: fecha }))} />
+      {pagando && <PagarProveedor sociedadId={sociedadId} onClose={() => setPagando(false)} onPagado={() => setRecarga((n) => n + 1)} />}
     </Marco>
   );
 }
