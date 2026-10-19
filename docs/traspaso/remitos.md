@@ -3,7 +3,7 @@
 ## Objetivo
 Una sola pantalla de Remitos (mejorando la vieja) y una sola ventana para crear/editar remitos, desde el PR o desde Remitos. Detalle histórico en `docs/ESTADO.md`, bloque "REMITOS: UNA SOLA PANTALLA".
 
-## Terminado y PUBLICADO (todo lo de Remitos está en producción, última versión de este tema: V1.1.511, commit 40606e7)
+## Terminado y PUBLICADO (todo lo de Remitos está en producción, última versión de este tema: V1.1.518, commit 13a11b1)
 - **Ventana única** `crm/app/src/components/remito-ventana.tsx`: Remitar desde el PR (Presupuestos), "Nuevo remito" desde Remitos ("Desde un PR" con lista tipo Presupuestos + casilla "Solo con algo por entregar", o "Remito independiente" con catálogo) y "Editar" (mismo número; con CAI avisa que el papel queda distinto, no bloquea).
   - Sucursal (Select de `components/ui/input`; "repartir en varias sucursales" = un remito por sucursal), OC editable (pregunta "solo remito / también PR"; el siguiente remito avisa "en el anterior usaste X"), renglones Artículo · Pedido · Remitar (arranca con lo que falta; pasarse = aviso amarillo), Tipo Con CAI / Sin CAI / Muestra (Select), fecha, observaciones, valor declarado 0 con ✨ sugerido = venta sin IVA, al final Descargar PDF / Enviar por mail.
   - PR "aprobado" con todo remitido → "remitido" (facturado no se toca). El estado "remitido" NO existe en el enum `pr_status` para buscar (bug corregido en V1.1.503).
@@ -20,7 +20,9 @@ Una sola pantalla de Remitos (mejorando la vieja) y una sola ventana para crear/
 ## A medias / próximo paso exacto
 - Nada a medias. La prueba del PDF con "Retira el cliente" se DESCARTÓ (17/10, Augusto: "Retira el cliente y entregado es lo mismo, solo quiero que quede el registro del remito hecho y nada más, y la posibilidad de poner foto"). No hacer remitos de prueba para eso.
 
-- **VALOR DECLARADO SIEMPRE EN PESOS — HECHO, SIN PUBLICAR (17/10/2026, chat Remitos; tsc 0, hooks OK, `scripts/test-remitos-crear.ts` OK):** en PR en dólares la ventana decía "Valor declarado (US$)" y el ✨ sugería en US$, pero el PDF imprime siempre "$": 9 remitos quedaron con el valor en dólares (ej. R-2026-1087 decía "$ 3.349,13"). Ahora la etiqueta es siempre "$" y el sugerido se pasa a pesos con el dólar BNA guardado del día (billete; si no hay, divisa), mostrando "(US$ X × billete $ Y)"; sin dólar no sugiere (no frena). Lógica `sugeridoEnPesos()` en lib/remitos-crear.ts. Datos viejos: `supabase/migrations/20261017150000_remitos_valor_declarado_pesos.sql` (+ rollback) pasa esos 9 remitos (valor < 10.000 en PR USD) a pesos con el BNA del día del remito. Migración CORRIDA el 17/10 con OK de Augusto y verificada (los 9 en pesos; quedan 0 en US$). **Falta: publicar el cambio de la ventana.**
+- **VALOR DECLARADO SIEMPRE EN PESOS — PUBLICADO en V1.1.518 (commit 13a11b1, Vercel Ready, 17/10/2026, chat Remitos; tsc 0, hooks OK, `scripts/test-remitos-crear.ts` OK):** en PR en dólares la ventana decía "Valor declarado (US$)" y el ✨ sugería en US$, pero el PDF imprime siempre "$": 9 remitos quedaron con el valor en dólares (ej. R-2026-1087 decía "$ 3.349,13"). Ahora la etiqueta es siempre "$" y el sugerido se pasa a pesos con el dólar BNA guardado del día (billete; si no hay, divisa), mostrando "(US$ X × billete $ Y)"; sin dólar no sugiere (no frena). Lógica `sugeridoEnPesos()` en lib/remitos-crear.ts. Datos viejos: `supabase/migrations/20261017150000_remitos_valor_declarado_pesos.sql` (+ rollback) pasa esos 9 remitos (valor < 10.000 en PR USD) a pesos con el BNA del día del remito. Migración CORRIDA el 17/10 con OK de Augusto y verificada (los 9 en pesos; quedan 0 en US$). **Probado en producción sin guardar:** Editar del remito 0018-00000078 (PR-2026-1204 Corteva, USD) muestra "Valor declarado ($)" y "Sugerido $ 322.872,00 sin IVA (US$ 210,34 × billete $ 1.535,00)"; cerrado con Cancelar. Ojo: el script publicar-limpio.sh subió a git pero NO publicó en Vercel (salió vacío el estado); se publicó a mano desde copia limpia de origin/main.
+
+- **SIN PUBLICAR (19/10, pedido del chat Transportes, decisión de Augusto):** `lib/remito-entrega.ts` → "¿Quién lo lleva?" cancela o corrige el viaje siempre que NO esté liquidado (`transportes.factura_compra_id` null), sin importar el estado (antes solo si estaba "solicitado"). Si ya está liquidado no lo toca y avisa en amarillo "Ese viaje ya se liquidó al transportista; corregilo en Transportes." (solo si lo elegido difiere del viaje). El remito igual guarda su domicilio/transporte. tsc 0, hooks OK, `scripts/test-remito-entrega.ts` OK. Va en la próxima tanda.
 
 ## Decisiones de Augusto / lo que NO quiere
 - Remito = registro de lo entregado + foto opcional. "Retira el cliente" es lo mismo que entregado; no es un detalle que necesite (17/10).
@@ -38,6 +40,7 @@ Una sola pantalla de Remitos (mejorando la vieja) y una sola ventana para crear/
 ## Errores conocidos
 - `vercel --prod` a veces da "Not authorized": reintentar desde copia limpia. `publicar-limpio.sh` no aplica borrados de archivos.
 - En local el servidor de :3000 puede quedar con "Internal Server Error" si otro chat usa el mismo `.next`.
+- Desde 19/10 (chat Transportes) la lista de `transportistas` sale de Proveedores con la casilla "Transporte" (un trigger la mantiene). "¿Quién lo lleva?" sigue igual, pero por la caché `transportistasGuardados` un transportista nuevo aparece recién al recargar la página.
 - Quedan fotos de prueba sin uso en `comprobantes/remitos/` (2). Número interno R-2026-1083, R-2026-1089 y R-2026-1090 salteados (pruebas borradas).
 
 ## Ideas para después

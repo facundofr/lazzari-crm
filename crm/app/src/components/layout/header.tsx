@@ -23,7 +23,6 @@ import { useRouter } from "next/navigation";
 import { createBrowserClient } from "@supabase/ssr";
 import { formatDateTime } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
-import { mockAlerts } from "@/lib/mock-data";
 import { useUser } from "@/lib/auth-context";
 
 interface HeaderProps {

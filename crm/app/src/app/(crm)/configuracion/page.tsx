@@ -1,10 +1,11 @@
 "use client";
 
+import { useToast } from "@/components/ui/toast";
+
 import { Header } from "@/components/layout/header";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
-import { mockUsers } from "@/lib/mock-data";
 import { ROLE_LABELS, ROLE_PERMISSIONS } from "@/lib/types";
 import type { User, Role } from "@/lib/types";
 import { Users, Shield, Building2, Plug, Bell, Palette, Database, Key, Loader2, CheckCircle2, Mail, Save, RotateCcw, Percent, Plus, Trash2, X, ShieldCheck, CalendarDays } from "lucide-react";
@@ -98,6 +99,7 @@ const roleBadgeVariant: Record<Role, "success" | "warning" | "danger" | "info" |
 };
 
 export default function ConfiguracionPage() {
+  const { toast } = useToast();
   const { sociedadActiva, profile } = useUser();
   // Solo el super_admin (Augusto) invita, cambia roles y da de baja usuarios.
   const canManageUsers = profile?.role === "super_admin";
@@ -186,10 +188,12 @@ export default function ConfiguracionPage() {
             pruebaRemitosNueva: !!p.prueba_remitos_nueva,
           })));
         } else {
-          setDbUsers(mockUsers);
+          setDbUsers([]);
+          toast.error("No se pudieron cargar los usuarios. Recargá la página.");
         }
       } catch {
-        setDbUsers(mockUsers);
+        setDbUsers([]);
+        toast.error("No se pudieron cargar los usuarios. Recargá la página.");
       }
       setUsersLoading(false);
     }
@@ -958,7 +962,7 @@ export default function ConfiguracionPage() {
                 pie: emailEstado.enviados === null ? undefined
                   : `Facturas enviadas este mes: ${emailEstado.enviados}${emailEstado.rebotados ? ` · ⚠️ rebotadas: ${emailEstado.rebotados}` : ""}`,
               },
-              { name: "IA — Asistente", desc: "Claude AI para asistencia en remitos y documentos", icon: Palette, estado: "si", note: "" },
+              { name: "IA — Asistente", desc: "Claude: lee facturas y documentos, arma presupuestos y responde en Ayuda", icon: Palette, estado: "si", note: "" },
             ] as { name: string; desc: string; icon: typeof Key; estado: "si" | "no" | "archivo" | "cargando"; note: string; pie?: string; link?: { href: string; label: string } }[]).map((integration) => (
               <Card key={integration.name} className="flex items-start gap-3 p-3">
                 <div className={`rounded-lg p-2 ${integration.estado === "si" || integration.estado === "archivo" ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30" : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800"}`}>

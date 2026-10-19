@@ -6,7 +6,6 @@ import { Badge } from "@/components/ui/badge";
 import { formatCurrency, todayAR } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
-import { mockPresupuestos, mockUsers } from "@/lib/mock-data";
 import { traerTodo } from "@/lib/paginar";
 import {
   equivalenteARS, filtrarParaGestion, firmarFilaLibro, incluirEnLibroIVACompras, incluirEnLibroIVAVentas,
@@ -34,34 +33,6 @@ interface VendedorComision {
 
 const COMISION_VENTA_PCT = 3;
 const COMISION_MARGEN_PCT = 10;
-
-function buildMockComisiones(): VendedorComision[] {
-  const vendedores = mockUsers.filter((u) => u.role === "vendedor");
-  return vendedores.map((v) => {
-    const aprobados = mockPresupuestos.filter(
-      (pr) => pr.creadoPor === v.id && pr.estado === "aprobado"
-    );
-    const ventaNeta = aprobados.reduce((sum, pr) => sum + pr.subtotal, 0);
-    const costoTotal = aprobados.reduce(
-      (sum, pr) => sum + pr.items.reduce((s, it) => s + it.precioCosto * it.cantidad, 0),
-      0
-    );
-    const margen = ventaNeta - costoTotal;
-    const comisionVenta = ventaNeta * (COMISION_VENTA_PCT / 100);
-    const comisionMargen = margen * (COMISION_MARGEN_PCT / 100);
-    return {
-      id: v.id,
-      nombre: v.name,
-      presupuestosAprobados: aprobados.length,
-      ventaNeta,
-      costoTotal,
-      margen,
-      comisionVenta,
-      comisionMargen,
-      totalComision: comisionVenta + comisionMargen,
-    };
-  });
-}
 
 // ── Ranking por Articulo types ──────────────────────────────────
 interface ArticuloRanking {

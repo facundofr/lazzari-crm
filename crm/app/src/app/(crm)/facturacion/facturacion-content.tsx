@@ -1,5 +1,7 @@
 "use client";
 
+import { useToast } from "@/components/ui/toast";
+
 import { BotonDejarRevisar } from "@/components/dejar-revisar";
 import { AvisoBCRA } from "@/components/clientes/bcra-card";
 import { Header } from "@/components/layout/header";
@@ -34,7 +36,6 @@ import { esNotaCredito, elegirFacturaDeOrdenPago } from "@/lib/ventas-documentos
 import { facturadoMesNeto } from "@/lib/facturado-mes";
 import { traerDatosSaldoClientes, calcularSaldosClientes, cobradoPorFactura as cobradoPorFacturaVenta, saldoClienteEn, type SaldoCliente } from "@/lib/saldo-clientes";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
-import { mockFacturas } from "@/lib/mock-data";
 import {
   Receipt, DollarSign, FileCheck, AlertTriangle, Loader2, XCircle,
   X, Printer, CheckCircle2, Clock, Ban, Copy, Download, Check,
@@ -150,6 +151,7 @@ function clienteAlcanzoLimite(cliente: { limite_credito?: number | null; saldo_c
 }
 
 export function FacturacionContent({ embedded = false, autoSelectId }: { embedded?: boolean; autoSelectId?: string }) {
+  const { toast } = useToast();
   const { sociedadActiva, profile } = useUser();
 
   const emisorData = useMemo(() => {
@@ -534,26 +536,12 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           return { ...f, clientes: f.clientes ? { ...f.clientes, saldo_cuenta_corriente: saldoRealCli(f.cliente_id) } : f.clientes, estado, cotizacion_modalidad: f.cotizacion_modalidad || (f as any).presupuestos?.cotizacion_modalidad || null, oc_cliente_fecha: f.oc_cliente_fecha || (f as any).presupuestos?.oc_cliente_fecha || null, _clienteNombre: f.clientes?.razon_social || "", _fechaVencCalc: fv || "", _prNumero: (f as any).presupuestos?.numero || "" };
         }));
       } else if (error) {
-        setFacturas(mockFacturas.map((f) => ({
-          id: f.id, tipo: f.tipo, punto_venta: f.puntoVenta, numero: f.numero,
-          cliente_id: f.clienteId, fecha: f.fecha, cae: f.cae, cae_vencimiento: f.caeVencimiento,
-          subtotal: f.subtotal, iva: f.iva, total: f.total, estado: f.estado,
-          moneda: "ARS", tipo_cambio: null,
-          presupuesto_id: null,
-          clientes: { razon_social: f.clienteNombre, cuit: "" },
-          _clienteNombre: f.clienteNombre,
-        })));
+        setFacturas([]);
+        toast.error("No se pudieron cargar las facturas. Recargá la página.");
       }
     } catch {
-      setFacturas(mockFacturas.map((f) => ({
-        id: f.id, tipo: f.tipo, punto_venta: f.puntoVenta, numero: f.numero,
-        cliente_id: f.clienteId, fecha: f.fecha, cae: f.cae, cae_vencimiento: f.caeVencimiento,
-        subtotal: f.subtotal, iva: f.iva, total: f.total, estado: f.estado,
-        moneda: "ARS", tipo_cambio: null,
-        presupuesto_id: null,
-        clientes: { razon_social: f.clienteNombre, cuit: "" },
-        _clienteNombre: f.clienteNombre,
-      })));
+      setFacturas([]);
+        toast.error("No se pudieron cargar las facturas. Recargá la página.");
     } finally {
       setLoading(false);
     }

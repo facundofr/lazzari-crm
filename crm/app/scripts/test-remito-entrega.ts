@@ -1,6 +1,6 @@
 // Prueba rápida de lib/remito-entrega (sin base). Uso (desde crm/app): npx tsx scripts/test-remito-entrega.ts
 import assert from "node:assert/strict";
-import { costoNumero, entregaInicial, entregaGuardada, difiereDeSucursal, datosRemito, planViaje, filaVigente, textoTransporte, entregaPDF, RETIRA_TEXTO, PROPIO_TEXTO, FILA_ACTUAL, type FilaTransporte } from "../src/lib/remito-entrega";
+import { costoNumero, entregaInicial, entregaGuardada, difiereDeSucursal, datosRemito, planViaje, filaVigente, textoTransporte, entregaPDF, RETIRA_TEXTO, PROPIO_TEXTO, FILA_ACTUAL, AVISO_LIQUIDADO, type FilaTransporte } from "../src/lib/remito-entrega";
 
 const ctx = { sociedad_id: "soc", cliente_id: "cli", remito_id: "rem", fecha: "2026-10-16", created_by: "yo" };
 const nombre = (id: string) => ({ t1: "Cruz del Sur", t2: "Andreani" } as Record<string, string>)[id] || null;
@@ -54,9 +54,15 @@ assert.deepEqual(p2, { accion: "corregir", id: "v1", datos: { transportista: "An
 const p3 = planViaje({ ...def, modo: "propio", transportista_id: null }, null, ctx, nombre);
 assert.equal(p3.accion === "crear" && p3.datos.tipo, "interno");
 assert.equal(p3.accion === "crear" && p3.datos.transportista, PROPIO_TEXTO);
-// Retira / no sé: cancela solo si estaba solicitado; uno entregado no se toca; sin viaje, nada
+// Retira / no sé: cancela si no está liquidado (cualquier estado); liquidado no se toca y avisa; sin viaje, nada
 assert.deepEqual(planViaje({ ...def, modo: "retira" }, viaje, ctx, nombre), { accion: "cancelar", id: "v1" });
-assert.deepEqual(planViaje({ ...def, modo: "nose" }, { ...viaje, estado: "entregado" }, ctx, nombre), { accion: "nada" });
+assert.deepEqual(planViaje({ ...def, modo: "nose" }, { ...viaje, estado: "entregado" }, ctx, nombre), { accion: "cancelar", id: "v1" });
+assert.deepEqual(planViaje({ ...def, modo: "nose" }, { ...viaje, estado: "entregado", factura_compra_id: "f1" }, ctx, nombre), { accion: "nada", aviso: AVISO_LIQUIDADO });
+// Cambiar transportista: corrige si no está liquidado (aunque esté entregado); liquidado avisa; sin cambios no avisa
+assert.equal(planViaje({ ...def, transportista_id: "t2" }, { ...viaje, estado: "entregado" }, ctx, nombre).accion, "corregir");
+assert.deepEqual(planViaje({ ...def, transportista_id: "t2" }, { ...viaje, factura_compra_id: "f1" }, ctx, nombre), { accion: "nada", aviso: AVISO_LIQUIDADO });
+const igual = planViaje(def, viaje, ctx, nombre);
+if (igual.accion === "corregir") assert.deepEqual(planViaje(def, { ...viaje, ...igual.datos, factura_compra_id: "f1" } as FilaTransporte, ctx, nombre), { accion: "nada" });
 assert.deepEqual(planViaje({ ...def, modo: "nose" }, null, ctx, nombre), { accion: "nada" });
 // Viaje viejo sin id: mantiene su nombre
 const p4 = planViaje({ ...def, transportista_id: FILA_ACTUAL }, { ...viaje, transportista: "Fletes Juan", transportista_id: null }, ctx, nombre);

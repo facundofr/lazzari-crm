@@ -11,7 +11,6 @@ import {
   calcularSaldosProveedores, ultimaCompraPorProveedor, linkWhatsApp, textoLocalidad, traerCreditosProveedores, type CreditoProveedor,
   type FacturaCompraSaldo, type MovimientoPagoFC, type MovimientoNC, type OrdenCompraFecha, type SaldoProveedor,
 } from "@/lib/saldo-proveedores";
-import { mockProveedores, mockListasPrecios } from "@/lib/mock-data";
 import { supabase } from "@/lib/supabase/client";
 import type { Proveedor, ListaPrecios, ListaPreciosItem, ListaPreciosRegla } from "@/lib/types";
 import { calculateNetPrice } from "@/lib/price-list-rules";
@@ -255,19 +254,21 @@ export default function ProveedoresPage() {
       const [provRes, listasRes] = await Promise.all([provQuery, listasQuery]);
 
       if (provRes.error) {
-        setProveedores(mockProveedores);
+        setProveedores([]);
+        toast.error("No se pudieron cargar los proveedores. Recargá la página.");
       } else {
         setProveedores((provRes.data || []).map((r) => mapSupabaseProveedor(r as Record<string, unknown>)));
       }
       if (listasRes.error) {
-        setListas(mockListasPrecios);
+        setListas([]);
       } else {
         setListas((listasRes.data || []).map((r) => mapSupabaseLista(r as Record<string, unknown>)));
       }
     } catch (err) {
       console.error("Error fetching proveedores:", err);
-      setProveedores(mockProveedores);
-      setListas(mockListasPrecios);
+      setProveedores([]);
+      setListas([]);
+      toast.error("No se pudieron cargar los proveedores. Recargá la página.");
     } finally {
       setLoading(false);
     }

@@ -11,7 +11,6 @@ import { Input, Select, Textarea } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { generatePresupuestoPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
-import { mockPresupuestos } from "@/lib/mock-data";
 import type { Presupuesto, PRStatus } from "@/lib/types";
 import { supabase } from "@/lib/supabase/client";
 import {
@@ -1011,10 +1010,12 @@ export default function PresupuestosPage() {
       if (!error && data) {
         setPresupuestos((data as unknown as SupabasePresupuesto[]).map(mapToPresupuesto));
       } else if (error) {
-        setPresupuestos(mockPresupuestos);
+        setPresupuestos([]);
+        toast.error("No se pudieron cargar los presupuestos. Recargá la página.");
       }
     } catch {
-      setPresupuestos(mockPresupuestos);
+      setPresupuestos([]);
+        toast.error("No se pudieron cargar los presupuestos. Recargá la página.");
     } finally {
       setLoading(false);
     }

@@ -1,5 +1,7 @@
 "use client";
 
+import { useToast } from "@/components/ui/toast";
+
 import { Header } from "@/components/layout/header";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -8,7 +10,6 @@ import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-
 import { formatCurrency } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
-import { mockProducts } from "@/lib/mock-data";
 import {
   Package, AlertTriangle, Search, Loader2, X, Pencil, Plus, Minus,
   History, Trash2, Eye, ChevronRight,
@@ -77,6 +78,7 @@ const emptyForm = {
 };
 
 export default function StockPage() {
+  const { toast } = useToast();
   const { sociedadActiva } = useUser();
   const [search, setSearch] = useState("");
   const [productos, setProductos] = useState<ProductRow[]>([]);
@@ -134,24 +136,12 @@ export default function StockPage() {
       if (!error && data) {
         setProductos(data as unknown as ProductRow[]);
       } else if (error) {
-        setProductos(mockProducts.map((p) => ({
-          id: p.id, codigo: p.codigo, nombre: p.nombre, categoria: p.categoria,
-          marca: null,
-          precio_costo: p.precioCosto, moneda_costo: p.monedaCosto, unidad: p.unidad,
-          iva: p.iva, stock: p.stock, stock_minimo: p.stockMinimo, activo: p.activo,
-          proveedor_id: null, proveedores: { razon_social: p.proveedor },
-          created_at: null, updated_at: null,
-        })));
+        setProductos([]);
+        toast.error("No se pudieron cargar los artículos. Recargá la página.");
       }
     } catch {
-      setProductos(mockProducts.map((p) => ({
-        id: p.id, codigo: p.codigo, nombre: p.nombre, categoria: p.categoria,
-        marca: null,
-        precio_costo: p.precioCosto, moneda_costo: p.monedaCosto, unidad: p.unidad,
-        iva: p.iva, stock: p.stock, stock_minimo: p.stockMinimo, activo: p.activo,
-        proveedor_id: null, proveedores: { razon_social: p.proveedor },
-        created_at: null, updated_at: null,
-      })));
+      setProductos([]);
+        toast.error("No se pudieron cargar los artículos. Recargá la página.");
     } finally {
       setLoading(false);
     }

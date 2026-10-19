@@ -60,14 +60,46 @@ Actualizado el 17/10/2026 para seguir desde otra cuenta sin el historial del cha
 - **NC sin OC** (Augusto 18/10: "todo va directo a la cc del proveedor"): si el comprobante es nota de crédito (`tipoNotaCredito` en `lib/compras-lazza.ts`, con prueba), no muestra OC ni forma de pago; guarda con `registrar_nota_credito_compra_v2` (la misma de Finanzas) sin aplicar a ninguna factura → queda como crédito del proveedor (estado `recibida`), con la "Nota para Finanzas" y el PDF. La nota de débito sigue sin cargarse acá.
 - tsc 0, hooks OK, `scripts/test-compras-lazza.ts` OK. Probado en local SIN guardar con el PDF de la FC 0014-73759: se lee, aparece OC-2026-1241, sin comparación, nota para Finanzas, vence 15/12. La NC no se probó con un PDF real (no había ninguno a mano).
 
-## 18/10: FC 0014-73759 cargada + arreglo IVA/percepciones (SIN PUBLICAR)
+## 18/10: FC 0014-73759 cargada + arreglo IVA/percepciones (publicado en V1.1.524, commit 79ebbfa, verificado en producción)
 - Cargada por Claude el 18/10 14:05 (OK de Augusto) desde el CRM local con V1.1.523 (producción no deja tomar el PDF de la compu): OC-2026-1241 facturada, transferencia a 60 días, vence 15/12, PDF guardado, costos del PR-1247 sin cambios.
 - Error encontrado: el QR solo trae el total y la pantalla hacía IVA = total − neto → la percepción de IIBB (4 %) quedaba sumada al IVA (73759 y 73760).
 - Programa: `ivaYPercepciones` en `lib/compras-lazza.ts` (con prueba): IVA = neto × alícuota y lo que sobra son percepciones (en el encabezado: "+ percep. (calculada)"); si sobra de menos (10,5 %) queda como antes. Usada en `compras-lazza-factura.tsx` (FC y NC).
 - Datos: `supabase/migrations/20261018150000_iva_percepciones_segutecnica.sql` (vuelta atrás en `supabase/rollback/`): 73759 IVA 102.976,65 + perc. 19.614,60; 73760 IVA 212.982 + perc. 40.568. El total no cambia. **Corrida por Augusto el 18/10 y verificada.**
 
+## 18/10: Abrir y editar la OC desde Compras Lazza (publicado en V1.1.525, commit 76a6c5f)
+- El número de la OC en la lista abre `components/compras-lazza-oc.tsx`. Se edita: proveedor (Cambiar → buscador), entrega estimada, observaciones, renglones (código, descripción, cantidad, precio; agregar/sacar). Lo llegado se muestra, no se edita (eso es "Llegó").
+- Guardar recalcula totales (PR manual = sin IVA) y el estado por lo llegado. Proveedor nuevo → renglones de la OC y del PR de origen (A). Costo cambiado → PR si es la misma moneda (B). `renglonesPrDeOc` y `totalesOc` en `lib/compras-lazza.ts` (con prueba).
+- Avisos (no traba): OC con factura cargada (la factura no cambia de proveedor), sacar un renglón que ya llegó.
+- Probado en local sin guardar y en producción solo abrir (OC-2026-1260, sin guardar). Falta: primera edición real con Augusto (mirar la OC y el PR después).
+
+## 19/10: PLAN ACORDADO con Augusto: PUBLICADO en V1.1.533 (19/10, commit 45ee155, verificado en producción sin guardar; migración 20261019180000 CORRIDA y verificada). Todo en Compras Lazza
+Cómo quedó (diferencias con el plan):
+- 6: NO se tocó `presupuestos/page.tsx`. La moneda del renglón sale de `orden_compra_items.moneda`; si está vacía, del `costo_moneda` del renglón del PR (por `presupuesto_item_id`, que ya se guarda al aprobar); si no, de la OC (`monedaRenglonOc`). La migración agrega la columna y la llena desde el PR. Sin migración la pantalla anda igual (la moneda se ve y pasa al PR, pero no queda guardada en la OC).
+- 8: se reusa `asignarRenglonesAProveedor` (OC SIN PEDIR del proveedor nuevo, mismo PR y misma moneda de OC; si no hay, OC nueva; la vacía queda `cancelada`). Confirmación con la lista de artículos antes de guardar. Solo artículos que ya estaban (los nuevos van con el proveedor de la OC).
+- El total de la OC se sigue guardando en la base (otras pantallas), no se muestra.
+- La columna Factura y Pago solo se sacó en Compras Lazza; Compras nueva queda igual. `compras-lazza-facturas-oc.tsx` ya no se usa (no se borró).
+- Probado en local SIN guardar: lista (Op/Ven, Completo en verde, 55 en curso / 108 terminadas), OC-2026-1250 (moneda por artículo, Cambiar proveedor de un artículo → "pasa a otro proveedor"), Cargar factura abre. NO probado: leer una factura real, guardar.
+Plan original:
+Idea: las OC quedan independientes de las facturas de compra; la OC solo controla que llegó todo. Regla: NUNCA INVENTAR (lo que no se habló, queda igual).
+**Lista de OC** (`components/compras-lista-oc.tsx` con `lazza`, `lib/oc-lista.ts`)
+1. Sacar columnas Factura y Pago (y el "+").
+2. "Terminada" = llegó todo (sin factura ni pago).
+3. Columna Llegó: cuando llegó todo, el botón dice "Completo" (verde) y se puede seguir tocando para corregir; si no, como hoy.
+4. "Persona" → "Op/Ven": iniciales del operador (gris, `presupuestos.created_by`) y del vendedor (naranja, `vendedor_id`), como en Presupuestos; si es la misma persona, una sola vez; OC sin PR → solo quien creó la OC. Filtro de personas busca por los dos.
+5. Copiar pedido (`textoCopiarOC`): solo "Pedido:" + cantidad × artículo. Sin proveedor, sin número de OC ni pedido de poner la OC en remito/factura. Nada de PDF.
+**La OC** (`components/compras-lazza-oc.tsx`)
+6. Moneda por artículo, sin subtotal/IVA/total a la vista. Migración aditiva: columna `orden_compra_items.moneda` (null = la de la OC; con rollback). Al aprobar el PR (`presupuestos/page.tsx`, ~1849/1980/2047/2105) cada renglón copia `costo_moneda` del PR. ⚠️ presupuestos/page.tsx tiene cambios de otro chat sin publicar: publicar solo nuestra parte. El total en la base queda (otras pantallas lo leen); Augusto: "sacalo igual" (no mostrarlo).
+7. Precio editado en la OC → PR, con su moneda (usar `presupuesto_item_id` si está; si no, `renglonesPrDeOc`).
+8. Proveedor: de toda la OC ("Cambiar" de arriba, queda como está) Y por artículo. Al guardar, el renglón pasa a una OC abierta del nuevo proveedor del mismo PR o a una OC nueva; si la vieja queda vacía se anula (no se borra). ANTES de guardar se muestra qué va a pasar y lo confirma la persona (nunca asignar solo). El proveedor cambia en el PR. Si el renglón ya tenía llegado: aviso, no traba.
+**Cargar factura** (`components/compras-lazza-factura.tsx`)
+9. Ya no se elige OC: siempre a la cc del proveedor (camino "Sin OC" que ya existe). Lo ya vinculado no se toca. NC ya funciona (falta probar con una real).
+10. Mientras busca el proveedor por CUIT: "Buscando proveedor…" (hoy sale un instante el cartel falso "no está cargado").
+11. Mostrar tipo y número, neto, IVA, percepciones y total. Artículos solo si se leyó con IA; si no: "Para ver los artículos, tocá Leer con IA" (opcional).
+12. "¿Cómo se paga?" arranca sin ninguna marcada; para guardar hay que elegir "Va a Pagos" o "Ya pagada con Visa" (si no, la pregunta en rojo "Elegí cómo se paga").
+Al final: prueba en `scripts/test-compras-lazza.ts` (texto copiado, OC destino del renglón), tsc, hooks, local SIN guardar, ESTADO.md. No publicar hasta que Augusto lo pida.
+
 ## Próximos pasos
-1. **Mirar con Augusto la PRIMERA factura que se guarde con Compras Lazza**: que la OC quede facturada (o parcial), el costo en el PR, Pagos, el PDF y Observar si correspondía. Todavía no se guardó ninguna real con este botón, y la lectura con IA tampoco se probó.
+1. **Mirar con Augusto la PRIMERA factura real con V1.1.533** (sin OC, a la cc del proveedor, con "¿Cómo se paga?"): Pagos o Visa, PDF, neto/IVA/percepciones. Y la **primera OC donde cambie el proveedor de un artículo**: que el renglón pase a la OC correcta (o nueva), la vieja vacía quede cancelada y el PR cambie de proveedor.
 2. Cuando Compras Lazza esté probada: proponer ocultar del menú "Compras nueva" y "Compras" (que sigan andando por link).
 3. En pausa (Augusto: "dejalo como está"): Deshacer de una factura guardada. Si se retoma: solo para "me equivoqué al cargarla"; si el proveedor la anula, va con su NC, no con Deshacer.
 4. Sin definir con Augusto: artículo parecido pero distinto, talle cambiado y curva de talles en el PR.

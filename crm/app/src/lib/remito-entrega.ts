@@ -3,7 +3,9 @@
 //   y el viaje en `transportes` (transportista_id y remito_id siempre; costo null si no se sabe, nunca 0).
 // - "Lo retira el cliente" = sin viaje; en el remito queda el domicilio "Retira el cliente" (así sale en el PDF).
 // - "Lo llevamos nosotros" = viaje tipo "interno". "Todavía no sé" = sin viaje.
-// - Todo se puede cambiar siempre: si ya había viaje se corrige; si se pasa a "retira"/"no sé", el viaje solicitado queda "cancelado" (no se borra).
+// - Todo se puede cambiar siempre mientras el viaje no esté liquidado al transportista (factura_compra_id null, sin importar el estado):
+//   si ya había viaje se corrige; si se pasa a "retira"/"no sé", queda "cancelado" (no se borra).
+//   Si ya está liquidado no se toca y se avisa que se corrija en Transportes.
 // Funciones puras + guardarEntrega(db, …), que recibe la base por parámetro (se prueba sin Supabase).
 
 export type ModoEntrega = "transporte" | "propio" | "retira" | "nose";
@@ -27,6 +29,8 @@ export interface FilaTransporte {
   destino: string | null;
   costo: number | null;
   created_at?: string | null;
+  /** Liquidado al transportista (factura de compra): ya no se toca desde el remito. */
+  factura_compra_id?: string | null;
 }
 
 export interface SucursalEntrega { direccion: string | null; localidad: string | null; transportista_id: string | null }
@@ -34,6 +38,7 @@ export interface SucursalEntrega { direccion: string | null; localidad: string |
 export const RETIRA_TEXTO = "Retira el cliente";
 export const PROPIO_TEXTO = "Propio (lo llevamos nosotros)";
 export const FILA_ACTUAL = "__fila";
+export const AVISO_LIQUIDADO = "Ese viaje ya se liquidó al transportista; corregilo en Transportes.";
 
 const limpio = (t: string | null | undefined) => (t || "").trim();
 const mismo = (a: string | null | undefined, b: string | null | undefined) => limpio(a).toLowerCase() === limpio(b).toLowerCase();
@@ -104,7 +109,7 @@ export function datosRemito(e: Entrega) {
 }
 
 export type AccionViaje =
-  | { accion: "nada" }
+  | { accion: "nada"; aviso?: string }
   | { accion: "crear"; datos: Record<string, unknown> }
   | { accion: "corregir"; id: string; datos: Record<string, unknown> }
   | { accion: "cancelar"; id: string };
@@ -118,8 +123,8 @@ export function planViaje(
 ): AccionViaje {
   const lleva = e.modo === "transporte" || e.modo === "propio";
   if (!lleva) {
-    // Solo se cancela un viaje todavía solicitado; uno ya entregado o facturado no se toca.
-    return vigente && (vigente.estado || "solicitado") === "solicitado" ? { accion: "cancelar", id: vigente.id } : { accion: "nada" };
+    if (!vigente) return { accion: "nada" };
+    return vigente.factura_compra_id ? { accion: "nada", aviso: AVISO_LIQUIDADO } : { accion: "cancelar", id: vigente.id };
   }
   let transportista: string | null;
   let transportista_id: string | null;
@@ -128,6 +133,12 @@ export function planViaje(
   else { transportista_id = e.transportista_id; transportista = transportista_id ? nombreDe(transportista_id) : null; }
   if (e.modo === "transporte" && !transportista) return { accion: "nada" };
   const comunes = { transportista, transportista_id, tipo: e.modo === "propio" ? "interno" : "externo", destino: destinoDe(e), costo: costoNumero(e.costo) };
+  if (vigente && vigente.factura_compra_id) {
+    // Liquidado: no se toca; se avisa solo si lo elegido es distinto de lo que tiene el viaje.
+    const cambia = comunes.transportista_id !== vigente.transportista_id || !mismo(comunes.transportista, vigente.transportista) || comunes.tipo !== (vigente.tipo || "externo")
+      || !mismo(comunes.destino, vigente.destino) || (comunes.costo != null && comunes.costo !== vigente.costo);
+    return cambia ? { accion: "nada", aviso: AVISO_LIQUIDADO } : { accion: "nada" };
+  }
   if (vigente) return { accion: "corregir", id: vigente.id, datos: comunes };
   return {
     accion: "crear",
@@ -177,7 +188,7 @@ export async function guardarEntrega(
   const avisos: string[] = [];
   const { error: e1 } = await db.from("remitos").update(datosRemito(e)).eq("id", ctx.remito_id).eq("sociedad_id", ctx.sociedad_id);
   if (e1) avisos.push(`domicilio/transporte del remito (${e1.message})`);
-  const { data: filas } = await db.from("transportes").select("id, transportista, transportista_id, tipo, estado, destino, costo, created_at").eq("remito_id", ctx.remito_id).eq("sociedad_id", ctx.sociedad_id);
+  const { data: filas } = await db.from("transportes").select("id, transportista, transportista_id, tipo, estado, destino, costo, created_at, factura_compra_id").eq("remito_id", ctx.remito_id).eq("sociedad_id", ctx.sociedad_id);
   const plan = planViaje(e, filaVigente(filas || []), ctx, nombreDe);
   if (plan.accion === "crear") {
     const { error } = await db.from("transportes").insert(plan.datos);
@@ -198,5 +209,6 @@ export async function guardarEntrega(
       if (error) avisos.push(`la sucursal (${error.message})`);
     }
   }
-  return avisos.length ? `El remito quedó, pero no se pudo guardar: ${avisos.join(" · ")}` : null;
+  const textos = [avisos.length ? `El remito quedó, pero no se pudo guardar: ${avisos.join(" · ")}` : "", plan.accion === "nada" && plan.aviso ? plan.aviso : ""].filter(Boolean);
+  return textos.length ? textos.join(" ") : null;
 }

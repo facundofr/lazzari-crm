@@ -5,7 +5,6 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
-import { mockRemitos } from "@/lib/mock-data";
 import { Truck, Loader2, CheckCircle2, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, Trash2, Minus, ShieldCheck, GitBranch, MapPin, Maximize2, Search, Camera, Pencil } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { RemitoVentana } from "@/components/remito-ventana";
@@ -300,26 +299,12 @@ export default function RemitosPage() {
           } catch { /* sin sucursal ni transporte: quedan vacíos */ }
           setRemitos((data as any[]).map(r => ({ ...r, clienteNombre: r.clientes?.razon_social || "", presupuesto_numero: r.presupuestos?.numero || null, presupuesto_modalidad: r.presupuestos?.modalidad_emision || null, presupuesto_vendedor: r.presupuestos?.vendedor_id || r.presupuestos?.created_by || null, ocs_numeros: ocsPorPR.get(r.presupuesto_id) || [], sucursal_nombre: r.sucursal_id ? sucNombre.get(r.sucursal_id) : undefined, ...columnaTransporte(r, transPorRemito.get(r.id) || []) })) as RemitoRow[]);
         } else if (error) {
-          setRemitos(mockRemitos.map((r) => ({
-            id: r.id, numero: r.numero, cliente_id: r.clienteId,
-            presupuesto_id: r.presupuestoId || null, fecha: r.fecha,
-            cae: r.cae || null, car_vencimiento: null, nro_remito_afip: null, estado: r.estado, observaciones: r.observaciones,
-            tipo_remito: null, valor_declarado: null,
-            clientes: { razon_social: r.clienteNombre },
-            clienteNombre: r.clienteNombre,
-            remito_items: r.items.map((i) => ({ id: i.id })),
-          })));
+          setRemitos([]);
+          toast.error("No se pudieron cargar los remitos. Recargá la página.");
         }
       } catch {
-        setRemitos(mockRemitos.map((r) => ({
-          id: r.id, numero: r.numero, cliente_id: r.clienteId,
-          presupuesto_id: r.presupuestoId || null, fecha: r.fecha,
-          cae: r.cae || null, car_vencimiento: null, nro_remito_afip: null, estado: r.estado, observaciones: r.observaciones,
-          tipo_remito: null, valor_declarado: null,
-          clientes: { razon_social: r.clienteNombre },
-          clienteNombre: r.clienteNombre,
-          remito_items: r.items.map((i) => ({ id: i.id })),
-        })));
+        setRemitos([]);
+          toast.error("No se pudieron cargar los remitos. Recargá la página.");
       } finally {
         setLoading(false);
       }

@@ -30,14 +30,17 @@ Que Augusto y los chicos trabajen sin trabas: arreglar lo que falla, simplificar
 - **Falta verlo en producción** (hoy va por V1.1.517) con el usuario de Augusto, sin guardar: que esos 4 no estén en el menú, que /importaciones diga "Próximamente" y la versión de abajo. El 17/10 se abrió el login en el navegador de la app pero no llegó a entrar (cambio de cuenta).
 
 ## Sin publicar
-- Nada de este chat. El cambio local en `crm/app/tsconfig.json` NO es de este chat.
+Nada. "Se sacan 3 IA" salió en V1.1.532; "Sin datos inventados" sale en la tanda V1.1.534 (19/10, junto con Remitos y Transportes).
+- El cambio local en `crm/app/tsconfig.json` NO es de este chat (no se publica).
 
-## Pendiente / próximo paso
-1. **Corteva:** 10 comprobantes no llegaron a seedspayables (cuentas a pagar): FA 15-66, 15-63, 15-61, 15-50, 15-49, 15-48, 15-36, 15-33, 16-10 y NC 15-7. La FA 15-41 salió a seedspayables@**vylor.com**. Próximo paso: preguntarle a Augusto si se reenvían a seedspayables.argentina@corteva.com, desde Facturas → "Reenviar al cliente", una por una.
-2. **Asistente dentro del CRM que corrige cosas** (como hace este chat: marcar pagos, cargar facturas, corregir envíos), con vista previa, botón Hacer y Deshacer. Solo propuesto; Augusto dijo "perfecto" pero pidió armar primero los chats por tema. Próximo paso: plan por etapas y esperar OK.
-3. Probar la foto del remito del proveedor con un remito REAL (todavía no hubo ninguno).
-4. 8 facturas viejas de Corteva no tienen dato en Resend ("Email not found"): no se pueden verificar.
-5. El informe para el equipo (`Claude outputs/informe-equipo-novedades-16-10-2026.md`) quedó viejo: Remitos cambió (el chat de Remitos eliminó "Remitos nueva"). Actualizarlo antes de mandarlo.
+## Pendiente / próximo paso (17/10)
+1. ~~Corteva: reenviar a seedspayables~~ → Augusto 17/10: "ya está ok, no hay que cambiar nada". CERRADO.
+2. **Asistente dentro del CRM que hace cosas — Etapa 1 PUBLICADA en V1.1.520 (17/10), migración corrida, Hacer + Deshacer probados en producción con la nota de Nexo (quedó como estaba). Lo único que falta: Etapa 2.** Antes: (detalle y archivos en ESTADO, entrada "ASISTENTE QUE HACE COSAS — ETAPA 1"). Falta: (a) Augusto corre `supabase/migrations/20261017100000_ia_acciones.sql` en el SQL Editor; (b) publicar cuando lo pida; (c) primera prueba real de "Hacer" + "Deshacer" con él en producción; (d) Etapa 2.
+3. ~~OP de Nexo~~ → HECHA por Augusto: OP-000066 (16/10), eCheq BBVA 90017386 $678.972 al 31/10 (ret. Ganancias 2 %), mail enviado; FC 0003-00005284 pagada. Ojo: OC-2026-1229 sigue "enviada" con 0/1 llegó (si la mesa ya llegó, marcar Llegó).
+4. Informe para el equipo ACTUALIZADO: `Claude outputs/informe-equipo-novedades-17-10-2026.md` (12 puntos, al día con V1.1.517). Falta que Augusto lo lea y lo mande él.
+4b. **Mayúsculas solo cuando hace falta** (A + B + C) PUBLICADO en V1.1.520 y visto en producción (Proveedores) (ver ESTADO, entrada "MAYÚSCULAS"). Falta publicar y mirarlo en producción; la corrección de datos viejos en la base (opción D) quedó descartada por ahora.
+5. Probar la foto del remito del proveedor con un remito REAL.
+6. ~~Ver el menú en producción~~ → visto 17/10 en V1.1.520 con el usuario de Augusto: OK.
 
 ## Decisiones de Augusto
 - Cada tema en su chat. En este no se relayan preguntas ni avisos de los otros.
@@ -57,5 +60,5 @@ Que Augusto y los chicos trabajen sin trabas: arreglar lo que falla, simplificar
 
 ## Prompt para seguir en un chat nuevo
 ```
-Sos el chat de Resto del CRM. Leé CLAUDE.md, docs/traspaso/resto-crm.md y las primeras entradas de docs/ESTADO.md. Primero: abrí https://lazzari-crm.vercel.app en el navegador de la app, pedime que inicie sesión (yo pongo la contraseña) y revisá SIN GUARDAR que Oportunidades, Stock, Personalización e Importaciones no estén en el menú, que /importaciones diga "Próximamente" y qué versión dice abajo. Después mostrame los pendientes: (1) Corteva: 10 comprobantes que no llegaron a seedspayables + FA 15-41 que salió a @vylor.com: ¿se reenvían a seedspayables.argentina@corteva.com? (uno por uno, con mi OK); (2) plan por etapas del asistente dentro del CRM; (3) OP de Nexo (OC-2026-1229); (4) actualizar el informe para el equipo.
+Sos el chat de Resto del CRM. Leé CLAUDE.md, docs/traspaso/resto-crm.md y las primeras entradas de docs/ESTADO.md. Seguimos con el asistente dentro del CRM: la Etapa 1 está hecha y sin publicar (ver ESTADO). Pasame los pasos para correr la migración ia_acciones y, cuando te diga, publicala y probala conmigo en producción.
 ```

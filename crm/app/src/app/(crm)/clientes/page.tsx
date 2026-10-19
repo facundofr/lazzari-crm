@@ -9,7 +9,6 @@ import { Modal } from "@/components/ui/modal";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
-import { mockClients, mockPresupuestos, mockFacturas } from "@/lib/mock-data";
 import type { Client } from "@/lib/types";
 import { supabase } from "@/lib/supabase/client";
 import {
@@ -616,36 +615,9 @@ export default function ClientesPage() {
         const { data: facturas, error: factError } = await factQ;
 
         if (presError || factError) {
-          // Fallback to mock data
-          const mockPres = mockPresupuestos.filter(
-            (p) => p.clienteId === clienteId && p.estado === "aprobado"
-          );
-          const catMap = new Map<string, { cantidad: number; total: number }>();
-          for (const p of mockPres) {
-            for (const item of p.items) {
-              const cat = item.categoria || "Sin categoría";
-              const existing = catMap.get(cat) || { cantidad: 0, total: 0 };
-              catMap.set(cat, {
-                cantidad: existing.cantidad + item.cantidad,
-                total: existing.total + (item.total || item.subtotal || 0),
-              });
-            }
-          }
-          const categorias = Array.from(catMap.entries())
-            .map(([categoria, data]) => ({ categoria, ...data }))
-            .sort((a, b) => b.total - a.total);
-
-          const mockFact = mockFacturas.filter((f) => f.clienteId === clienteId);
-          const totalFact = mockFact.reduce((sum, f) => sum + f.total, 0);
-          const ultimaFecha = mockPres.length > 0 ? mockPres[0].fecha : null;
-
-          setConsumoData({
-            categorias,
-            totalFacturado: totalFact,
-            cantidadPresupuestos: mockPres.length,
-            ultimaCompra: ultimaFecha,
-            loading: false,
-          });
+          // Sin datos inventados: si falla, queda vacío y avisa.
+          setConsumoData({ categorias: [], totalFacturado: 0, cantidadPresupuestos: 0, ultimaCompra: null, loading: false });
+          toast.error("No se pudieron cargar las compras del cliente. Recargá la página.");
           return;
         }
 
@@ -950,18 +922,20 @@ export default function ClientesPage() {
 
       if (error) {
         console.error("Error fetching clientes:", error);
-        setClientes(mockClients.map((c) => ({ ...c, vendedorNombre: "—", monedaPredeterminada: "ARS" })));
+        setClientes([]);
+        toast.error("No se pudieron cargar los clientes. Recargá la página.");
       } else if (data) {
         setClientes(data.map((row) => {
           const c = mapRow({ ...row, contactos: [] } as unknown as ClienteRow);
           return { ...c, saldoCuentaCorriente: saldoClienteEn(saldos, c.id, "ARS"), saldoUSD: saldoClienteEn(saldos, c.id, "USD") };
         }));
       } else {
-        setClientes(mockClients.map((c) => ({ ...c, vendedorNombre: "—", monedaPredeterminada: "ARS" })));
+        setClientes([]);
       }
     } catch (err) {
       console.error("Error fetching clientes:", err);
-      setClientes(mockClients.map((c) => ({ ...c, vendedorNombre: "—", monedaPredeterminada: "ARS" })));
+      setClientes([]);
+      toast.error("No se pudieron cargar los clientes. Recargá la página.");
     } finally {
       setLoading(false);
     }
