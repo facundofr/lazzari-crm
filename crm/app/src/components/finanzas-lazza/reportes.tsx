@@ -39,10 +39,6 @@ export function FinanzasLazzaReportes({ sociedadId, periodo }: { sociedadId: str
     </tr>
   );
 
-  const o = r.objetivo;
-  const tope = OBJETIVOS_MES.muyBueno * 1.1;
-  const pct = (m: number) => `${Math.min(100, Math.max(0, (m / tope) * 100))}%`;
-
   return (
     <div className="space-y-3">
       <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
@@ -68,23 +64,13 @@ export function FinanzasLazzaReportes({ sociedadId, periodo }: { sociedadId: str
         {r.gastos.enUsdSinCotizacion > 0 && <p className="mt-1 text-[11px] text-amber-600">Hay gastos en US$ por {formatCurrency(r.gastos.enUsdSinCotizacion, "USD")} sin cotización del día: no suman.</p>}
       </div>
 
-      {/* Objetivos sobre el neto facturado */}
-      <div className="rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2 text-sm">
-          <span className="font-semibold text-zinc-700 dark:text-zinc-200">Objetivo del mes (neto): {NIVEL_TEXTO[o.nivel]}</span>
-          <span className="text-xs text-zinc-500">{o.proximo ? <>Faltan <b className="font-mono">{formatCurrency(o.proximo.falta)}</b> para {o.proximo.nombre}</> : "¡Muy bueno superado!"}</span>
+      {/* Resultado del mes: neto de venta − neto de costo − gastos del mes */}
+      <div className={`rounded-xl border-2 p-3 text-sm ${r.resultado >= 0 ? "border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/20" : "border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/20"}`}>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <span className="font-semibold text-zinc-700 dark:text-zinc-200">Resultado del mes</span>
+          <span className={`font-mono text-lg font-bold ${r.resultado >= 0 ? "text-emerald-700 dark:text-emerald-400" : "text-red-600"}`}>{formatCurrency(r.resultado)}</span>
         </div>
-        <div className="relative h-3 rounded-full bg-zinc-100 dark:bg-zinc-800">
-          <div className={`h-3 rounded-full ${o.nivel === "debajo" ? "bg-orange-400" : "bg-emerald-500"}`} style={{ width: pct(o.neto) }} />
-          {[OBJETIVOS_MES.minimo, OBJETIVOS_MES.bueno, OBJETIVOS_MES.muyBueno].map((m) => (
-            <div key={m} className="absolute top-[-3px] h-[18px] w-0.5 bg-zinc-500" style={{ left: pct(m) }} />
-          ))}
-        </div>
-        <div className="relative mt-1 h-4 text-[10px] text-zinc-500">
-          {[["Mínimo", OBJETIVOS_MES.minimo], ["Bueno", OBJETIVOS_MES.bueno], ["Muy bueno", OBJETIVOS_MES.muyBueno]].map(([n, m]) => (
-            <span key={n} className="absolute -translate-x-1/2 whitespace-nowrap" style={{ left: pct(m as number) }}>{n} {Number(m) / 1_000_000}M</span>
-          ))}
-        </div>
+        <p className="mt-0.5 font-mono text-[11px] text-zinc-500">{formatCurrency(r.facturado.neto)} neto de venta − {formatCurrency(r.costo.neto)} neto de costo − {formatCurrency(r.gastos.total)} gastos del mes</p>
       </div>
 
       {(r.avisos.length > 0 || r.sinCotizacion.length > 0) && (
@@ -98,7 +84,7 @@ export function FinanzasLazzaReportes({ sociedadId, periodo }: { sociedadId: str
                 <span className="text-amber-700 dark:text-amber-400">· {a.motivo}</span>
                 {a.presupuestoId
                   ? <Link href={`/presupuestos?selected=${a.presupuestoId}`} className="font-medium text-orange-600 hover:underline">Abrir {a.prNumero || "PR"}</Link>
-                  : <Link href={`/finanzas?factura=${a.facturaId}`} className="font-medium text-orange-600 hover:underline">Abrir factura</Link>}
+                  : null}
               </li>
             ))}
             {r.sinCotizacion.length > 0 && <li>En US$ sin cotización (no suman): {r.sinCotizacion.join(", ")}</li>}
@@ -133,6 +119,54 @@ export function FinanzasLazzaReportes({ sociedadId, periodo }: { sociedadId: str
           </table>
         </div>
       </details>
+    </div>
+  );
+}
+
+/** Barra de objetivos del mes sobre el neto facturado (Mínimo / Bueno / Muy bueno). */
+export function BarraObjetivo({ o }: { o: ReporteBasico["objetivo"] }) {
+  const tope = OBJETIVOS_MES.muyBueno * 1.1;
+  const pct = (m: number) => `${Math.min(100, Math.max(0, (m / tope) * 100))}%`;
+  return (
+      <div className="rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2 text-sm">
+          <span className="font-semibold text-zinc-700 dark:text-zinc-200">Objetivo del mes (neto): {NIVEL_TEXTO[o.nivel]}</span>
+          <span className="text-xs text-zinc-500">{o.proximo ? <>Faltan <b className="font-mono">{formatCurrency(o.proximo.falta)}</b> para {o.proximo.nombre}</> : "¡Muy bueno superado!"}</span>
+        </div>
+        <div className="relative h-3 rounded-full bg-zinc-100 dark:bg-zinc-800">
+          <div className={`h-3 rounded-full ${o.nivel === "debajo" ? "bg-orange-400" : "bg-emerald-500"}`} style={{ width: pct(o.neto) }} />
+          {[OBJETIVOS_MES.minimo, OBJETIVOS_MES.bueno, OBJETIVOS_MES.muyBueno].map((m) => (
+            <div key={m} className="absolute top-[-3px] h-[18px] w-0.5 bg-zinc-500" style={{ left: pct(m) }} />
+          ))}
+        </div>
+        <div className="relative mt-1 h-4 text-[10px] text-zinc-500">
+          {[["Mínimo", OBJETIVOS_MES.minimo], ["Bueno", OBJETIVOS_MES.bueno], ["Muy bueno", OBJETIVOS_MES.muyBueno]].map(([n, m]) => (
+            <span key={n} className="absolute -translate-x-1/2 whitespace-nowrap" style={{ left: pct(m as number) }}>{n} {Number(m) / 1_000_000}M</span>
+          ))}
+        </div>
+      </div>
+  );
+}
+
+/** Finanzas Lazza → Objetivos: barra del mes con el neto facturado (misma cuenta que Reportes). */
+export function FinanzasLazzaObjetivos({ sociedadId, periodo }: { sociedadId: string; periodo: string }) {
+  const [datos, setDatos] = useState<Awaited<ReturnType<typeof traerDatosReporte>> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let vivo = true;
+    setDatos(null); setError(null);
+    traerDatosReporte(sociedadId, periodo)
+      .then((d) => { if (vivo) setDatos(d); })
+      .catch((e) => { console.error("Finanzas Lazza · Objetivos:", e); if (vivo) setError("No se pudieron cargar los datos. Recargá la página."); });
+    return () => { vivo = false; };
+  }, [sociedadId, periodo]);
+  const r = useMemo(() => (datos ? reporteBasico({ periodo, ...datos }) : null), [datos, periodo]);
+  if (error) return <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30">{error}</p>;
+  if (!r) return <p className="flex items-center gap-2 py-6 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Calculando…</p>;
+  return (
+    <div className="space-y-2">
+      <BarraObjetivo o={r.objetivo} />
+      <p className="text-[11px] text-zinc-500">Neto facturado del mes: <b className="font-mono">{formatCurrency(r.objetivo.neto)}</b> (facturas − NC, US$ al TC de cada factura). Objetivos: Mínimo $64.000.000 · Bueno $80.000.000 · Muy bueno $96.000.000.</p>
     </div>
   );
 }

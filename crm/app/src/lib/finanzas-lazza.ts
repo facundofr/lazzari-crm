@@ -65,6 +65,7 @@ export interface FacturaVentaFL {
   numero?: number | string | null;
   cae?: string | null;
   cliente?: string | null;
+  cliente_id?: string | null;
 }
 
 export interface ItemCostoFL {
@@ -114,6 +115,8 @@ export interface ReporteBasico {
   costo: NetoIva;
   gastos: { fijos: number; eventuales: number; total: number; enUsdSinCotizacion: number };
   objetivo: { neto: number; nivel: NivelObjetivo; proximo: { nombre: string; monto: number; falta: number } | null };
+  /** Neto de venta − neto de costo − gastos del mes (Augusto 18/10). */
+  resultado: number;
   filas: FilaReporte[];
   /** PR sin costo, facturas sin PR, NC sin factura de origen. */
   avisos: AvisoPr[];
@@ -267,6 +270,7 @@ export function reporteBasico(input: {
     costo: redondearNI(costoTot),
     gastos: { fijos: r2(fijos), eventuales: r2(eventuales), total: r2(fijos + eventuales), enUsdSinCotizacion: r2(enUsdSinCotizacion) },
     objetivo: nivelObjetivo(fact.neto),
+    resultado: r2(fact.neto - r2(costoTot.neto) - r2(fijos + eventuales)),
     filas,
     avisos,
     sinCotizacion,
@@ -357,6 +361,10 @@ export function saldoFacturaCompra(f: FacturaCompraFL, pagosDirectos: PagoDirect
 export interface FilaVencimiento {
   lado: "venta" | "compra";
   id: string;
+  /** Cliente o proveedor. */
+  entidadId: string | null;
+  /** Fecha de la factura. */
+  fecha: string;
   /** Vencimiento (o la fecha del comprobante si no tiene). */
   vence: string;
   sinVencimiento: boolean;
@@ -367,6 +375,35 @@ export interface FilaVencimiento {
   saldo: number;
   /** Días hasta el vencimiento (negativo = vencida). */
   dias: number;
+}
+
+export interface FiltroVencimientos {
+  lado?: "todo" | "venta" | "compra";
+  /** Busca en comprobante y cliente/proveedor (sin acentos ni mayúsculas). */
+  texto?: string;
+  moneda?: "" | "ARS" | "USD";
+  situacion?: "" | "vencidas" | "por_vencer";
+  /** Rango de fechas sobre la fecha de la factura o sobre el vencimiento. */
+  campoFecha?: "fecha" | "vence";
+  desde?: string;
+  hasta?: string;
+}
+
+const sinAcentos = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+
+export function filtrarVencimientos(filas: FilaVencimiento[], f: FiltroVencimientos): FilaVencimiento[] {
+  const q = sinAcentos((f.texto || "").trim());
+  const campo = f.campoFecha || "vence";
+  return filas.filter((x) => {
+    if (f.lado && f.lado !== "todo" && x.lado !== f.lado) return false;
+    if (f.moneda && x.moneda !== f.moneda) return false;
+    if (f.situacion === "vencidas" && x.dias >= 0) return false;
+    if (f.situacion === "por_vencer" && x.dias < 0) return false;
+    if (f.desde && x[campo] < f.desde) return false;
+    if (f.hasta && x[campo] > f.hasta) return false;
+    if (q && !sinAcentos(`${x.comprobante} ${x.nombre}`).includes(q)) return false;
+    return true;
+  });
 }
 
 const diasEntre = (desde: string, hasta: string) => Math.round((Date.parse(`${hasta}T12:00:00Z`) - Date.parse(`${desde}T12:00:00Z`)) / 86_400_000);
@@ -384,7 +421,7 @@ export function armarVencimientos(input: {
     const saldo = input.saldoVenta(f);
     if (saldo <= 0.005) continue;
     const vence = String(f.fecha_vencimiento || f.fecha).slice(0, 10);
-    out.push({ lado: "venta", id: f.id, vence, sinVencimiento: !f.fecha_vencimiento, comprobante: comprobanteVenta(f), nombre: f.cliente || "", moneda: normalizarMoneda(f.moneda), total: num(f.total), saldo, dias: diasEntre(input.hoy, vence) });
+    out.push({ lado: "venta", id: f.id, entidadId: f.cliente_id ?? null, fecha: String(f.fecha).slice(0, 10), vence, sinVencimiento: !f.fecha_vencimiento, comprobante: comprobanteVenta(f), nombre: f.cliente || "", moneda: normalizarMoneda(f.moneda), total: num(f.total), saldo, dias: diasEntre(input.hoy, vence) });
   }
   const porFactura = new Map<string, PagoDirectoFC[]>();
   for (const p of input.pagosDirectos) {
@@ -396,7 +433,129 @@ export function armarVencimientos(input: {
     const saldo = saldoFacturaCompra(f, porFactura.get(f.id) || []);
     if (saldo <= 0.005) continue;
     const vence = String(f.fecha_vencimiento || f.fecha).slice(0, 10);
-    out.push({ lado: "compra", id: f.id, vence, sinVencimiento: !f.fecha_vencimiento, comprobante: `${f.tipo_comprobante || "FC"} ${f.numero_factura || "S/N"}`, nombre: f.proveedor || "", moneda: normalizarMoneda(f.moneda), total: num(f.total), saldo, dias: diasEntre(input.hoy, vence) });
+    out.push({ lado: "compra", id: f.id, entidadId: f.proveedor_id ?? null, fecha: String(f.fecha).slice(0, 10), vence, sinVencimiento: !f.fecha_vencimiento, comprobante: `${f.tipo_comprobante || "FC"} ${f.numero_factura || "S/N"}`, nombre: f.proveedor || "", moneda: normalizarMoneda(f.moneda), total: num(f.total), saldo, dias: diasEntre(input.hoy, vence) });
   }
   return out.sort((a, b) => a.vence.localeCompare(b.vence) || a.lado.localeCompare(b.lado) || a.nombre.localeCompare(b.nombre));
+}
+
+// ── Cuentas corrientes (clientes y proveedores en una sola lista) ───
+
+export type Semaforo = "verde" | "amarillo" | "rojo" | "gris";
+
+export interface FilaCuentaCorriente {
+  /** "c-<id>" o "p-<id>" (único en la lista). */
+  id: string;
+  lado: "cliente" | "proveedor";
+  entidadId: string;
+  nombre: string;
+  cuit: string;
+  /** Positivo = nos debe (cliente) / le debemos (proveedor); negativo = a favor. */
+  saldo: { ARS: number; USD: number };
+  vencido: { ARS: number; USD: number };
+  facturas: number;
+  proximoVencimiento: string | null;
+  bcra: Semaforo | null;
+}
+
+export function armarCuentasCorrientes(input: {
+  clientes: { id: string; razon_social: string | null; cuit?: string | null }[];
+  proveedores: { id: string; razon_social: string | null; cuit?: string | null }[];
+  saldosClientes: Record<string, { ARS: { saldo: number }; USD: { saldo: number } }>;
+  saldosProveedores: Record<string, { ARS: number; USD: number }>;
+  vencimientos: FilaVencimiento[];
+  bcraClientes?: Record<string, Semaforo>;
+  bcraProveedores?: Record<string, Semaforo>;
+}): FilaCuentaCorriente[] {
+  const extra = new Map<string, { vencido: { ARS: number; USD: number }; facturas: number; proximo: string | null }>();
+  for (const v of input.vencimientos) {
+    if (!v.entidadId) continue;
+    const k = `${v.lado === "venta" ? "c" : "p"}-${v.entidadId}`;
+    const e = extra.get(k) || { vencido: { ARS: 0, USD: 0 }, facturas: 0, proximo: null };
+    e.facturas += 1;
+    if (v.dias < 0) e.vencido[v.moneda] += v.saldo;
+    else if (!e.proximo || v.vence < e.proximo) e.proximo = v.vence;
+    extra.set(k, e);
+  }
+  const fila = (lado: "cliente" | "proveedor", ent: { id: string; razon_social: string | null; cuit?: string | null }, saldo: { ARS: number; USD: number }, bcra: Semaforo | null): FilaCuentaCorriente => {
+    const id = `${lado === "cliente" ? "c" : "p"}-${ent.id}`;
+    const e = extra.get(id);
+    return {
+      id, lado, entidadId: ent.id, nombre: ent.razon_social || "Sin nombre", cuit: ent.cuit || "",
+      saldo: { ARS: r2(saldo.ARS), USD: r2(saldo.USD) },
+      vencido: { ARS: r2(e?.vencido.ARS || 0), USD: r2(e?.vencido.USD || 0) },
+      facturas: e?.facturas || 0, proximoVencimiento: e?.proximo ?? null, bcra,
+    };
+  };
+  const out: FilaCuentaCorriente[] = [];
+  for (const c of input.clientes) {
+    const s = input.saldosClientes[c.id];
+    out.push(fila("cliente", c, { ARS: s?.ARS.saldo || 0, USD: s?.USD.saldo || 0 }, input.bcraClientes?.[c.id] ?? null));
+  }
+  for (const p of input.proveedores) {
+    const s = input.saldosProveedores[p.id];
+    out.push(fila("proveedor", p, { ARS: s?.ARS || 0, USD: s?.USD || 0 }, input.bcraProveedores?.[p.id] ?? null));
+  }
+  return out;
+}
+
+/** Con saldo distinto de cero (en cualquier moneda). */
+export const tieneSaldo = (f: FilaCuentaCorriente) => Math.abs(f.saldo.ARS) >= 0.01 || Math.abs(f.saldo.USD) >= 0.01;
+
+/** Último informe BCRA que no sea "gris" (error) por entidad; las filas vienen del más nuevo al más viejo. */
+export function semaforoPorEntidad(filas: { entidad_id: string | null; semaforo: string | null }[]): Record<string, Semaforo> {
+  const out: Record<string, Semaforo> = {};
+  for (const f of filas) {
+    if (!f.entidad_id || out[f.entidad_id] || !f.semaforo || f.semaforo === "gris") continue;
+    if (f.semaforo === "verde" || f.semaforo === "amarillo" || f.semaforo === "rojo") out[f.entidad_id] = f.semaforo;
+  }
+  return out;
+}
+
+// ── Retenciones (practicadas y sufridas) ────────────────────────────
+
+export interface FilaRetencion {
+  id: string;
+  fecha: string;
+  /** Practicada = la hicimos nosotros al pagar; sufrida = nos la hizo un cliente al cobrar. */
+  lado: "practicada" | "sufrida";
+  impuesto: string;
+  origen: string;
+  nombre: string;
+  cuit: string;
+  base: number | null;
+  pct: number | null;
+  monto: number;
+  moneda: "ARS" | "USD";
+}
+
+const IMPUESTO: Record<string, string> = { retencion_ganancias: "Ganancias", retencion_iva: "IVA", retencion_iibb: "IIBB", retencion_suss: "SUSS" };
+
+/**
+ * Misma regla que Finanzas → Retenciones: OP no anuladas con retención de Ganancias + pagos directos (tipo pago)
+ * con retención. Además, las sufridas: movimientos retencion_* de un cliente, no anulados.
+ */
+export function armarRetenciones(input: {
+  ops: { id: string; numero?: string | number | null; fecha: string; estado?: string | null; moneda?: string | null; retencion_ganancias_monto?: number | string | null; retencion_ganancias_pct?: number | string | null; base_retencion_ganancias?: number | string | null; proveedores?: { razon_social?: string | null; cuit?: string | null } | null }[];
+  movimientos: { id: string; tipo: string | null; fecha: string; monto: number | string | null; moneda?: string | null; anulado?: boolean | null; descripcion?: string | null; cliente_id?: string | null; proveedor_id?: string | null; retencion_ganancias_monto?: number | string | null; retencion_ganancias_pct?: number | string | null; base_retencion_ganancias?: number | string | null; clientes?: { razon_social?: string | null; cuit?: string | null } | null; proveedores?: { razon_social?: string | null; cuit?: string | null } | null }[];
+}): FilaRetencion[] {
+  const out: FilaRetencion[] = [];
+  const nulo = (v: unknown) => (v === null || v === undefined || v === "" ? null : num(v));
+  for (const op of input.ops) {
+    if (op.estado === "anulada" || num(op.retencion_ganancias_monto) <= 0) continue;
+    out.push({ id: `op-${op.id}`, fecha: String(op.fecha).slice(0, 10), lado: "practicada", impuesto: "Ganancias", origen: `OP ${op.numero ?? ""}`.trim(),
+      nombre: op.proveedores?.razon_social || "", cuit: op.proveedores?.cuit || "", base: nulo(op.base_retencion_ganancias), pct: nulo(op.retencion_ganancias_pct),
+      monto: num(op.retencion_ganancias_monto), moneda: normalizarMoneda(op.moneda) });
+  }
+  for (const m of input.movimientos) {
+    if (m.anulado) continue;
+    if (m.tipo === "pago" && num(m.retencion_ganancias_monto) > 0) {
+      out.push({ id: `pd-${m.id}`, fecha: String(m.fecha).slice(0, 10), lado: "practicada", impuesto: "Ganancias", origen: "Pago directo",
+        nombre: m.proveedores?.razon_social || "", cuit: m.proveedores?.cuit || "", base: nulo(m.base_retencion_ganancias), pct: nulo(m.retencion_ganancias_pct),
+        monto: num(m.retencion_ganancias_monto), moneda: normalizarMoneda(m.moneda) });
+    } else if (String(m.tipo || "").startsWith("retencion_") && m.cliente_id) {
+      out.push({ id: `rs-${m.id}`, fecha: String(m.fecha).slice(0, 10), lado: "sufrida", impuesto: IMPUESTO[String(m.tipo)] || String(m.tipo), origen: m.descripcion || "",
+        nombre: m.clientes?.razon_social || "", cuit: m.clientes?.cuit || "", base: null, pct: null, monto: num(m.monto), moneda: normalizarMoneda(m.moneda) });
+    }
+  }
+  return out.sort((a, b) => a.fecha.localeCompare(b.fecha));
 }

@@ -2,11 +2,14 @@
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { sumarMeses } from "@/lib/reportes-comprobantes";
-import { armarTcDelDia, type FacturaCompraFL, type FacturaVentaFL, type GastoFL, type ItemCostoFL, type TcDelDia } from "@/lib/finanzas-lazza";
+import { armarTcDelDia, armarVencimientos, type FacturaCompraFL, type FacturaVentaFL, type FilaVencimiento, type GastoFL, type ItemCostoFL, type PagoDirectoFC, type TcDelDia } from "@/lib/finanzas-lazza";
+import { calcularSaldosClientes, cobradoPorFactura, saldoFacturaVenta, traerDatosSaldoClientes, type SaldoCliente } from "@/lib/saldo-clientes";
+import { calcularSaldosProveedores, traerCreditosProveedores, type SaldoProveedor } from "@/lib/saldo-proveedores";
+import { sentidoAjuste } from "@/lib/tipos-movimiento";
 
 const db = supabase as any;
 
-export const CAMPOS_VENTA = "id, fecha, tipo, estado, moneda, subtotal, iva, total, tipo_cambio, factura_origen_id, presupuesto_id, punto_venta, numero, cae, fecha_vencimiento, total_acreditado, clientes(razon_social)";
+export const CAMPOS_VENTA = "id, fecha, tipo, estado, moneda, subtotal, iva, total, tipo_cambio, factura_origen_id, presupuesto_id, punto_venta, numero, cae, fecha_vencimiento, total_acreditado, cliente_id, clientes(razon_social)";
 
 export function rangoMes(periodo: string): { desde: string; hasta: string } {
   return { desde: `${periodo}-01`, hasta: `${sumarMeses(periodo, 1)}-01` };
@@ -82,4 +85,49 @@ export async function traerComprasDelMes(sociedadId: string, periodo: string): P
   // solo_iva puede no existir en alguna base vieja: sin la columna, se trae igual.
   const rows = await traerTodo<any>(armar(`${base}, solo_iva`)).catch(() => traerTodo<any>(armar(base)));
   return rows.map((r) => ({ ...r, fecha: String(r.fecha).slice(0, 10), proveedor: r.proveedores?.razon_social ?? "" }));
+}
+
+export interface Deudas {
+  vencimientos: FilaVencimiento[];
+  saldosClientes: Record<string, SaldoCliente>;
+  saldosProveedores: Record<string, SaldoProveedor>;
+}
+
+/**
+ * Lo que se debe y nos deben, con las MISMAS reglas que Finanzas (CC de clientes y de proveedores).
+ * Vencimientos = facturas con saldo; saldos por cliente/proveedor incluyen NC, a favor, anticipos y ajustes.
+ */
+export async function traerDeudas(sociedadId: string, hoy: string): Promise<Deudas> {
+  const [cc, compras, pagosDirectos, ncMovs, creditos] = await Promise.all([
+    traerDatosSaldoClientes(db, sociedadId, traerTodo),
+    traerTodo<any>(() => db.from("facturas_compra")
+      .select("id, proveedor_id, fecha, fecha_vencimiento, tipo_comprobante, estado, moneda, iva, total, total_acreditado, numero_factura, proveedores(razon_social), op_facturas_compra(monto, ordenes_pago(estado))")
+      .eq("sociedad_id", sociedadId).order("id")),
+    traerTodo<PagoDirectoFC>(() => db.from("movimientos")
+      .select("id, factura_compra_id, monto, retencion_ganancias_monto, anulado, nota_credito_compra_id")
+      .eq("sociedad_id", sociedadId).eq("tipo", "pago").not("factura_compra_id", "is", null).order("id")),
+    traerTodo<any>(() => db.from("movimientos")
+      .select("id, nota_credito_compra_id, monto, anulado")
+      .eq("sociedad_id", sociedadId).not("nota_credito_compra_id", "is", null).order("id")),
+    traerCreditosProveedores(db, sociedadId, traerTodo, sentidoAjuste),
+  ]);
+  // Ventas: saldo por factura con la regla de CC de clientes; los datos para mostrar se traen solo de las que deben.
+  const cobrado = cobradoPorFactura(cc.facturas, cc.movimientos, cc.aplicaciones);
+  const saldos = new Map<string, number>();
+  for (const f of cc.facturas) { const s = saldoFacturaVenta(f, cobrado[f.id] || 0); if (s > 0.005) saldos.set(f.id, s); }
+  const ids = [...saldos.keys()];
+  const ventas: ReturnType<typeof aFacturaVenta>[] = [];
+  for (const trozo of trozos(ids)) {
+    const { data, error } = await db.from("facturas").select(CAMPOS_VENTA).in("id", trozo);
+    if (error) throw error;
+    ventas.push(...(data || []).map(aFacturaVenta));
+  }
+  const comprasFL: FacturaCompraFL[] = compras
+    .filter((r) => r.estado !== "anulada" && r.estado !== "pagada")
+    .map((r) => ({ ...r, fecha: String(r.fecha).slice(0, 10), proveedor: r.proveedores?.razon_social ?? "" }));
+  return {
+    vencimientos: armarVencimientos({ hoy, ventas, saldoVenta: (f) => saldos.get(f.id) ?? 0, compras: comprasFL, pagosDirectos }),
+    saldosClientes: calcularSaldosClientes(cc.facturas, cc.movimientos, cc.aplicaciones, cc.ajustes),
+    saldosProveedores: calcularSaldosProveedores(compras, pagosDirectos, ncMovs, creditos),
+  };
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { armarTcDelDia, armarVencimientos, ivaDelMes, nivelObjetivo, reporteBasico, saldoFacturaCompra, type FacturaVentaFL } from "../src/lib/finanzas-lazza";
+import { armarRetenciones, armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, armarTcDelDia, armarVencimientos, filtrarVencimientos, ivaDelMes, nivelObjetivo, reporteBasico, saldoFacturaCompra, type FacturaVentaFL } from "../src/lib/finanzas-lazza";
 
 const tcDia = armarTcDelDia([{ fecha: "2026-10-09", valor_venta: 1400 }, { fecha: "2026-10-14", valor_venta: 1500 }]);
 assert.equal(tcDia("2026-10-14"), 1500);
@@ -51,6 +51,8 @@ assert.deepEqual(r.avisos.map((a) => a.facturaId).sort(), ["d", "h"]);
 assert.equal(r.avisos.find((a) => a.facturaId === "h")!.prNumero, "PR-8");
 // Gastos: fijos 1500, eventuales 700 + 10×1500
 assert.deepEqual(r.gastos, { fijos: 1500, eventuales: 15700, total: 17200, enUsdSinCotizacion: 0 });
+// Resultado = neto venta − neto costo − gastos
+assert.equal(r.resultado, 148700 - 74200 - 17200);
 
 // NC cuya factura de origen es de otro mes: usa `origenes`
 const r2 = reporteBasico({ periodo: "2026-10", facturas: [fv({ id: "n", tipo: "NCA", subtotal: 5000, iva: 1050, total: 6050, factura_origen_id: "g" })], origenes: [facturas[6]], idsAnulados: [], items: [{ presupuesto_id: "pg", cantidad: 1, precio_costo: 4000, costo_moneda: "ARS", iva_porcentaje: 21 }], prNumero: {}, gastos: [], tcDia });
@@ -106,5 +108,50 @@ const venc = armarVencimientos({
   pagosDirectos: pagos,
 });
 assert.deepEqual(venc.map((v) => [v.lado, v.id, v.saldo, v.dias]), [["venta", "v1", 1210, -8], ["compra", "p1", 350, 2]]);
+assert.equal(venc[0].fecha, "2026-10-05");
+// Filtros de vencimientos
+assert.deepEqual(filtrarVencimientos(venc, { lado: "compra" }).map((v) => v.id), ["p1"]);
+assert.deepEqual(filtrarVencimientos(venc, { situacion: "vencidas" }).map((v) => v.id), ["v1"]);
+assert.deepEqual(filtrarVencimientos(venc, { situacion: "por_vencer" }).map((v) => v.id), ["p1"]);
+assert.deepEqual(filtrarVencimientos(venc, { campoFecha: "vence", desde: "2026-10-15" }).map((v) => v.id), ["p1"]);
+assert.deepEqual(filtrarVencimientos(venc, { campoFecha: "fecha", hasta: "2026-10-01" }).map((v) => v.id), ["p1"]);
+assert.deepEqual(filtrarVencimientos(venc, { moneda: "USD" }), []);
+assert.deepEqual(filtrarVencimientos([{ ...venc[0], nombre: "Peña Cía" }], { texto: "pena cia" }).length, 1);
+
+// Cuentas corrientes
+const vcc = [
+  { ...venc[0], entidadId: "cli1" },
+  { ...venc[1], entidadId: "prov1" },
+];
+const cc = armarCuentasCorrientes({
+  clientes: [{ id: "cli1", razon_social: "Cliente 1", cuit: "1" }, { id: "cli2", razon_social: "Cero", cuit: "2" }],
+  proveedores: [{ id: "prov1", razon_social: "Prov 1", cuit: "3" }],
+  saldosClientes: { cli1: { ARS: { saldo: 1210 }, USD: { saldo: 0 } } },
+  saldosProveedores: { prov1: { ARS: 350, USD: -10 } },
+  vencimientos: vcc,
+  bcraClientes: semaforoPorEntidad([{ entidad_id: "cli1", semaforo: "gris" }, { entidad_id: "cli1", semaforo: "amarillo" }, { entidad_id: "cli1", semaforo: "verde" }]),
+});
+assert.equal(cc.length, 3);
+const c1 = cc.find((x) => x.id === "c-cli1")!;
+assert.deepEqual([c1.saldo.ARS, c1.vencido.ARS, c1.facturas, c1.bcra], [1210, 1210, 1, "amarillo"]);
+const p1 = cc.find((x) => x.id === "p-prov1")!;
+assert.deepEqual([p1.saldo.ARS, p1.saldo.USD, p1.vencido.ARS, p1.proximoVencimiento], [350, -10, 0, "2026-10-20"]);
+assert.deepEqual(cc.filter(tieneSaldo).map((x) => x.id), ["c-cli1", "p-prov1"]);
+
+// Retenciones
+const ret = armarRetenciones({
+  ops: [
+    { id: "o1", numero: "OP-000070", fecha: "2026-10-10", estado: "pagada", retencion_ganancias_monto: 1000, retencion_ganancias_pct: 2, base_retencion_ganancias: 50000, proveedores: { razon_social: "P", cuit: "9" } },
+    { id: "o2", numero: "OP-000071", fecha: "2026-10-11", estado: "anulada", retencion_ganancias_monto: 999 },
+    { id: "o3", numero: "OP-000072", fecha: "2026-10-12", estado: "pendiente", retencion_ganancias_monto: 0 },
+  ],
+  movimientos: [
+    { id: "m1", tipo: "pago", fecha: "2026-10-05", monto: 5000, retencion_ganancias_monto: 200 },
+    { id: "m2", tipo: "retencion_iibb", fecha: "2026-10-06", monto: 300, cliente_id: "c", clientes: { razon_social: "Corteva" } },
+    { id: "m3", tipo: "retencion_iva", fecha: "2026-10-07", monto: 400, cliente_id: "c", anulado: true },
+    { id: "m4", tipo: "retencion_ganancias", fecha: "2026-10-08", monto: 50, proveedor_id: "p" }, // practicada vieja sin OP: no se duplica
+  ],
+});
+assert.deepEqual(ret.map((r) => [r.id, r.lado, r.impuesto, r.monto]), [["pd-m1", "practicada", "Ganancias", 200], ["rs-m2", "sufrida", "IIBB", 300], ["op-o1", "practicada", "Ganancias", 1000]]);
 
 console.log("test-finanzas-lazza OK");
