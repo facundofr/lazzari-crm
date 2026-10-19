@@ -1,6 +1,44 @@
-# Traspaso — chat "Agente IA y finanzas" (actualizado 17/10/2026, madrugada)
+# Traspaso — chat "Finanzas" (actualizado 19/10/2026)
 
-Para una sesión nueva sin el historial. Leer antes `CLAUDE.md` y, en `docs/ESTADO.md`, la parte **"FINANZAS — TRASPASO A CHAT NUEVO (16/10/2026, noche)"** y las notas "BANCO 16/10/2026 (tandas 3 y 4)".
+Para una sesión nueva sin el historial. Leer antes `CLAUDE.md`, la memoria (`C:\Users\lazza\.claude\projects\C--Users-lazza-lazzari\memory\MEMORY.md` y sus archivos) y, en `docs/ESTADO.md`, las entradas **"FINANZAS LAZZA"** (arriba de todo). Lo de más abajo en este archivo es el trabajo del banco del 16-17/10.
+
+## Finanzas Lazza (pantalla nueva `/finanzas-lazza`, solo super_admin) — estado al 19/10/2026
+Todo publicado; producción en V1.1.534. Finanzas vieja sigue en el menú (no se reemplaza hasta que Augusto apruebe).
+- **Tanda 1 — V1.1.526:** Reportes (mes), IVA (débito/crédito), Vencimientos. Solo lectura.
+- **Tanda 2 — V1.1.527:** inicio con 14 tarjetas; Facturas (`components/facturas-consulta.tsx` modo `completa`), Cuentas corrientes (una sola, clientes y proveedores), Vencimientos con filtros y orden, OP, Recibos, Retenciones, Movimientos, Objetivos.
+- **Tanda 3 — V1.1.528** (migración `20261019120000_finanzas_lazza_bancos.sql`, corrida): Bancos (cuentas, tarjetas con resumen leído por IA, préstamos debo/me deben), Cheques (en fecha, por estado, 4 semanas, pestaña Martín F., Subir Excel del banco). Correcciones 1 (Descargar/Enviar OP, Guardar y enviar), 2 (CC en una moneda según la ficha), 3 (editar vencimiento y días de pago), 5 (columna OP en facturas de compra).
+- **V1.1.529:** lector de los 6 Excel de eCheq del BBVA en "Subir Excel del banco".
+- **Cobrar — V1.1.530 y V1.1.531:** `components/finanzas-lazza/cobrar.tsx` abre las MISMAS ventanas de Finanzas (`cobro-masivo-liquidacion` $ y `FxSettlementDialog` US$). Tarjeta Cobrar en el inicio + atajos en CC, Vencimientos, Facturas y Recibos. Arrastrar/pegar comprobante (OP, transferencia, cheque, retención) en las ventanas de cobro.
+- **Pagar — V1.1.532:** la ventana Nueva OP salió de `finanzas/page.tsx` a `components/orden-pago-nueva.tsx` (código movido tal cual; la usan las dos pantallas). Tarjeta Pagar (`components/finanzas-lazza/pagar.tsx`) + Pagar en CC, Vencimientos y "Nueva OP" en Órdenes de pago. Sin probar: OP en US$ y pago parcial directo.
+- Lógica pura en `src/lib/finanzas-lazza.ts`, `cheques-lazza.ts`, `bancos-lazza.ts`; pruebas `scripts/test-finanzas-lazza.ts`, `test-cheques-lazza.ts`, `test-bancos-lazza.ts` (con `npx tsx`).
+- Servidor local propio: `.claude/launch.json` → "crm-finanzas" (puerto 3005).
+
+### Próximo
+- **Tanda 4:** Gastos con todas las variantes + recibos numerados (1 recibo = 1 cobro con su N°, con migración aditiva + rollback) + Descargar (PDF, `generateReciboPDF`) y Enviar recibos por mail (corrección 4). Diseñar con Augusto antes de tocar.
+- **Tanda 5:** Facturar nuevo (no le gusta la de Ventas). A diseñar con Augusto.
+- Corrección 6 (formato/exportación de retenciones, SICORE v9.0): espera al contador.
+- Propuesta sin OK: "Subir Excel del banco" que acepte los 6 juntos y los reconozca solo (ver ESTADO, "EXCEL DE eCHEQ DEL BBVA").
+
+### Pendientes de Augusto (datos)
+- **Del Sol eCheq 3644** $ 11.801.686,09 en cartera SIN cobro cargado (paga FC 405 y 406 del sistema anterior; diferencia $ 193.792,37 de retenciones a confirmar).
+- **11 cheques propios con fecha pasada sin debitar** ($ 23.712.482,92 al 19/10): 6 el banco los da ACTIVO (el que lo recibió no lo cobró), 5 no salen en el Excel (trae solo 100).
+- **~30 líneas del banco sin cruzar** (orden de trabajo más abajo, "A medias / próximo paso exacto").
+
+### Reglas de este chat
+- Cargar solo lo **literalmente exacto**; lo dudoso se pregunta. Nunca inventar ni asignar solo.
+- No tocar la base ni publicar sin OK de Augusto. Para publicar: `crm/app/scripts/publicar-limpio.sh`; si falla el push, no publicar en Vercel; fijarse antes que otro chat no esté publicando (`C:\Users\lazza\lz-pub-auto`).
+- Reusar las ventanas de Finanzas (misma pieza, no copia). Pantallas compactas. Desplegables con `Select` de `components/ui/input`.
+
+## Prompt para seguir en un chat nuevo
+```
+Sos el chat de Finanzas del CRM Lazzari. Leé CLAUDE.md, mi memoria (C:\Users\lazza\.claude\projects\C--Users-lazza-lazzari\memory\MEMORY.md y sus archivos) y docs/traspaso/agente-ia-finanzas.md (sección "Finanzas Lazza"); para detalle, las entradas "FINANZAS LAZZA" de docs/ESTADO.md. Todo publicado hasta V1.1.532 (producción en V1.1.534). Próximo: Tanda 4 (Gastos con variantes + recibos numerados con migración + Descargar/Enviar recibos) y Tanda 5 (Facturar nuevo, a diseñar conmigo). Pendientes míos: Del Sol eCheq 3644 en cartera sin cobro, 11 cheques propios con fecha pasada sin debitar, ~30 líneas del banco sin cruzar. Solo cargar lo literalmente exacto. No toques la base ni publiques sin mi OK. Saludame corto y preguntame por cuál seguimos.
+```
+
+---
+
+# Trabajo del banco (16-17/10/2026)
+
+Leer también, en `docs/ESTADO.md`, la parte **"FINANZAS — TRASPASO A CHAT NUEVO (16/10/2026, noche)"** y las notas "BANCO 16/10/2026 (tandas 3 y 4)".
 
 ## Objetivo
 Dejar al día las finanzas de **Lazzari**: cada línea del banco BBVA (CC 091-312483/1 y CA 091-339549/3) cruzada con su cobro, pago o gasto, con notas literales. También simplificar la pantalla Finanzas. Grupo LA no se tocó.

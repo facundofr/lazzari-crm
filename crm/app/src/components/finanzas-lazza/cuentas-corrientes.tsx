@@ -3,6 +3,7 @@
 // Finanzas Lazza → Cuentas corrientes: clientes y proveedores en UNA lista.
 // Cobrar (19/10): en la ficha del cliente se tildan facturas → "Cobrar" (la misma liquidación de Finanzas, ver cobrar.tsx).
 // Pagar (19/10): en la ficha del proveedor se tildan facturas → "Pagar" (la misma OP de Finanzas, ver pagar.tsx).
+// Saldo a favor (19/10): si al proveedor se le pagó antes (OP sin factura), se aplica a las facturas tildadas.
 // Opción "Moneda: la de cada cuenta" (Augusto 19/10): cada saldo pasado a su moneda al dólar BNA del día (lib unificarMoneda).
 // Saldos con las mismas reglas que Finanzas (lib/saldo-clientes y lib/saldo-proveedores); semáforo BCRA del último informe.
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -17,6 +18,7 @@ import { elegirDolares } from "@/lib/dolar-presupuesto";
 import { traerDeudas } from "./datos";
 import { CobrarCliente } from "./cobrar";
 import { PagarProveedor } from "./pagar";
+import { SaldoFavorFicha } from "@/components/saldo-favor-proveedor";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -207,6 +209,11 @@ export function FinanzasLazzaCuentasCorrientes({ sociedadId }: { sociedadId: str
               <div className="rounded-lg bg-zinc-50 p-2 dark:bg-zinc-800/60"><p className="text-xs text-zinc-500">Saldo</p><p className="font-mono font-semibold">{montos(abierta.saldo, "$ 0")}</p></div>
               <div className="rounded-lg bg-zinc-50 p-2 dark:bg-zinc-800/60"><p className="text-xs text-zinc-500">Vencido</p><p className="font-mono font-semibold text-red-600">{montos(abierta.vencido)}</p></div>
             </div>
+            {abierta.lado === "proveedor" && (
+              <SaldoFavorFicha sociedadId={sociedadId} proveedorId={abierta.entidadId} recarga={recarga}
+                facturas={facturasAbierta.filter((v) => tildadas.has(v.id)).map((v) => ({ id: v.id, comprobante: v.comprobante, saldo: v.saldo, moneda: v.moneda }))}
+                onAplicado={() => { setTildadas(new Set()); setRecarga((n) => n + 1); }} />
+            )}
             <div className="mb-1 flex items-center justify-between gap-2">
               <h3 className="text-xs font-semibold uppercase text-zinc-500">Facturas con saldo</h3>
               {abierta.lado === "cliente" ? (
