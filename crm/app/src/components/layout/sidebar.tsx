@@ -44,7 +44,8 @@ import { APP_VERSION_LABEL } from "@/lib/app-version";
 // Menú agrupado por lo que hace cada sector. Cada uno ve solo los módulos que su rol permite
 // (los vendedores/compradores no ven Plata). Los grupos sin nada visible no se muestran.
 // `oculto`: no aparece en el menú por ahora (se desarrolla más adelante); la pantalla sigue andando si se entra por el link.
-const navigation: { grupo: string; items: { name: string; href: string; icon: typeof Users; module: string; oculto?: boolean }[] }[] = [
+// `soloSuperAdmin`: en armado, por ahora la ve solo Augusto.
+const navigation: { grupo: string; items: { name: string; href: string; icon: typeof Users; module: string; oculto?: boolean; soloSuperAdmin?: boolean }[] }[] = [
   { grupo: "Inicio", items: [
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, module: "dashboard" },
     { name: "Pendientes", href: "/pendientes", icon: ListChecks, module: "dashboard" },
@@ -74,6 +75,7 @@ const navigation: { grupo: string; items: { name: string; href: string; icon: ty
   ] },
   { grupo: "Plata", items: [
     { name: "Finanzas", href: "/finanzas", icon: Wallet, module: "finanzas" },
+    { name: "Finanzas Lazza", href: "/finanzas-lazza", icon: Wallet, module: "finanzas", soloSuperAdmin: true },
     { name: "Reportes", href: "/reportes", icon: BarChart3, module: "reportes" },
   ] },
 ];
@@ -181,7 +183,7 @@ export function Sidebar() {
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-3 py-2">
         {navigation.map((g) => {
-          const visibles = g.items.filter((item) => !item.oculto).filter((item) => item.module === "compras_nueva" ? !!profile?.prueba_compras_nueva : item.module === "presupuestos_nuevo" ? !!profile?.prueba_presupuestos_nuevo : hasModuleAccess(role, item.module));
+          const visibles = g.items.filter((item) => !item.oculto && (!item.soloSuperAdmin || role === "super_admin")).filter((item) => item.module === "compras_nueva" ? !!profile?.prueba_compras_nueva : item.module === "presupuestos_nuevo" ? !!profile?.prueba_presupuestos_nuevo : hasModuleAccess(role, item.module));
           if (!visibles.length) return null;
           const showLabel = !collapsed || mobileSidebarOpen;
           return (
@@ -191,7 +193,8 @@ export function Sidebar() {
                 : <div className="mx-3 mb-1 border-t border-zinc-200 dark:border-zinc-800" />}
               <ul className="space-y-0.5">
                 {visibles.map((item) => {
-                  const isActive = pathname.startsWith(item.href);
+                  // Exacto o subruta: que /finanzas-lazza no prenda también Finanzas.
+                  const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
                   return (
                     <li key={item.name}>
                       <Link
