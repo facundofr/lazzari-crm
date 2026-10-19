@@ -19,7 +19,7 @@ import { PagarProveedor } from "./pagar";
 
 type Filtro = "todo" | "venta" | "compra";
 
-type Fila = FilaVencimiento & { facturaId: string };
+export type Fila = FilaVencimiento & { facturaId: string };
 
 const db = supabase as any;
 
@@ -151,7 +151,7 @@ export function FinanzasLazzaVencimientos({ sociedadId }: { sociedadId: string }
 }
 
 /** Ventana: fecha de vencimiento de la factura + días de pago del cliente/proveedor (con "¿aplicar a las pendientes?"). */
-function EditarVencimiento({ fila, sociedadId, pendientes, onClose, onCambio }: {
+export function EditarVencimiento({ fila, sociedadId, pendientes, onClose, onCambio }: {
   fila: Fila; sociedadId: string; pendientes: FilaVencimiento[]; onClose: () => void; onCambio: (nuevas: Record<string, string>) => void;
 }) {
   const esVenta = fila.lado === "venta";

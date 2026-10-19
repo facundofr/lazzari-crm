@@ -2,7 +2,7 @@
 
 // Finanzas Lazza → Órdenes de pago, Recibos, Retenciones y Movimientos.
 // Recibos numerados (19/10, "recibos B"): 1 recibo = 1 cobro con su N° (lib/recibos.ts, migración 20261019210000),
-// con Ver y Descargar (el mismo PDF de recibo de Finanzas, con N°, medios, retenciones y facturas).
+// con Ver, Descargar y Enviar por mail (recibo-doc.tsx; el mismo PDF de recibo de Finanzas, con N°, medios, retenciones y facturas).
 // Recibos (19/10): "Nuevo cobro" → elegir cliente y facturas → la misma liquidación de Finanzas (cobrar.tsx).
 // Órdenes de pago (19/10): "Nueva OP" → la misma ventana de OP de Finanzas (pagar.tsx).
 // Mismos datos y reglas que las pestañas de Finanzas; acá solo se miran, con filtros y orden por columna.
@@ -14,9 +14,8 @@ import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { clasificarMovimiento, esCobroDeCliente, type ClaseMovimiento } from "@/lib/tipos-movimiento";
 import { armarRetenciones, comprobanteVenta, type FilaRetencion } from "@/lib/finanzas-lazza";
-import { armarRecibos, textoTotalRecibo, type Recibo } from "@/lib/recibos";
-import { generateReciboPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
-import type { Sociedad } from "@/lib/types";
+import { textoTotalRecibo, type Recibo } from "@/lib/recibos";
+import { abrirRecibo, EnviarRecibo, SIN_MIGRACION_RECIBOS, traerRecibos } from "@/components/finanzas-lazza/recibo-doc";
 import { useUser } from "@/lib/auth-context";
 import { descargarOP, EnviarOrdenPago, verOP } from "@/components/finanzas-lazza/orden-pago-doc";
 import { CobrarCliente } from "@/components/finanzas-lazza/cobrar";
@@ -218,40 +217,6 @@ function RecibosPorMovimiento({ sociedadId }: { sociedadId: string }) {
 
 // ── Recibos numerados ───────────────────────────────────────────────
 
-const SIN_MIGRACION_RECIBOS = "sin-migracion-recibos";
-
-async function traerRecibos(sociedadId: string): Promise<Recibo[]> {
-  let recibos: any[];
-  try {
-    recibos = await traerTodo<any>(() => db.from("recibos").select("id, numero, fecha, cliente_id").eq("sociedad_id", sociedadId).order("id"));
-  } catch (e: any) {
-    if (/recibos/i.test(String(e?.message || ""))) throw new Error(SIN_MIGRACION_RECIBOS);
-    throw e;
-  }
-  const [vinculos, movimientos, aplicaciones, facturas, clientes] = await Promise.all([
-    traerTodo<any>(() => db.from("recibo_movimientos").select("recibo_id, movimiento_id, recibos!inner(sociedad_id)").eq("recibos.sociedad_id", sociedadId).order("movimiento_id")),
-    traerTodo<any>(() => db.from("movimientos").select("id, tipo, monto, monto_original, moneda, descripcion, anulado, conciliado, factura_id").eq("sociedad_id", sociedadId).not("cliente_id", "is", null).order("id")),
-    traerTodo<any>(() => db.from("cobro_aplicaciones").select("id, movimiento_id, factura_id, monto, movimientos!inner(sociedad_id)").eq("movimientos.sociedad_id", sociedadId).order("id")),
-    traerTodo<any>(() => db.from("facturas").select("id, tipo, punto_venta, numero").eq("sociedad_id", sociedadId).order("id")),
-    traerTodo<any>(() => db.from("clientes").select("id, razon_social").eq("sociedad_id", sociedadId).order("id")),
-  ]);
-  return armarRecibos({
-    recibos, vinculos, movimientos, aplicaciones,
-    comprobantes: Object.fromEntries(facturas.map((f: any) => [f.id, comprobanteVenta(f)])),
-    clientes: Object.fromEntries(clientes.map((c: any) => [c.id, c.razon_social])),
-  });
-}
-
-/** PDF del recibo: el mismo de Finanzas, con N°, cada medio y retención y las facturas cobradas. */
-function htmlRecibo(r: Recibo, sociedad: Sociedad): string {
-  const moneda: "ARS" | "USD" = r.total.USD > 0.005 && r.total.ARS <= 0.005 ? "USD" : "ARS";
-  return generateReciboPDF({
-    numero: String(r.numero), numeroRecibo: r.numero, fecha: r.fecha, cliente: r.cliente,
-    descripcion: "Cobro de cliente", medio: "", monto: r.total[moneda], moneda, conciliado: r.conciliado, anulado: r.anulado,
-    renglones: r.renglones.map((x) => ({ medio: x.medio, detalle: x.detalle, moneda: x.moneda, monto: x.monto })), facturas: r.facturas,
-  }, getSociedadPDF(sociedad));
-}
-
 const resumenMedios = (r: Recibo) => {
   const c: Record<string, number> = {};
   for (const x of r.renglones) c[x.medio] = (c[x.medio] || 0) + 1;
@@ -262,6 +227,7 @@ export function FinanzasLazzaRecibos({ sociedadId }: { sociedadId: string }) {
   const { sociedadActiva } = useUser();
   const [recarga, setRecarga] = useState(0);
   const [cobrando, setCobrando] = useState(false);
+  const [enviando, setEnviando] = useState<Recibo | null>(null);
   const [sinMigracion, setSinMigracion] = useState(false);
   const [datos, setDatos] = useState<Recibo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -288,10 +254,7 @@ export function FinanzasLazzaRecibos({ sociedadId }: { sociedadId: string }) {
       <RecibosPorMovimiento sociedadId={sociedadId} />
     </div>
   );
-  const pdf = (r: Recibo, ver: boolean) => {
-    if (!sociedadActiva) return;
-    void openPDFWindow(htmlRecibo(r, sociedadActiva), ver ? undefined : `Recibo-${r.numero}.pdf`, ver);
-  };
+  const pdf = (r: Recibo, ver: boolean) => { if (sociedadActiva) abrirRecibo(r, sociedadActiva, ver); };
   const cols: Column<Recibo>[] = [
     { key: "numero", label: "N°", sortable: true, sortValue: (r) => r.numero, render: (r) => <span className={`font-mono text-xs ${r.anulado ? "text-zinc-400 line-through" : ""}`}>{r.numero}</span> },
     { key: "fecha", label: "Fecha", sortable: true, sortValue: (r) => r.fecha, render: (r) => formatDate(r.fecha) },
@@ -308,6 +271,8 @@ export function FinanzasLazzaRecibos({ sociedadId }: { sociedadId: string }) {
           className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-orange-600 dark:hover:bg-zinc-800"><Eye className="h-3.5 w-3.5" /></button>
         <button type="button" title="Descargar el recibo" onClick={(e) => { e.stopPropagation(); pdf(r, false); }}
           className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-orange-600 dark:hover:bg-zinc-800"><Download className="h-3.5 w-3.5" /></button>
+        <button type="button" title="Mandar el recibo por mail al cliente" onClick={(e) => { e.stopPropagation(); setEnviando(r); }}
+          className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-orange-600 dark:hover:bg-zinc-800"><Mail className="h-3.5 w-3.5" /></button>
       </span>
     ) },
   ];
@@ -325,6 +290,7 @@ export function FinanzasLazzaRecibos({ sociedadId }: { sociedadId: string }) {
         <DataTable columns={cols} data={visibles} emptyMessage="No hay recibos con ese filtro" />
       </Marco>
       {cobrando && <CobrarCliente sociedadId={sociedadId} onClose={() => setCobrando(false)} onCobrado={() => setRecarga((n) => n + 1)} />}
+      <EnviarRecibo recibo={enviando} onClose={() => setEnviando(null)} />
     </>
   );
 }

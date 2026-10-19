@@ -7,6 +7,8 @@
  * Vencimientos de deuda, Órdenes de pago, Recibos, Retenciones, IVA, Movimientos, Objetivos y Reportes.
  * Tanda 3 (19/10/2026): Bancos y Cheques nuevos, y correcciones de Augusto (mandar OP, moneda única en cuentas corrientes,
  * vencimientos editables, columna OP en facturas de compra). Facturar y Gastos se arman en las próximas tandas.
+ * 19/10: Facturas reemplaza a Pagar, Cobrar y Vencimientos (una fila por factura, Ventas | Compras, tildar → Pagar/Cobrar);
+ * las tarjetas Cobrar y Pagar abren Facturas en Ventas o Compras. Vencimientos sale del inicio (la pantalla queda por si acaso).
  * Por ahora la ve solo super_admin (en armado con Augusto).
  */
 import { useState } from "react";
@@ -15,14 +17,12 @@ import { Header } from "@/components/layout/header";
 import { useUser } from "@/lib/auth-context";
 import { todayAR } from "@/lib/utils";
 import { periodoDeFecha, sumarMeses } from "@/lib/reportes-comprobantes";
-import { FacturasConsulta } from "@/components/facturas-consulta";
 import { FinanzasLazzaInicio, TARJETAS, type SeccionFL } from "@/components/finanzas-lazza/inicio";
 import { FinanzasLazzaObjetivos, FinanzasLazzaReportes } from "@/components/finanzas-lazza/reportes";
 import { FinanzasLazzaIva } from "@/components/finanzas-lazza/iva";
 import { FinanzasLazzaVencimientos } from "@/components/finanzas-lazza/vencimientos";
 import { FinanzasLazzaCuentasCorrientes } from "@/components/finanzas-lazza/cuentas-corrientes";
-import { FinanzasLazzaCobrar } from "@/components/finanzas-lazza/cobrar";
-import { FinanzasLazzaPagar } from "@/components/finanzas-lazza/pagar";
+import { FinanzasLazzaFacturas } from "@/components/finanzas-lazza/facturas";
 import { FinanzasLazzaCheques } from "@/components/finanzas-lazza/cheques";
 import { FinanzasLazzaBancos } from "@/components/finanzas-lazza/bancos";
 import { FinanzasLazzaMovimientos, FinanzasLazzaOrdenesPago, FinanzasLazzaRecibos, FinanzasLazzaRetenciones } from "@/components/finanzas-lazza/listas";
@@ -67,9 +67,10 @@ export default function FinanzasLazzaPage() {
       </div>
     );
     switch (vista) {
-      case "cobrar": return <FinanzasLazzaCobrar sociedadId={sociedadId} />;
-      case "pagar": return <FinanzasLazzaPagar sociedadId={sociedadId} />;
-      case "facturas": return <FacturasConsulta completa />;
+      // Facturas (19/10): una pantalla para cobrar, pagar y ver facturas; Cobrar y Pagar la abren en Ventas o Compras.
+      case "cobrar": return <FinanzasLazzaFacturas key="cobrar" sociedadId={sociedadId} ladoInicial="venta" />;
+      case "pagar": return <FinanzasLazzaFacturas key="pagar" sociedadId={sociedadId} ladoInicial="compra" />;
+      case "facturas": return <FinanzasLazzaFacturas key="facturas" sociedadId={sociedadId} ladoInicial="venta" />;
       case "cuentas": return <FinanzasLazzaCuentasCorrientes sociedadId={sociedadId} />;
       case "vencimientos": return <FinanzasLazzaVencimientos sociedadId={sociedadId} />;
       case "ordenes_pago": return <FinanzasLazzaOrdenesPago sociedadId={sociedadId} />;

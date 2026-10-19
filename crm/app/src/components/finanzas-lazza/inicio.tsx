@@ -5,7 +5,7 @@
 // Cada dato se calcula aparte (si uno falla, esa tarjeta queda con "—" y el resto anda). Solo lectura.
 import { useEffect, useState } from "react";
 import {
-  BarChart3, Banknote, HandCoins, Wallet, Building2, CalendarClock, FileSpreadsheet, FileText, Files, List, Percent, Receipt, ReceiptText, ShoppingBag, Target, Users,
+  BarChart3, Banknote, HandCoins, Wallet, Building2, FileSpreadsheet, FileText, Files, List, Percent, Receipt, ReceiptText, ShoppingBag, Target, Users,
   type LucideIcon,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
@@ -28,12 +28,11 @@ type Grupo = "acciones" | "ventas" | "pagos" | "tesoreria" | "informes";
 export interface TarjetaDef { id: SeccionFL; nombre: string; que: string; icono: LucideIcon; grupo: Grupo }
 
 export const TARJETAS: TarjetaDef[] = [
-  { id: "cobrar", nombre: "Cobrar", que: "Clientes con facturas a cobrar", icono: HandCoins, grupo: "acciones" },
-  { id: "pagar", nombre: "Pagar", que: "Proveedores con facturas a pagar", icono: Wallet, grupo: "acciones" },
+  { id: "cobrar", nombre: "Cobrar", que: "Facturas de venta a cobrar", icono: HandCoins, grupo: "acciones" },
+  { id: "pagar", nombre: "Pagar", que: "Facturas de compra a pagar", icono: Wallet, grupo: "acciones" },
   { id: "facturar", nombre: "Facturar", que: "PR listos para facturar", icono: FileText, grupo: "ventas" },
-  { id: "facturas", nombre: "Facturas", que: "Venta y compra", icono: Files, grupo: "ventas" },
+  { id: "facturas", nombre: "Facturas", que: "Venta y compra, una por una", icono: Files, grupo: "ventas" },
   { id: "cuentas", nombre: "Cuentas corrientes", que: "Clientes y proveedores", icono: Users, grupo: "ventas" },
-  { id: "vencimientos", nombre: "Vencimientos de deuda", que: "A cobrar y a pagar", icono: CalendarClock, grupo: "ventas" },
   { id: "ordenes_pago", nombre: "Órdenes de pago", que: "Pagos a proveedores", icono: ReceiptText, grupo: "pagos" },
   { id: "recibos", nombre: "Recibos", que: "Cobros de clientes", icono: Receipt, grupo: "pagos" },
   { id: "retenciones", nombre: "Retenciones", que: "Practicadas y sufridas", icono: Percent, grupo: "pagos" },
@@ -93,8 +92,8 @@ function loaders(sociedadId: string, periodo: string, hoy: string): (() => Promi
       };
       const cob = deLado("venta"), pag = deLado("compra");
       return {
-        cobrar: { valor: `${cob.entidades} clientes`, sub: `${cob.n} facturas · vencido ${mas(cob.venc.ARS, cob.venc.USD)}`, tono: cob.venc.ARS || cob.venc.USD ? "rojo" : undefined },
-        pagar: { valor: `${pag.entidades} proveedores`, sub: `${pag.n} facturas · vencido ${mas(pag.venc.ARS, pag.venc.USD)}` },
+        cobrar: { valor: `${cob.n} facturas`, sub: `${cob.entidades} clientes · vencido ${mas(cob.venc.ARS, cob.venc.USD)}`, tono: cob.venc.ARS || cob.venc.USD ? "rojo" : undefined },
+        pagar: { valor: `${pag.n} facturas`, sub: `${pag.entidades} proveedores · vencido ${mas(pag.venc.ARS, pag.venc.USD)}` },
         vencimientos: { valor: `${vencidas.length} vencidas`, sub: `${d.vencimientos.length} con saldo`, tono: vencidas.length ? "rojo" : undefined },
         cuentas: { valor: mas(ars, usd), sub: "nos deben" },
       };

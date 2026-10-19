@@ -21,8 +21,9 @@ import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { estadoVisibleFactura } from "@/lib/estado-factura-venta";
 import { emisorDeSociedad } from "@/lib/emisor-sociedad";
 import { cargarOPsDeFacturas, abrirOrdenPagoPDF, opsPorFactura, type OPResumen } from "@/lib/orden-pago-pdf";
-import { Download, FileText, HandCoins, Mail, Paperclip, Search, X } from "lucide-react";
+import { Download, Eye, FileText, HandCoins, Mail, Paperclip, Search, X } from "lucide-react";
 import { CobrarCliente } from "@/components/finanzas-lazza/cobrar";
+import { EnviarOrdenPago, verOP } from "@/components/finanzas-lazza/orden-pago-doc";
 import { destinatariosCortos } from "@/lib/envio-factura-texto";
 
 type Moneda = "ARS" | "USD";
@@ -77,6 +78,9 @@ interface FacturaCompra {
   factura_compra_ocs?: { ordenes_compra: { numero: string } | null }[] | null;
 }
 
+const SELECT_VENTA = "id, tipo, punto_venta, numero, cliente_id, fecha, fecha_vencimiento, cae, cae_vencimiento, subtotal, iva, total, moneda, tipo_cambio, cotizacion_modalidad, estado, cheque_rechazado_at, presupuesto_id, oc_cliente, condicion_venta, observaciones, nota_interna, email_enviado_at, email_enviado_a, clientes(razon_social, cuit, condicion_iva, email, email_facturacion, telefono, direccion, localidad, provincia), presupuestos:presupuesto_id(numero, cotizacion_modalidad)";
+const SELECT_COMPRA = "id, numero_factura, tipo_comprobante, fecha, fecha_vencimiento, subtotal, iva, percepciones, total, moneda, estado, notas, archivo_url, archivo_nombre, cae, proveedores(razon_social, nombre_fantasia, cuit), ordenes_compra:orden_compra_id(numero), factura_compra_ocs(ordenes_compra(numero))";
+
 // Todas las OC de la factura (la columna vieja orden_compra_id y la tabla factura_compra_ocs).
 const ocsDe = (f: FacturaCompra) => Array.from(new Set([f.ordenes_compra?.numero, ...(f.factura_compra_ocs || []).map((x) => x.ordenes_compra?.numero)].filter(Boolean) as string[]));
 
@@ -113,7 +117,7 @@ interface FilaTodas {
 }
 
 export function FacturasConsulta({ completa = false }: { completa?: boolean }) {
-  const { sociedadActiva, profile } = useUser();
+  const { sociedadActiva } = useUser();
   const { toast } = useToast();
   const [tab, setTab] = useState<"todas" | "venta" | "compra">(completa ? "todas" : "venta");
   const [buscar, setBuscar] = useState("");
@@ -127,13 +131,9 @@ export function FacturasConsulta({ completa = false }: { completa?: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [venta, setVenta] = useState<FacturaVenta | null>(null);
   const [compra, setCompra] = useState<FacturaCompra | null>(null);
-  const [itemsVenta, setItemsVenta] = useState<ItemVenta[]>([]);
-  const [itemsCompra, setItemsCompra] = useState<ItemCompra[]>([]);
-  const [opsCompra, setOpsCompra] = useState<OPResumen[] | null>(null);
   const [bajandoOP, setBajandoOP] = useState<string | null>(null);
   const [opsDeFC, setOpsDeFC] = useState<Map<string, OPResumen[]>>(new Map());
   const [cobrando, setCobrando] = useState<FacturaVenta | null>(null);
-  const [mail, setMail] = useState<{ open: boolean; to: string; subject: string; body: string; filename: string; sugeridos: { email: string; label?: string }[] }>({ open: false, to: "", subject: "", body: "", filename: "", sugeridos: [] });
 
   const cargar = useCallback(async () => {
     if (!sociedadActiva?.id) return;
@@ -142,11 +142,11 @@ export function FacturasConsulta({ completa = false }: { completa?: boolean }) {
     try {
       const [v, c] = await Promise.all([
         traerTodo<FacturaVenta>(() => (supabase as any).from("facturas")
-          .select("id, tipo, punto_venta, numero, cliente_id, fecha, fecha_vencimiento, cae, cae_vencimiento, subtotal, iva, total, moneda, tipo_cambio, cotizacion_modalidad, estado, cheque_rechazado_at, presupuesto_id, oc_cliente, condicion_venta, observaciones, nota_interna, email_enviado_at, email_enviado_a, clientes(razon_social, cuit, condicion_iva, email, email_facturacion, telefono, direccion, localidad, provincia), presupuestos:presupuesto_id(numero, cotizacion_modalidad)")
+          .select(SELECT_VENTA)
           .eq("sociedad_id", sociedadActiva.id)
           .order("fecha", { ascending: false }).order("id", { ascending: true })),
         traerTodo<FacturaCompra>(() => (supabase as any).from("facturas_compra")
-          .select("id, numero_factura, tipo_comprobante, fecha, fecha_vencimiento, subtotal, iva, percepciones, total, moneda, estado, notas, archivo_url, archivo_nombre, cae, proveedores(razon_social, nombre_fantasia, cuit), ordenes_compra:orden_compra_id(numero), factura_compra_ocs(ordenes_compra(numero))")
+          .select(SELECT_COMPRA)
           .eq("sociedad_id", sociedadActiva.id)
           .order("fecha", { ascending: false }).order("id", { ascending: true })),
       ]);
@@ -207,26 +207,8 @@ export function FacturasConsulta({ completa = false }: { completa?: boolean }) {
     return f.estado === "pagada" ? { label: "Pagada", variant: "success" } : f.estado === "anulada" ? { label: "Anulada", variant: "default" } : { label: "A pagar", variant: "info" };
   }
 
-  async function abrirVenta(f: FacturaVenta) {
-    setVenta(f);
-    setItemsVenta([]);
-    const { data } = await (supabase as any).from("factura_items")
-      .select("descripcion, cantidad, precio_unitario, iva_porcentaje, subtotal").eq("factura_id", f.id).order("orden");
-    setItemsVenta((data || []).map((d: ItemVenta) => ({ ...d, subtotal: d.subtotal ?? 0 })));
-  }
-
-  async function abrirCompra(f: FacturaCompra) {
-    setCompra(f);
-    setItemsCompra([]);
-    setOpsCompra(null);
-    const [{ data }, ops] = await Promise.all([
-      (supabase as any).from("facturas_compra_items")
-        .select("codigo, descripcion, cantidad, precio_unitario, descuento_porcentaje, iva_porcentaje, unidad").eq("factura_compra_id", f.id),
-      cargarOPsDeFacturas(supabase, [f.id]).catch(() => [] as OPResumen[]),
-    ]);
-    setItemsCompra(data || []);
-    setOpsCompra(ops);
-  }
+  function abrirVenta(f: FacturaVenta) { setVenta(f); }
+  function abrirCompra(f: FacturaCompra) { setCompra(f); }
 
   async function bajarOP(opId: string) {
     if (!sociedadActiva) return;
@@ -234,66 +216,6 @@ export function FacturasConsulta({ completa = false }: { completa?: boolean }) {
     try { await abrirOrdenPagoPDF(supabase, opId, sociedadActiva); }
     catch (e) { toast.error(`No se pudo armar el PDF de la orden de pago: ${e instanceof Error ? e.message : String(e)}`); }
     finally { setBajandoOP(null); }
-  }
-
-  async function htmlVenta(f: FacturaVenta): Promise<string | null> {
-    if (!sociedadActiva) return null;
-    const { data } = await (supabase as any).from("factura_items")
-      .select("descripcion, cantidad, precio_unitario, iva_porcentaje, subtotal").eq("factura_id", f.id).order("orden");
-    const items: ItemVenta[] = data || [];
-    const cli = f.clientes;
-    return generateFacturaPDF({
-      tipo: f.tipo, punto_venta: f.punto_venta, numero: f.numero, fecha: f.fecha, fecha_vencimiento: f.fecha_vencimiento,
-      nota_interna: f.nota_interna, observaciones: f.observaciones, condicion_venta: f.condicion_venta,
-      moneda: f.moneda as Moneda, tipo_cambio: f.tipo_cambio,
-      cotizacion_modalidad: f.cotizacion_modalidad || f.presupuestos?.cotizacion_modalidad || null,
-      subtotal: Number(f.subtotal), iva: Number(f.iva), total: Number(f.total), cae: f.cae, cae_vencimiento: f.cae_vencimiento, oc_cliente: f.oc_cliente,
-      cliente: cli ? { razon_social: cli.razon_social, cuit: cli.cuit, condicion_iva: cli.condicion_iva, direccion: cli.direccion, localidad: cli.localidad, provincia: cli.provincia, email: cli.email, telefono: cli.telefono } : null,
-      items: items.map((it) => ({ descripcion: it.descripcion, cantidad: it.cantidad, precio_unitario: Number(it.precio_unitario), iva_porcentaje: it.iva_porcentaje, subtotal: Number(it.subtotal ?? 0) })),
-    } as any, emisorDeSociedad(sociedadActiva.nombre), getSociedadPDF(sociedadActiva));
-  }
-
-  async function verPdf(f: FacturaVenta) {
-    const html = await htmlVenta(f);
-    if (html) openPDFWindow(html, documentFilename(f.tipo, f.punto_venta, f.numero, f.clientes?.razon_social));
-  }
-
-  async function prepararMail(f: FacturaVenta) {
-    const comp = comprobante(f.tipo, f.punto_venta, f.numero);
-    const template = await loadEmailTemplate("factura", sociedadActiva?.id || "");
-    const vars = {
-      comprobante: comp, numero: comp, sociedad: sociedadActiva?.razonSocial || sociedadActiva?.nombre || "Lazzari",
-      total: formatCurrency(Number(f.total), f.moneda as Moneda), fecha: formatDate(f.fecha), cliente: f.clientes?.razon_social || "",
-    };
-    const sugeridos: { email: string; label?: string }[] = [];
-    for (const e of (f.clientes?.email_facturacion || "").split(",").map((s) => s.trim()).filter(Boolean)) sugeridos.push({ email: e, label: "Facturación" });
-    if (f.clientes?.email && !sugeridos.some((s) => s.email === f.clientes!.email)) sugeridos.push({ email: f.clientes.email, label: "Cliente" });
-    try {
-      const { data: contactos } = await (supabase as any).from("contactos").select("nombre, email").eq("entity_type", "cliente").eq("entity_id", f.cliente_id);
-      for (const c of contactos || []) if (c.email && !sugeridos.some((s) => s.email === c.email)) sugeridos.push({ email: c.email, label: c.nombre || "Contacto" });
-    } catch { /* sin contactos */ }
-    // El solicitante del PR va primero y marcado en "Para".
-    let solicitante = "";
-    if (f.presupuesto_id) {
-      try {
-        const { data: pr } = await (supabase as any).from("presupuestos").select("contacto:contacto_id(nombre, email)").eq("id", f.presupuesto_id).maybeSingle();
-        solicitante = String(pr?.contacto?.email || "").trim();
-        if (solicitante) {
-          const label = `⭐ Solicitante: ${pr.contacto.nombre || solicitante}`;
-          const ya = sugeridos.find((s) => s.email.toLowerCase() === solicitante.toLowerCase());
-          if (ya) ya.label = label; else sugeridos.unshift({ email: solicitante, label });
-        }
-      } catch { /* sin PR */ }
-    }
-    const base = f.clientes?.email_facturacion?.split(",")[0]?.trim() || f.clientes?.email || "";
-    setMail({
-      open: true,
-      to: [base, solicitante].filter((e, i, a) => e && a.findIndex((x) => x.toLowerCase() === e.toLowerCase()) === i).join(", "),
-      subject: applyTemplateVars(template.asunto, vars),
-      body: applyTemplateVars(template.cuerpo, vars),
-      filename: documentFilename(f.tipo, f.punto_venta, f.numero, f.clientes?.razon_social),
-      sugeridos,
-    });
   }
 
   // Cobrar (solo Finanzas Lazza): facturas de venta impagas; el saldo real lo verifica la ventana de cobro.
@@ -411,104 +333,168 @@ export function FacturasConsulta({ completa = false }: { completa?: boolean }) {
         </Card>
       </div>
 
-      {venta && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={() => setVenta(null)}>
-          <div className="h-full w-full max-w-xl overflow-y-auto bg-white p-4 shadow-2xl dark:bg-zinc-900" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-3 flex items-start justify-between gap-2">
-              <div>
-                <h2 className="flex items-center gap-2 text-base font-bold text-zinc-900 dark:text-white"><FileText className="h-4 w-4" /> {comprobante(venta.tipo, venta.punto_venta, venta.numero)}</h2>
-                <p className="text-sm text-zinc-600 dark:text-zinc-300">{venta.clientes?.razon_social} · CUIT {venta.clientes?.cuit}</p>
-              </div>
-              <button type="button" onClick={() => setVenta(null)} className="rounded p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
-            </div>
-            <div className="mb-3 flex flex-wrap gap-2">
-              <button type="button" onClick={() => verPdf(venta)} className="inline-flex items-center gap-1 rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800"><Download className="h-4 w-4" /> Ver / bajar PDF</button>
-              <button type="button" onClick={() => prepararMail(venta)} className="inline-flex items-center gap-1 rounded-lg bg-orange-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-600"><Mail className="h-4 w-4" /> Reenviar al cliente</button>
-              {cobrable(venta) && <button type="button" onClick={() => setCobrando(venta)} className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700"><HandCoins className="h-4 w-4" /> Cobrar</button>}
-            </div>
-            <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
-              {fila("Fecha", formatDate(venta.fecha))}
-              {fila("Vencimiento", venta.fecha_vencimiento ? formatDate(venta.fecha_vencimiento) : "—")}
-              {fila("Estado", (ESTADO_VENTA[estadoVisibleFactura(venta, venta.fecha_vencimiento, hoy)] || { label: venta.estado }).label)}
-              {fila("Presupuesto", venta.presupuestos?.numero || "—")}
-              {fila("OC del cliente", venta.oc_cliente || "—")}
-              {fila("Condición de venta", venta.condicion_venta || "—")}
-              {fila("CAE", venta.cae ? `${venta.cae}${venta.cae_vencimiento ? ` (vto. ${formatDate(venta.cae_vencimiento)})` : ""}` : "—")}
-              {fila("Enviada por mail", venta.email_enviado_at ? `${formatDate(venta.email_enviado_at)}${venta.email_enviado_a ? ` a ${venta.email_enviado_a}` : ""}` : "No figura enviada")}
-              {fila("Subtotal", formatCurrency(Number(venta.subtotal), venta.moneda as Moneda))}
-              {fila("IVA", formatCurrency(Number(venta.iva), venta.moneda as Moneda))}
-              {fila(<b>Total</b>, <b>{formatCurrency(Number(venta.total), venta.moneda as Moneda)}</b>)}
-            </div>
-            <h3 className="mb-1 mt-3 text-xs font-semibold uppercase text-zinc-500">Renglones</h3>
-            <div className="space-y-1">
-              {itemsVenta.map((it, i) => (
-                <div key={i} className="flex justify-between gap-3 rounded border border-zinc-100 px-2 py-1 text-sm dark:border-zinc-800">
-                  <span className="text-zinc-800 dark:text-zinc-200">{it.cantidad} × {it.descripcion}</span>
-                  <span className="shrink-0 tabular-nums text-zinc-600 dark:text-zinc-300">{formatCurrency(Number(it.precio_unitario), venta.moneda as Moneda)}</span>
-                </div>
-              ))}
-              {!itemsVenta.length && <p className="text-xs text-zinc-400">Cargando renglones…</p>}
-            </div>
-            {venta.observaciones && <p className="mt-3 whitespace-pre-wrap text-xs text-zinc-500">{venta.observaciones}</p>}
-          </div>
-        </div>
+      {venta && <FichaFacturaVenta factura={venta} onClose={() => setVenta(null)} cobrable={cobrable(venta)} onCobrar={() => setCobrando(venta)} onEnviada={() => void cargar()} />}
+      {compra && <FichaFacturaCompra factura={compra} onClose={() => setCompra(null)} conAcciones={completa} />}
+      {cobrando && sociedadActiva?.id && (
+        <CobrarCliente sociedadId={sociedadActiva.id} clienteId={cobrando.cliente_id} clienteNombre={cobrando.clientes?.razon_social || ""} preseleccion={[cobrando.id]}
+          onClose={() => setCobrando(null)} onCobrado={() => { setVenta(null); void cargar(); }} />
       )}
+    </>
+  );
+}
 
-      {compra && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={() => setCompra(null)}>
-          <div className="h-full w-full max-w-xl overflow-y-auto bg-white p-4 shadow-2xl dark:bg-zinc-900" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-3 flex items-start justify-between gap-2">
-              <div>
-                <h2 className="flex items-center gap-2 text-base font-bold text-zinc-900 dark:text-white"><FileText className="h-4 w-4" /> {[compra.tipo_comprobante, compra.numero_factura].filter(Boolean).join(" ")}</h2>
-                <p className="text-sm text-zinc-600 dark:text-zinc-300">{compra.proveedores?.razon_social}{compra.proveedores?.cuit ? ` · CUIT ${compra.proveedores.cuit}` : ""}</p>
-              </div>
-              <button type="button" onClick={() => setCompra(null)} className="rounded p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
-            </div>
-            {compra.archivo_url && (
-              <a href={compra.archivo_url} target="_blank" rel="noreferrer" className="mb-3 inline-flex items-center gap-1 rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800">
-                <Paperclip className="h-4 w-4" /> Ver factura del proveedor{compra.archivo_nombre ? ` (${compra.archivo_nombre})` : ""}
-              </a>
-            )}
-            <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
-              {fila("Fecha", formatDate(compra.fecha))}
-              {fila("Vencimiento", compra.fecha_vencimiento ? formatDate(compra.fecha_vencimiento) : "—")}
-              {fila("OC", ocsDe(compra).join(", ") || "—")}
-              {fila("Estado", compra.estado === "pagada" ? "Pagada" : compra.estado === "anulada" ? "Anulada" : "A pagar")}
-              {fila("CAE", compra.cae || "—")}
-              {fila("Subtotal", formatCurrency(Number(compra.subtotal), compra.moneda as Moneda))}
-              {fila("IVA", formatCurrency(Number(compra.iva), compra.moneda as Moneda))}
-              {Number(compra.percepciones || 0) > 0 && fila("Percepciones", formatCurrency(Number(compra.percepciones), compra.moneda as Moneda))}
-              {fila(<b>Total</b>, <b>{formatCurrency(Number(compra.total), compra.moneda as Moneda)}</b>)}
-            </div>
-            <h3 className="mb-1 mt-3 text-xs font-semibold uppercase text-zinc-500">Renglones</h3>
-            <div className="space-y-1">
-              {itemsCompra.map((it, i) => (
-                <div key={i} className="flex justify-between gap-3 rounded border border-zinc-100 px-2 py-1 text-sm dark:border-zinc-800">
-                  <span className="text-zinc-800 dark:text-zinc-200">{it.cantidad} {it.unidad || ""} × {it.codigo ? `[${it.codigo}] ` : ""}{it.descripcion}</span>
-                  <span className="shrink-0 tabular-nums text-zinc-600 dark:text-zinc-300">{formatCurrency(Number(it.precio_unitario), compra.moneda as Moneda)}{Number(it.descuento_porcentaje || 0) > 0 ? ` −${it.descuento_porcentaje}%` : ""}</span>
+// ── Fichas de una factura (las usan esta consulta y Finanzas Lazza › Facturas) ──
+
+const filaFicha = (label: React.ReactNode, valor: React.ReactNode) => (
+  <div className="flex justify-between gap-3 py-1 text-sm"><span className="text-zinc-500">{label}</span><span className="text-right text-zinc-900 dark:text-zinc-100">{valor}</span></div>
+);
+const botonFicha = "inline-flex items-center gap-1 rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800";
+
+/** Trae la factura por id si no vino armada. */
+function useFactura<T>(tabla: string, select: string, factura?: T | null, facturaId?: string | null): T | null {
+  const [cargada, setCargada] = useState<T | null>(factura ?? null);
+  useEffect(() => {
+    if (factura) { setCargada(factura); return; }
+    if (!facturaId) return;
+    let vivo = true;
+    (supabase as any).from(tabla).select(select).eq("id", facturaId).maybeSingle().then(({ data }: any) => { if (vivo) setCargada(data || null); });
+    return () => { vivo = false; };
+  }, [tabla, select, factura, facturaId]);
+  return cargada;
+}
+
+/**
+ * Ficha de una factura de venta: datos, renglones, Ver / Descargar el PDF y Enviar al cliente (marca de enviada).
+ * `extra`: lo que se muestra abajo (en Finanzas Lazza: "Cobrada con", los recibos con Ver / Descargar / Enviar).
+ */
+export function FichaFacturaVenta({ factura, facturaId, cobrable = false, onCobrar, onClose, onEnviada, extra }: {
+  factura?: FacturaVenta | null; facturaId?: string | null; cobrable?: boolean; onCobrar?: () => void;
+  onClose: () => void; onEnviada?: () => void; extra?: React.ReactNode;
+}) {
+  const { sociedadActiva, profile } = useUser();
+  const { toast } = useToast();
+  const venta = useFactura<FacturaVenta>("facturas", SELECT_VENTA, factura, facturaId);
+  const [items, setItems] = useState<ItemVenta[] | null>(null);
+  const [mail, setMail] = useState<{ open: boolean; to: string; subject: string; body: string; filename: string; sugeridos: { email: string; label?: string }[] }>({ open: false, to: "", subject: "", body: "", filename: "", sugeridos: [] });
+  const hoy = todayAR();
+
+  useEffect(() => {
+    if (!venta?.id) return;
+    let vivo = true;
+    setItems(null);
+    (supabase as any).from("factura_items").select("descripcion, cantidad, precio_unitario, iva_porcentaje, subtotal").eq("factura_id", venta.id).order("orden")
+      .then(({ data }: any) => { if (vivo) setItems((data || []).map((d: ItemVenta) => ({ ...d, subtotal: d.subtotal ?? 0 }))); });
+    return () => { vivo = false; };
+  }, [venta?.id]);
+
+  async function htmlVenta(f: FacturaVenta): Promise<string | null> {
+    if (!sociedadActiva) return null;
+    const { data } = await (supabase as any).from("factura_items")
+      .select("descripcion, cantidad, precio_unitario, iva_porcentaje, subtotal").eq("factura_id", f.id).order("orden");
+    const its: ItemVenta[] = data || [];
+    const cli = f.clientes;
+    return generateFacturaPDF({
+      tipo: f.tipo, punto_venta: f.punto_venta, numero: f.numero, fecha: f.fecha, fecha_vencimiento: f.fecha_vencimiento,
+      nota_interna: f.nota_interna, observaciones: f.observaciones, condicion_venta: f.condicion_venta,
+      moneda: f.moneda as Moneda, tipo_cambio: f.tipo_cambio,
+      cotizacion_modalidad: f.cotizacion_modalidad || f.presupuestos?.cotizacion_modalidad || null,
+      subtotal: Number(f.subtotal), iva: Number(f.iva), total: Number(f.total), cae: f.cae, cae_vencimiento: f.cae_vencimiento, oc_cliente: f.oc_cliente,
+      cliente: cli ? { razon_social: cli.razon_social, cuit: cli.cuit, condicion_iva: cli.condicion_iva, direccion: cli.direccion, localidad: cli.localidad, provincia: cli.provincia, email: cli.email, telefono: cli.telefono } : null,
+      items: its.map((it) => ({ descripcion: it.descripcion, cantidad: it.cantidad, precio_unitario: Number(it.precio_unitario), iva_porcentaje: it.iva_porcentaje, subtotal: Number(it.subtotal ?? 0) })),
+    } as any, emisorDeSociedad(sociedadActiva.nombre), getSociedadPDF(sociedadActiva));
+  }
+
+  async function pdf(f: FacturaVenta, ver: boolean) {
+    const html = await htmlVenta(f);
+    if (html) openPDFWindow(html, ver ? undefined : documentFilename(f.tipo, f.punto_venta, f.numero, f.clientes?.razon_social), ver);
+  }
+
+  async function prepararMail(f: FacturaVenta) {
+    const comp = comprobante(f.tipo, f.punto_venta, f.numero);
+    const template = await loadEmailTemplate("factura", sociedadActiva?.id || "");
+    const vars = {
+      comprobante: comp, numero: comp, sociedad: sociedadActiva?.razonSocial || sociedadActiva?.nombre || "Lazzari",
+      total: formatCurrency(Number(f.total), f.moneda as Moneda), fecha: formatDate(f.fecha), cliente: f.clientes?.razon_social || "",
+    };
+    const sugeridos: { email: string; label?: string }[] = [];
+    for (const e of (f.clientes?.email_facturacion || "").split(",").map((x) => x.trim()).filter(Boolean)) sugeridos.push({ email: e, label: "Facturación" });
+    if (f.clientes?.email && !sugeridos.some((x) => x.email === f.clientes!.email)) sugeridos.push({ email: f.clientes.email, label: "Cliente" });
+    try {
+      const { data: contactos } = await (supabase as any).from("contactos").select("nombre, email").eq("entity_type", "cliente").eq("entity_id", f.cliente_id);
+      for (const c of contactos || []) if (c.email && !sugeridos.some((x) => x.email === c.email)) sugeridos.push({ email: c.email, label: c.nombre || "Contacto" });
+    } catch { /* sin contactos */ }
+    // El solicitante del PR va primero y marcado en "Para".
+    let solicitante = "";
+    if (f.presupuesto_id) {
+      try {
+        const { data: pr } = await (supabase as any).from("presupuestos").select("contacto:contacto_id(nombre, email)").eq("id", f.presupuesto_id).maybeSingle();
+        solicitante = String(pr?.contacto?.email || "").trim();
+        if (solicitante) {
+          const label = `⭐ Solicitante: ${pr.contacto.nombre || solicitante}`;
+          const ya = sugeridos.find((x) => x.email.toLowerCase() === solicitante.toLowerCase());
+          if (ya) ya.label = label; else sugeridos.unshift({ email: solicitante, label });
+        }
+      } catch { /* sin PR */ }
+    }
+    const base = f.clientes?.email_facturacion?.split(",")[0]?.trim() || f.clientes?.email || "";
+    setMail({
+      open: true,
+      to: [base, solicitante].filter((e, i, arr) => e && arr.findIndex((x) => x.toLowerCase() === e.toLowerCase()) === i).join(", "),
+      subject: applyTemplateVars(template.asunto, vars),
+      body: applyTemplateVars(template.cuerpo, vars),
+      filename: documentFilename(f.tipo, f.punto_venta, f.numero, f.clientes?.razon_social),
+      sugeridos,
+    });
+  }
+
+  return (
+    <>
+      <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose}>
+        <div className="h-full w-full max-w-xl overflow-y-auto bg-white p-4 shadow-2xl dark:bg-zinc-900" onClick={(e) => e.stopPropagation()}>
+          {!venta ? <p className="text-sm text-zinc-500">Cargando…</p> : (
+            <>
+              <div className="mb-3 flex items-start justify-between gap-2">
+                <div>
+                  <h2 className="flex items-center gap-2 text-base font-bold text-zinc-900 dark:text-white"><FileText className="h-4 w-4" /> {comprobante(venta.tipo, venta.punto_venta, venta.numero)}</h2>
+                  <p className="text-sm text-zinc-600 dark:text-zinc-300">{venta.clientes?.razon_social} · CUIT {venta.clientes?.cuit}</p>
                 </div>
-              ))}
-              {!itemsCompra.length && <p className="text-xs text-zinc-400">Sin renglones cargados (puede ser una factura cargada solo con totales).</p>}
-            </div>
-            <h3 className="mb-1 mt-3 text-xs font-semibold uppercase text-zinc-500">Órdenes de pago</h3>
-            {opsCompra === null ? <p className="text-xs text-zinc-400">Buscando…</p> : opsCompra.length === 0 ? <p className="text-xs text-zinc-400">Sin orden de pago todavía.</p> : (
+                <button type="button" aria-label="Cerrar" onClick={onClose} className="rounded p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+              </div>
+              <div className="mb-3 flex flex-wrap gap-2">
+                <button type="button" onClick={() => pdf(venta, true)} className={botonFicha}><Eye className="h-4 w-4" /> Ver</button>
+                <button type="button" onClick={() => pdf(venta, false)} className={botonFicha}><Download className="h-4 w-4" /> Descargar</button>
+                <button type="button" onClick={() => prepararMail(venta)} className="inline-flex items-center gap-1 rounded-lg bg-orange-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-600"><Mail className="h-4 w-4" /> Enviar al cliente</button>
+                {cobrable && onCobrar && <button type="button" onClick={onCobrar} className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700"><HandCoins className="h-4 w-4" /> Cobrar</button>}
+              </div>
+              <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                {filaFicha("Fecha", formatDate(venta.fecha))}
+                {filaFicha("Vencimiento", venta.fecha_vencimiento ? formatDate(venta.fecha_vencimiento) : "—")}
+                {filaFicha("Estado", (ESTADO_VENTA[estadoVisibleFactura(venta, venta.fecha_vencimiento, hoy)] || { label: venta.estado }).label)}
+                {filaFicha("Presupuesto", venta.presupuestos?.numero || "—")}
+                {filaFicha("OC del cliente", venta.oc_cliente || "—")}
+                {filaFicha("Condición de venta", venta.condicion_venta || "—")}
+                {filaFicha("CAE", venta.cae ? `${venta.cae}${venta.cae_vencimiento ? ` (vto. ${formatDate(venta.cae_vencimiento)})` : ""}` : "—")}
+                {filaFicha("Enviada por mail", venta.email_enviado_at ? `${formatDate(venta.email_enviado_at)}${venta.email_enviado_a ? ` a ${venta.email_enviado_a}` : ""}` : "No figura enviada")}
+                {filaFicha("Subtotal", formatCurrency(Number(venta.subtotal), venta.moneda as Moneda))}
+                {filaFicha("IVA", formatCurrency(Number(venta.iva), venta.moneda as Moneda))}
+                {filaFicha(<b>Total</b>, <b>{formatCurrency(Number(venta.total), venta.moneda as Moneda)}</b>)}
+              </div>
+              {extra}
+              <h3 className="mb-1 mt-3 text-xs font-semibold uppercase text-zinc-500">Renglones</h3>
               <div className="space-y-1">
-                {opsCompra.map((op) => (
-                  <div key={op.id} className="flex items-center justify-between gap-2 rounded border border-zinc-100 px-2 py-1 text-sm dark:border-zinc-800">
-                    <span className="text-zinc-800 dark:text-zinc-200">{op.numero} · {formatDate(op.fecha)} · {formatCurrency(op.neto, op.moneda)}</span>
-                    <span className="flex shrink-0 items-center gap-1">
-                      {op.certificado_retencion_url && <a href={op.certificado_retencion_url} target="_blank" rel="noreferrer" className="rounded border border-zinc-300 px-2 py-0.5 text-xs hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800">Certificado</a>}
-                      <button type="button" disabled={bajandoOP === op.id} onClick={() => bajarOP(op.id)} className="inline-flex items-center gap-1 rounded border border-zinc-300 px-2 py-0.5 text-xs hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:hover:bg-zinc-800"><Download className="h-3 w-3" /> {bajandoOP === op.id ? "Armando…" : "PDF"}</button>
-                    </span>
+                {(items || []).map((it, i) => (
+                  <div key={i} className="flex justify-between gap-3 rounded border border-zinc-100 px-2 py-1 text-sm dark:border-zinc-800">
+                    <span className="text-zinc-800 dark:text-zinc-200">{it.cantidad} × {it.descripcion}</span>
+                    <span className="shrink-0 tabular-nums text-zinc-600 dark:text-zinc-300">{formatCurrency(Number(it.precio_unitario), venta.moneda as Moneda)}</span>
                   </div>
                 ))}
+                {items === null ? <p className="text-xs text-zinc-400">Cargando renglones…</p> : !items.length && <p className="text-xs text-zinc-400">Sin renglones.</p>}
               </div>
-            )}
-            {compra.notas && <p className="mt-3 whitespace-pre-wrap text-xs text-zinc-500">{compra.notas}</p>}
-          </div>
+              {venta.observaciones && <p className="mt-3 whitespace-pre-wrap text-xs text-zinc-500">{venta.observaciones}</p>}
+            </>
+          )}
         </div>
-      )}
-
+      </div>
       <EmailComposeModal
         open={mail.open}
         onClose={() => setMail((m) => ({ ...m, open: false }))}
@@ -534,13 +520,114 @@ export function FacturasConsulta({ completa = false }: { completa?: boolean }) {
           if (e) console.error("No se pudo guardar la marca de envío:", e);
           toast.success("Factura enviada");
           setMail((m) => ({ ...m, open: false }));
-          await cargar();
+          onEnviada?.();
         }}
       />
-      {cobrando && sociedadActiva?.id && (
-        <CobrarCliente sociedadId={sociedadActiva.id} clienteId={cobrando.cliente_id} clienteNombre={cobrando.clientes?.razon_social || ""} preseleccion={[cobrando.id]}
-          onClose={() => setCobrando(null)} onCobrado={() => { setVenta(null); void cargar(); }} />
-      )}
+    </>
+  );
+}
+
+/**
+ * Ficha de una factura de compra: datos, renglones, archivo del proveedor (Ver / Descargar) y las OP que la pagaron.
+ * `conAcciones` (Finanzas Lazza): en cada OP, Ver, Descargar y Enviar por mail (la misma ventana de la OP).
+ */
+export function FichaFacturaCompra({ factura, facturaId, onClose, conAcciones = false }: {
+  factura?: FacturaCompra | null; facturaId?: string | null; onClose: () => void; conAcciones?: boolean;
+}) {
+  const { sociedadActiva } = useUser();
+  const { toast } = useToast();
+  const compra = useFactura<FacturaCompra>("facturas_compra", SELECT_COMPRA, factura, facturaId);
+  const [items, setItems] = useState<ItemCompra[] | null>(null);
+  const [ops, setOps] = useState<OPResumen[] | null>(null);
+  const [bajando, setBajando] = useState<string | null>(null);
+  const [enviando, setEnviando] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!compra?.id) return;
+    let vivo = true;
+    setItems(null); setOps(null);
+    Promise.all([
+      (supabase as any).from("facturas_compra_items").select("codigo, descripcion, cantidad, precio_unitario, descuento_porcentaje, iva_porcentaje, unidad").eq("factura_compra_id", compra.id),
+      cargarOPsDeFacturas(supabase, [compra.id]).catch(() => [] as OPResumen[]),
+    ]).then(([{ data }, o]) => { if (vivo) { setItems(data || []); setOps(o); } });
+    return () => { vivo = false; };
+  }, [compra?.id]);
+
+  async function op(opId: string, ver: boolean) {
+    if (!sociedadActiva) return;
+    setBajando(opId);
+    try {
+      if (ver) await verOP(opId, sociedadActiva);
+      else await abrirOrdenPagoPDF(supabase, opId, sociedadActiva);
+    } catch (e) { toast.error(`No se pudo armar el PDF de la orden de pago: ${e instanceof Error ? e.message : String(e)}`); }
+    finally { setBajando(null); }
+  }
+
+  const chico = "inline-flex items-center gap-1 rounded border border-zinc-300 px-2 py-0.5 text-xs hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:hover:bg-zinc-800";
+  return (
+    <>
+      <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose}>
+        <div className="h-full w-full max-w-xl overflow-y-auto bg-white p-4 shadow-2xl dark:bg-zinc-900" onClick={(e) => e.stopPropagation()}>
+          {!compra ? <p className="text-sm text-zinc-500">Cargando…</p> : (
+            <>
+              <div className="mb-3 flex items-start justify-between gap-2">
+                <div>
+                  <h2 className="flex items-center gap-2 text-base font-bold text-zinc-900 dark:text-white"><FileText className="h-4 w-4" /> {[compra.tipo_comprobante, compra.numero_factura].filter(Boolean).join(" ")}</h2>
+                  <p className="text-sm text-zinc-600 dark:text-zinc-300">{compra.proveedores?.razon_social}{compra.proveedores?.cuit ? ` · CUIT ${compra.proveedores.cuit}` : ""}</p>
+                </div>
+                <button type="button" aria-label="Cerrar" onClick={onClose} className="rounded p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+              </div>
+              <div className="mb-3 flex flex-wrap gap-2">
+                {compra.archivo_url ? (
+                  <>
+                    <a href={compra.archivo_url} target="_blank" rel="noreferrer" className={botonFicha}><Eye className="h-4 w-4" /> Ver factura del proveedor</a>
+                    <a href={compra.archivo_url} download={compra.archivo_nombre || true} target="_blank" rel="noreferrer" className={botonFicha}><Download className="h-4 w-4" /> Descargar</a>
+                  </>
+                ) : <span className="text-xs text-zinc-400">Sin archivo del proveedor cargado.</span>}
+              </div>
+              <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                {filaFicha("Fecha", formatDate(compra.fecha))}
+                {filaFicha("Vencimiento", compra.fecha_vencimiento ? formatDate(compra.fecha_vencimiento) : "—")}
+                {filaFicha("OC", ocsDe(compra).join(", ") || "—")}
+                {filaFicha("Estado", compra.estado === "pagada" ? "Pagada" : compra.estado === "anulada" ? "Anulada" : "A pagar")}
+                {filaFicha("CAE", compra.cae || "—")}
+                {filaFicha("Subtotal", formatCurrency(Number(compra.subtotal), compra.moneda as Moneda))}
+                {filaFicha("IVA", formatCurrency(Number(compra.iva), compra.moneda as Moneda))}
+                {Number(compra.percepciones || 0) > 0 && filaFicha("Percepciones", formatCurrency(Number(compra.percepciones), compra.moneda as Moneda))}
+                {filaFicha(<b>Total</b>, <b>{formatCurrency(Number(compra.total), compra.moneda as Moneda)}</b>)}
+              </div>
+              <h3 className="mb-1 mt-3 text-xs font-semibold uppercase text-zinc-500">Órdenes de pago</h3>
+              {ops === null ? <p className="text-xs text-zinc-400">Buscando…</p> : ops.length === 0 ? <p className="text-xs text-zinc-400">Sin orden de pago todavía.</p> : (
+                <div className="space-y-1">
+                  {ops.map((o) => (
+                    <div key={o.id} className="flex items-center justify-between gap-2 rounded border border-zinc-100 px-2 py-1 text-sm dark:border-zinc-800">
+                      <span className="text-zinc-800 dark:text-zinc-200">{o.numero} · {formatDate(o.fecha)} · {formatCurrency(o.neto, o.moneda)}</span>
+                      <span className="flex shrink-0 items-center gap-1">
+                        {o.certificado_retencion_url && <a href={o.certificado_retencion_url} target="_blank" rel="noreferrer" className={chico}>Certificado</a>}
+                        {conAcciones && <button type="button" disabled={bajando === o.id} onClick={() => op(o.id, true)} className={chico}><Eye className="h-3 w-3" /> Ver</button>}
+                        <button type="button" disabled={bajando === o.id} onClick={() => op(o.id, false)} className={chico}><Download className="h-3 w-3" /> {bajando === o.id ? "Armando…" : conAcciones ? "Descargar" : "PDF"}</button>
+                        {conAcciones && <button type="button" onClick={() => setEnviando(o.id)} className={chico}><Mail className="h-3 w-3" /> Enviar</button>}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <h3 className="mb-1 mt-3 text-xs font-semibold uppercase text-zinc-500">Renglones</h3>
+              <div className="space-y-1">
+                {(items || []).map((it, i) => (
+                  <div key={i} className="flex justify-between gap-3 rounded border border-zinc-100 px-2 py-1 text-sm dark:border-zinc-800">
+                    <span className="text-zinc-800 dark:text-zinc-200">{it.cantidad} {it.unidad || ""} × {it.codigo ? `[${it.codigo}] ` : ""}{it.descripcion}</span>
+                    <span className="shrink-0 tabular-nums text-zinc-600 dark:text-zinc-300">{formatCurrency(Number(it.precio_unitario), compra.moneda as Moneda)}{Number(it.descuento_porcentaje || 0) > 0 ? ` −${it.descuento_porcentaje}%` : ""}</span>
+                  </div>
+                ))}
+                {items !== null && !items.length && <p className="text-xs text-zinc-400">Sin renglones cargados (puede ser una factura cargada solo con totales).</p>}
+              </div>
+              {compra.notas && <p className="mt-3 whitespace-pre-wrap text-xs text-zinc-500">{compra.notas}</p>}
+            </>
+          )}
+        </div>
+      </div>
+      {enviando && <EnviarOrdenPago opId={enviando} onClose={() => setEnviando(null)} />}
     </>
   );
 }

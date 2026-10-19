@@ -27,6 +27,8 @@ export interface Recibo {
   renglones: RenglonRecibo[];
   /** Comprobantes cobrados, sin repetir. */
   facturas: string[];
+  /** Ids de las facturas cobradas (para Finanzas Lazza › Facturas: "Cobrada con"). */
+  facturaIds: string[];
   total: { ARS: number; USD: number };
   /** Todos sus movimientos anulados. */
   anulado: boolean;
@@ -90,7 +92,7 @@ export function armarRecibos(args: {
     return {
       id: r.id, numero: r.numero, fecha: String(r.fecha).slice(0, 10), clienteId: r.cliente_id,
       cliente: (r.cliente_id && args.clientes?.[r.cliente_id]) || "Cliente sin nombre",
-      renglones, facturas, total, anulado,
+      renglones, facturas, facturaIds: [...ids], total, anulado,
       // Las retenciones no pasan por el banco: cuenta solo lo que entró (transferencias, cheques, efectivo).
       conciliado: medios.length > 0 && medios.every((m) => !!m.conciliado),
     };

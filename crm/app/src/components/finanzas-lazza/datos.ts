@@ -1,11 +1,15 @@
 // Finanzas Lazza: lecturas de la base (solo SELECT, nada se guarda). Las cuentas están en lib/finanzas-lazza.
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
-import { sumarMeses } from "@/lib/reportes-comprobantes";
-import { armarTcDelDia, armarVencimientos, type FacturaCompraFL, type FacturaVentaFL, type FilaVencimiento, type GastoFL, type ItemCostoFL, type PagoDirectoFC, type TcDelDia } from "@/lib/finanzas-lazza";
+import { armarTcDelDia, armarVencimientos, comprobanteVenta, saldoFacturaCompra, type FacturaCompraFL, type FacturaVentaFL, type FilaVencimiento, type GastoFL, type ItemCostoFL, type PagoDirectoFC, type TcDelDia } from "@/lib/finanzas-lazza";
 import { calcularSaldosClientes, cobradoPorFactura, saldoFacturaVenta, traerDatosSaldoClientes, type SaldoCliente } from "@/lib/saldo-clientes";
 import { calcularSaldosProveedores, traerCreditosProveedores, type SaldoProveedor } from "@/lib/saldo-proveedores";
 import { sentidoAjuste } from "@/lib/tipos-movimiento";
+import { esNotaCredito, sumarMeses } from "@/lib/reportes-comprobantes";
+import { opsPorFactura, type OPResumen } from "@/lib/orden-pago-pdf";
+import { armarFilasFacturas, recibosPorFactura, type DocPago, type FilaFactura, type LadoFactura } from "@/lib/facturas-lazza";
+import { traerRecibos } from "./recibo-doc";
+import type { Recibo } from "@/lib/recibos";
 
 const db = supabase as any;
 
@@ -130,4 +134,71 @@ export async function traerDeudas(sociedadId: string, hoy: string): Promise<Deud
     saldosClientes: calcularSaldosClientes(cc.facturas, cc.movimientos, cc.aplicaciones, cc.ajustes),
     saldosProveedores: calcularSaldosProveedores(compras, pagosDirectos, ncMovs, creditos),
   };
+}
+
+// ── Facturas (Augusto 19/10): una fila por factura, Ventas o Compras, con saldo y con qué se cobró/pagó ──
+
+const CAMPOS_FACTURAS_VENTA = "id, fecha, fecha_vencimiento, tipo, estado, moneda, total, punto_venta, numero, cliente_id, oc_cliente, clientes(razon_social)";
+const VENDEDOR_PR = ", presupuestos:presupuesto_id(vendedor_profile:vendedor_id(full_name))";
+
+/**
+ * Facturas de un lado con su saldo (mismas reglas que las cuentas corrientes). `todas` = también las cobradas/pagadas,
+ * anuladas y NC; si no, solo las que tienen saldo. Ventas: OC del cliente, vendedor y recibos; compras: sus OP.
+ */
+export async function traerFacturasFL(sociedadId: string, lado: LadoFactura, hoy: string, todas: boolean): Promise<{ filas: FilaFactura[]; recibos: Recibo[] }> {
+  if (lado === "venta") {
+    const cc = await traerDatosSaldoClientes(db, sociedadId, traerTodo);
+    const cobrado = cobradoPorFactura(cc.facturas, cc.movimientos, cc.aplicaciones);
+    const saldos = new Map<string, number>();
+    for (const f of cc.facturas) saldos.set(f.id, saldoFacturaVenta(f, cobrado[f.id] || 0));
+    let rows: any[];
+    const traer = (campos: string) => (todas
+      ? traerTodo<any>(() => db.from("facturas").select(campos).eq("sociedad_id", sociedadId).order("id"))
+      : (async () => {
+        const ids = [...saldos].filter(([, s]) => s > 0.005).map(([id]) => id);
+        const out: any[] = [];
+        for (const trozo of trozos(ids)) {
+          const { data, error } = await db.from("facturas").select(campos).in("id", trozo);
+          if (error) throw error;
+          out.push(...(data || []));
+        }
+        return out;
+      })());
+    // Si el vínculo con el vendedor del PR fallara, se trae igual sin vendedor.
+    try { rows = await traer(CAMPOS_FACTURAS_VENTA + VENDEDOR_PR); } catch { rows = await traer(CAMPOS_FACTURAS_VENTA); }
+    const recibos = await traerRecibos(sociedadId).catch((): Recibo[] => []);
+    const filas = armarFilasFacturas({
+      lado, hoy, docs: recibosPorFactura(recibos),
+      facturas: rows.map((r) => ({
+        id: r.id, entidadId: r.cliente_id ?? null, nombre: r.clientes?.razon_social || "", fecha: r.fecha, fecha_vencimiento: r.fecha_vencimiento,
+        comprobante: comprobanteVenta(r), moneda: r.moneda, total: r.total, estado: r.estado, nc: esNotaCredito(r.tipo),
+        saldo: saldos.get(r.id) ?? 0, ocCliente: r.oc_cliente, vendedor: r.presupuestos?.vendedor_profile?.full_name || "",
+      })),
+    });
+    return { filas, recibos };
+  }
+  const [compras, pagosDirectos] = await Promise.all([
+    traerTodo<any>(() => db.from("facturas_compra")
+      .select("id, proveedor_id, fecha, fecha_vencimiento, tipo_comprobante, estado, moneda, iva, total, total_acreditado, numero_factura, proveedores(razon_social), op_facturas_compra(monto, ordenes_pago(estado))")
+      .eq("sociedad_id", sociedadId).order("id")),
+    traerTodo<PagoDirectoFC>(() => db.from("movimientos")
+      .select("id, factura_compra_id, monto, retencion_ganancias_monto, anulado, nota_credito_compra_id")
+      .eq("sociedad_id", sociedadId).eq("tipo", "pago").not("factura_compra_id", "is", null).order("id")),
+  ]);
+  const porFactura = new Map<string, PagoDirectoFC[]>();
+  for (const p of pagosDirectos) if (p.factura_compra_id) porFactura.set(p.factura_compra_id, [...(porFactura.get(p.factura_compra_id) || []), p]);
+  const conSaldo = compras.map((r) => ({ r, saldo: saldoFacturaCompra({ ...r, fecha: String(r.fecha).slice(0, 10) }, porFactura.get(r.id) || []) }))
+    .filter((x) => todas || x.saldo > 0.005);
+  const ops = await opsPorFactura(db, conSaldo.map((x) => x.r.id)).catch(() => new Map<string, OPResumen[]>());
+  const docs = new Map<string, DocPago[]>();
+  for (const [fid, lista] of ops) docs.set(fid, lista.map((o) => ({ tipo: "op" as const, id: o.id, numero: o.numero })));
+  const filas = armarFilasFacturas({
+    lado, hoy, docs,
+    facturas: conSaldo.map(({ r, saldo }) => ({
+      id: r.id, entidadId: r.proveedor_id ?? null, nombre: r.proveedores?.razon_social || "", fecha: r.fecha, fecha_vencimiento: r.fecha_vencimiento,
+      comprobante: `${r.tipo_comprobante || "FC"} ${r.numero_factura || "S/N"}`, moneda: r.moneda, total: r.total, estado: r.estado,
+      nc: esNotaCredito(r.tipo_comprobante), saldo,
+    })),
+  });
+  return { filas, recibos: [] };
 }

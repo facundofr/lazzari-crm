@@ -4,7 +4,7 @@ import { useState } from "react";
 import { X, Send, Loader2, Paperclip, AlertTriangle, CheckCircle2, CheckCheck, Maximize2, Minimize2, UserPlus } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 
-export type EmailDocumentType = "presupuesto" | "factura" | "remito" | "orden_compra" | "orden_pago";
+export type EmailDocumentType = "presupuesto" | "factura" | "remito" | "orden_compra" | "orden_pago" | "recibo";
 
 interface EmailComposeModalProps {
   open: boolean;
@@ -46,6 +46,7 @@ const DOC_LABELS: Record<EmailDocumentType, string> = {
   remito: "Remito",
   orden_compra: "Orden de compra",
   orden_pago: "Orden de pago",
+  recibo: "Recibo",
 };
 
 export function EmailComposeModal({

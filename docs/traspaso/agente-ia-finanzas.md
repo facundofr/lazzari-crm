@@ -14,6 +14,9 @@ Todo publicado; producción en V1.1.538. Finanzas vieja sigue en el menú (no se
 - Servidor local propio: `.claude/launch.json` → "crm-finanzas" (puerto 3005).
 
 ### Próximo
+- **Facturas (19/10, SIN PUBLICAR):** `components/finanzas-lazza/facturas.tsx` reemplaza Pagar, Cobrar y Vencimientos (una fila por factura, Ventas | Compras, Pendientes/Vencidas/Todas, tildar → Pagar/Cobrar (n), Cobrada/Pagada con con Ver/Descargar/Enviar, Enviar recibo por mail). Detalle en ESTADO ("FINANZAS LAZZA › FACTURAS"). Falta probar en pantalla al publicar.
+- **Sacar Finanzas vieja (19/10):** lista de lo que falta en Lazza entregada a Augusto (Gastos, Para confirmar/Extracto, movimientos y cheques a mano, caja proyectada, BCRA, líneas de crédito, exportar, acceso para admin/administrativo). Ocultar = `oculto: true` en `components/layout/sidebar.tsx` línea ~77; los links a /finanzas siguen andando. Orden propuesto: Facturas → Gastos → Banco → cheques/movimientos → acceso → ocultar.
+- **Saldos iniciales (recomendación, sin OK):** fecha de corte sugerida 31/07/2026, Excel del sistema anterior (cliente/proveedor, CUIT, moneda, saldo); cuidado con no duplicar los cobros del sistema anterior ya cargados (Del Sol).
 - **V1.1.538 (19/10, publicada y probada):** corrección de Recibos (columna Banco); Resumen de cuenta completo en la ficha de CC + Excel/PDF; Pagar sin facturas abre en "Pago a cuenta". Nada sin publicar.
 - **Tanda 4:** (19/10: propuestos 7 grupos de gastos, espera respuesta de Augusto; ver ESTADO) Gastos con todas las variantes + recibos numerados (1 recibo = 1 cobro con su N°, con migración aditiva + rollback) + Descargar (PDF, `generateReciboPDF`) y Enviar recibos por mail (corrección 4). Diseñar con Augusto antes de tocar.
 - **Tanda 5:** Facturar nuevo (no le gusta la de Ventas). A diseñar con Augusto.
