@@ -1,19 +1,24 @@
 "use client";
 
 // Finanzas Lazza → Órdenes de pago, Recibos, Retenciones y Movimientos.
+// Recibos numerados (19/10, "recibos B"): 1 recibo = 1 cobro con su N° (lib/recibos.ts, migración 20261019210000),
+// con Ver y Descargar (el mismo PDF de recibo de Finanzas, con N°, medios, retenciones y facturas).
 // Recibos (19/10): "Nuevo cobro" → elegir cliente y facturas → la misma liquidación de Finanzas (cobrar.tsx).
 // Órdenes de pago (19/10): "Nueva OP" → la misma ventana de OP de Finanzas (pagar.tsx).
 // Mismos datos y reglas que las pestañas de Finanzas; acá solo se miran, con filtros y orden por columna.
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Download, HandCoins, Loader2, Mail, MailCheck, Search, Wallet } from "lucide-react";
+import { Download, Eye, HandCoins, Loader2, Mail, MailCheck, Search, Wallet } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { clasificarMovimiento, esCobroDeCliente, type ClaseMovimiento } from "@/lib/tipos-movimiento";
-import { armarRetenciones, type FilaRetencion } from "@/lib/finanzas-lazza";
+import { armarRetenciones, comprobanteVenta, type FilaRetencion } from "@/lib/finanzas-lazza";
+import { armarRecibos, textoTotalRecibo, type Recibo } from "@/lib/recibos";
+import { generateReciboPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
+import type { Sociedad } from "@/lib/types";
 import { useUser } from "@/lib/auth-context";
-import { descargarOP, EnviarOrdenPago } from "@/components/finanzas-lazza/orden-pago-doc";
+import { descargarOP, EnviarOrdenPago, verOP } from "@/components/finanzas-lazza/orden-pago-doc";
 import { CobrarCliente } from "@/components/finanzas-lazza/cobrar";
 import { PagarProveedor } from "@/components/finanzas-lazza/pagar";
 
@@ -129,6 +134,8 @@ export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string })
     { key: "enviada", label: "Enviada", sortable: true, sortValue: (o) => o.enviada || "", render: (o) => o.enviada ? <span className="text-xs text-emerald-600">✓ {formatDate(o.enviada)}</span> : o.sobreVerde ? <span className="text-xs text-zinc-500">Sobre verde</span> : <span className="text-xs text-zinc-400">—</span> },
     { key: "acciones", label: "", render: (o) => (
       <span className="flex justify-end gap-0.5">
+        <button type="button" title="Ver la OP (se abre en otra pestaña, sin descargar)" onClick={(e) => { e.stopPropagation(); if (sociedadActiva) verOP(o.id, sociedadActiva); }}
+          className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-orange-600 dark:hover:bg-zinc-800"><Eye className="h-3.5 w-3.5" /></button>
         <button type="button" title="Descargar la OP" onClick={(e) => { e.stopPropagation(); if (sociedadActiva) descargarOP(o.id, sociedadActiva); }}
           className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-orange-600 dark:hover:bg-zinc-800"><Download className="h-3.5 w-3.5" /></button>
         {o.estado !== "anulada" && (
@@ -174,7 +181,8 @@ async function traerMovimientos(sociedadId: string): Promise<Mov[]> {
   }));
 }
 
-export function FinanzasLazzaRecibos({ sociedadId }: { sociedadId: string }) {
+/** Lista vieja (1 recibo = 1 movimiento): solo si todavía no se corrió la migración de recibos numerados. */
+function RecibosPorMovimiento({ sociedadId }: { sociedadId: string }) {
   const [recarga, setRecarga] = useState(0);
   const [cobrando, setCobrando] = useState(false);
   const { datos, error } = useCarga(() => traerMovimientos(sociedadId).then((m) => m.filter((x) => x.cobro)), [sociedadId, recarga]);
@@ -202,6 +210,119 @@ export function FinanzasLazzaRecibos({ sociedadId }: { sociedadId: string }) {
         <Fechas desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} />
       </>} pie={<><span>{visibles.length} cobros (hoy 1 recibo = 1 movimiento)</span><span>Cobrado <b className="font-mono text-emerald-700 dark:text-emerald-400">{sumar(visibles, (m) => m.monto, (m) => m.moneda)}</b></span></>}>
         <DataTable columns={cols} data={visibles} emptyMessage="No hay cobros con ese filtro" />
+      </Marco>
+      {cobrando && <CobrarCliente sociedadId={sociedadId} onClose={() => setCobrando(false)} onCobrado={() => setRecarga((n) => n + 1)} />}
+    </>
+  );
+}
+
+// ── Recibos numerados ───────────────────────────────────────────────
+
+const SIN_MIGRACION_RECIBOS = "sin-migracion-recibos";
+
+async function traerRecibos(sociedadId: string): Promise<Recibo[]> {
+  let recibos: any[];
+  try {
+    recibos = await traerTodo<any>(() => db.from("recibos").select("id, numero, fecha, cliente_id").eq("sociedad_id", sociedadId).order("id"));
+  } catch (e: any) {
+    if (/recibos/i.test(String(e?.message || ""))) throw new Error(SIN_MIGRACION_RECIBOS);
+    throw e;
+  }
+  const [vinculos, movimientos, aplicaciones, facturas, clientes] = await Promise.all([
+    traerTodo<any>(() => db.from("recibo_movimientos").select("recibo_id, movimiento_id, recibos!inner(sociedad_id)").eq("recibos.sociedad_id", sociedadId).order("movimiento_id")),
+    traerTodo<any>(() => db.from("movimientos").select("id, tipo, monto, monto_original, moneda, descripcion, anulado, conciliado, factura_id").eq("sociedad_id", sociedadId).not("cliente_id", "is", null).order("id")),
+    traerTodo<any>(() => db.from("cobro_aplicaciones").select("id, movimiento_id, factura_id, monto, movimientos!inner(sociedad_id)").eq("movimientos.sociedad_id", sociedadId).order("id")),
+    traerTodo<any>(() => db.from("facturas").select("id, tipo, punto_venta, numero").eq("sociedad_id", sociedadId).order("id")),
+    traerTodo<any>(() => db.from("clientes").select("id, razon_social").eq("sociedad_id", sociedadId).order("id")),
+  ]);
+  return armarRecibos({
+    recibos, vinculos, movimientos, aplicaciones,
+    comprobantes: Object.fromEntries(facturas.map((f: any) => [f.id, comprobanteVenta(f)])),
+    clientes: Object.fromEntries(clientes.map((c: any) => [c.id, c.razon_social])),
+  });
+}
+
+/** PDF del recibo: el mismo de Finanzas, con N°, cada medio y retención y las facturas cobradas. */
+function htmlRecibo(r: Recibo, sociedad: Sociedad): string {
+  const moneda: "ARS" | "USD" = r.total.USD > 0.005 && r.total.ARS <= 0.005 ? "USD" : "ARS";
+  return generateReciboPDF({
+    numero: String(r.numero), numeroRecibo: r.numero, fecha: r.fecha, cliente: r.cliente,
+    descripcion: "Cobro de cliente", medio: "", monto: r.total[moneda], moneda, conciliado: r.conciliado, anulado: r.anulado,
+    renglones: r.renglones.map((x) => ({ medio: x.medio, detalle: x.detalle, moneda: x.moneda, monto: x.monto })), facturas: r.facturas,
+  }, getSociedadPDF(sociedad));
+}
+
+const resumenMedios = (r: Recibo) => {
+  const c: Record<string, number> = {};
+  for (const x of r.renglones) c[x.medio] = (c[x.medio] || 0) + 1;
+  return Object.entries(c).map(([m, k]) => (k > 1 ? `${m} ×${k}` : m)).join(" · ");
+};
+
+export function FinanzasLazzaRecibos({ sociedadId }: { sociedadId: string }) {
+  const { sociedadActiva } = useUser();
+  const [recarga, setRecarga] = useState(0);
+  const [cobrando, setCobrando] = useState(false);
+  const [sinMigracion, setSinMigracion] = useState(false);
+  const [datos, setDatos] = useState<Recibo[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [texto, setTexto] = useState("");
+  const [desde, setDesde] = useState(primeroDelMes());
+  const [hasta, setHasta] = useState("");
+  useEffect(() => {
+    let vivo = true;
+    setDatos(null); setError(null);
+    traerRecibos(sociedadId).then((d) => { if (vivo) setDatos(d); })
+      .catch((e) => {
+        if (!vivo) return;
+        if (e?.message === SIN_MIGRACION_RECIBOS) { setSinMigracion(true); return; }
+        console.error("Finanzas Lazza · Recibos:", e); setError("No se pudieron cargar los recibos. Recargá la página.");
+      });
+    return () => { vivo = false; };
+  }, [sociedadId, recarga]);
+  const q = sinAcentos(texto.trim());
+  const visibles = useMemo(() => (datos || []).filter((r) => enRango(r.fecha, desde, hasta)
+    && (!q || sinAcentos(`${r.numero} ${r.cliente} ${r.facturas.join(" ")} ${resumenMedios(r)}`).includes(q))), [datos, desde, hasta, q]);
+  if (sinMigracion) return (
+    <div className="space-y-2">
+      <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">Los recibos numerados todavía no están activos (falta correr la migración 20261019210000). Por ahora se ve 1 renglón por movimiento.</p>
+      <RecibosPorMovimiento sociedadId={sociedadId} />
+    </div>
+  );
+  const pdf = (r: Recibo, ver: boolean) => {
+    if (!sociedadActiva) return;
+    void openPDFWindow(htmlRecibo(r, sociedadActiva), ver ? undefined : `Recibo-${r.numero}.pdf`, ver);
+  };
+  const cols: Column<Recibo>[] = [
+    { key: "numero", label: "N°", sortable: true, sortValue: (r) => r.numero, render: (r) => <span className={`font-mono text-xs ${r.anulado ? "text-zinc-400 line-through" : ""}`}>{r.numero}</span> },
+    { key: "fecha", label: "Fecha", sortable: true, sortValue: (r) => r.fecha, render: (r) => formatDate(r.fecha) },
+    { key: "cliente", label: "Cliente", sortable: true, sortValue: (r) => r.cliente, render: (r) => <span className={r.anulado ? "text-zinc-400 line-through" : ""}>{r.cliente}</span> },
+    { key: "medios", label: "Medios", sortable: true, sortValue: (r) => resumenMedios(r), render: (r) => <span className="text-xs">{resumenMedios(r) || "—"}</span> },
+    { key: "facturas", label: "Facturas", sortable: true, sortValue: (r) => r.facturas.join(" "), render: (r) => <span className="font-mono text-[11px] text-zinc-500">{r.facturas.join(", ") || "—"}</span> },
+    { key: "total", label: "Importe", sortable: true, sortValue: (r) => r.total.ARS + r.total.USD * 1000, className: "text-right", render: (r) => (
+      <span className={`whitespace-nowrap font-mono font-semibold ${r.anulado ? "text-zinc-400 line-through" : "text-emerald-700 dark:text-emerald-400"}`}>{textoTotalRecibo(r.total, (v, m) => formatCurrency(v, m))}</span>
+    ) },
+    { key: "estado", label: "Banco", sortable: true, sortValue: (r) => (r.anulado ? 0 : r.conciliado ? 2 : 1), render: (r) => <span className={`text-xs ${r.anulado ? "text-red-600" : r.conciliado ? "text-emerald-600" : "text-amber-600"}`}>{r.anulado ? "Anulado" : r.conciliado ? "Conciliado" : "Pendiente"}</span> },
+    { key: "acciones", label: "", render: (r) => (
+      <span className="flex justify-end gap-0.5">
+        <button type="button" title="Ver el recibo (se abre en otra pestaña, sin descargar)" onClick={(e) => { e.stopPropagation(); pdf(r, true); }}
+          className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-orange-600 dark:hover:bg-zinc-800"><Eye className="h-3.5 w-3.5" /></button>
+        <button type="button" title="Descargar el recibo" onClick={(e) => { e.stopPropagation(); pdf(r, false); }}
+          className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-orange-600 dark:hover:bg-zinc-800"><Download className="h-3.5 w-3.5" /></button>
+      </span>
+    ) },
+  ];
+  const cobrado = visibles.filter((r) => !r.anulado).reduce((t, r) => ({ ARS: t.ARS + r.total.ARS, USD: t.USD + r.total.USD }), { ARS: 0, USD: 0 });
+  return (
+    <>
+      <Marco error={error} cargando={!datos} filtros={<>
+        <button type="button" onClick={() => setCobrando(true)}
+          className="inline-flex h-8 items-center gap-1 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700">
+          <HandCoins className="h-4 w-4" /> Nuevo cobro
+        </button>
+        <Buscador valor={texto} cambiar={setTexto} placeholder="Buscar N°, cliente, factura o medio" />
+        <Fechas desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} />
+      </>} pie={<><span>{visibles.length} recibos</span><span>Cobrado <b className="font-mono text-emerald-700 dark:text-emerald-400">{textoTotalRecibo(cobrado, (v, m) => formatCurrency(v, m))}</b></span></>}>
+        <DataTable columns={cols} data={visibles} emptyMessage="No hay recibos con ese filtro" />
       </Marco>
       {cobrando && <CobrarCliente sociedadId={sociedadId} onClose={() => setCobrando(false)} onCobrado={() => setRecarga((n) => n + 1)} />}
     </>

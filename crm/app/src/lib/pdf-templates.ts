@@ -1190,6 +1190,11 @@ export interface ReciboData {
   monto: number;
   moneda: "ARS" | "USD";
   conciliado: boolean;
+  /** Recibos numerados (Finanzas Lazza, 19/10): N° del recibo, cada medio/retención y las facturas cobradas. */
+  numeroRecibo?: number;
+  renglones?: Array<{ medio: string; detalle?: string; moneda: "ARS" | "USD"; monto: number }>;
+  facturas?: string[];
+  anulado?: boolean;
 }
 
 function textoSeguro(value: unknown): string {
@@ -1203,9 +1208,17 @@ function textoSeguro(value: unknown): string {
 
 export function generateReciboPDF(recibo: ReciboData, soc: SociedadPDF): string {
   const referencia = recibo.numero.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8).toUpperCase() || "CLIENTE";
-  const numero = `REC-${recibo.fecha.replace(/\D/g, "")}-${referencia}`;
+  const numero = recibo.numeroRecibo ? `N° ${recibo.numeroRecibo}` : `REC-${recibo.fecha.replace(/\D/g, "")}-${referencia}`;
   const monedaLabel = recibo.moneda === "USD" ? "Dólares estadounidenses" : "Pesos argentinos";
-  const estado = recibo.conciliado ? "Conciliado" : "Pendiente de conciliación";
+  const estado = recibo.anulado ? "ANULADO" : recibo.conciliado ? "Conciliado" : "Pendiente de conciliación";
+  const renglones = recibo.renglones?.length ? recibo.renglones : null;
+  const concepto = recibo.facturas?.length ? `Cobro de ${recibo.facturas.join(", ")}` : recibo.descripcion;
+  const medioTexto = renglones ? [...new Set(renglones.map((x) => x.medio))].join(", ") : recibo.medio;
+  const celda = "white-space:nowrap;word-break:normal;overflow-wrap:normal";
+  const filas = renglones
+    ? renglones.map((x) => `<tr><td>${textoSeguro(x.medio)}${x.detalle ? `<div style="font-size:9px;color:#666;margin-top:2px">${textoSeguro(x.detalle)}</div>` : ""}</td><td class="center" style="${celda}">${x.moneda}</td><td class="right mono" style="${celda}">${formatCurrency(x.monto, x.moneda)}</td></tr>`).join("")
+      + `<tr><td class="bold">Total</td><td class="center" style="${celda}">${recibo.moneda}</td><td class="right mono bold" style="${celda}">${formatCurrency(recibo.monto, recibo.moneda)}</td></tr>`
+    : `<tr><td>${textoSeguro(recibo.descripcion)}</td><td class="center" style="${celda}">${recibo.moneda}</td><td class="right mono bold" style="${celda}">${formatCurrency(recibo.monto, recibo.moneda)}</td></tr>`;
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Recibo ${numero} - ${textoSeguro(soc.razonSocial)}</title>
 <style>${baseStyles(soc.colorPrimario)}</style></head><body>
@@ -1223,11 +1236,11 @@ ${documentHeader(soc, {
     <td style="width:64%">
       <div class="compact-title">Recibimos de</div>
       <div class="compact-primary">${textoSeguro(recibo.cliente)}</div>
-      <div class="compact-line"><span class="compact-label">Concepto</span>${textoSeguro(recibo.descripcion)}</div>
+      <div class="compact-line"><span class="compact-label">Concepto</span>${textoSeguro(concepto)}</div>
     </td>
     <td style="width:36%">
       <div class="compact-title">Datos del cobro</div>
-      <div class="compact-line"><span class="compact-label">Medio</span>${textoSeguro(recibo.medio)}</div>
+      <div class="compact-line"><span class="compact-label">Medio</span>${textoSeguro(medioTexto)}</div>
       <div class="compact-line"><span class="compact-label">Moneda</span>${monedaLabel}</div>
     </td>
   </tr>
@@ -1235,7 +1248,7 @@ ${documentHeader(soc, {
 <div class="items-title">Importe recibido</div>
 <table style="table-layout:fixed">
   <thead><tr><th>Descripción</th><th class="center" style="width:76px">Moneda</th><th class="right" style="width:160px">Importe</th></tr></thead>
-  <tbody><tr><td>${textoSeguro(recibo.descripcion)}</td><td class="center" style="white-space:nowrap;word-break:normal;overflow-wrap:normal">${recibo.moneda}</td><td class="right mono bold" style="white-space:nowrap;word-break:normal;overflow-wrap:normal">${formatCurrency(recibo.monto, recibo.moneda)}</td></tr></tbody>
+  <tbody>${filas}</tbody>
 </table>
 <div class="obs-block">
   <div class="obs-title">Importe en letras</div>

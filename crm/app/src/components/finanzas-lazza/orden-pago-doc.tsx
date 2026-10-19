@@ -26,6 +26,16 @@ export async function descargarOP(opId: string, sociedad: Sociedad) {
   }
 }
 
+/** Abre la OP en una pestaña nueva para verla, sin descargarla (Augusto 19/10). */
+export async function verOP(opId: string, sociedad: Sociedad) {
+  try {
+    const { html } = await armarOP(opId, sociedad);
+    await openPDFWindow(html, undefined, true);
+  } catch (e) {
+    alert(`No se pudo armar la OP: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 /** Ventana de mail de la OP. Se monta con un opId; al cerrar o enviar avisa con onClose / onEnviada. */
 export function EnviarOrdenPago({ opId, onClose, onEnviada }: { opId: string | null; onClose: () => void; onEnviada?: (opId: string, fecha: string) => void }) {
   const { sociedadActiva } = useUser();

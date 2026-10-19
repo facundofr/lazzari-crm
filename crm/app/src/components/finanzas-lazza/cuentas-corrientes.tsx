@@ -3,11 +3,12 @@
 // Finanzas Lazza → Cuentas corrientes: clientes y proveedores en UNA lista.
 // Cobrar (19/10): en la ficha del cliente se tildan facturas → "Cobrar" (la misma liquidación de Finanzas, ver cobrar.tsx).
 // Pagar (19/10): en la ficha del proveedor se tildan facturas → "Pagar" (la misma OP de Finanzas, ver pagar.tsx).
+// Ajuste manual (19/10): mismo ajuste que Finanzas (ajuste-manual.tsx), corrige el saldo sin tocar la caja.
 // Saldo a favor (19/10): si al proveedor se le pagó antes (OP sin factura), se aplica a las facturas tildadas.
 // Opción "Moneda: la de cada cuenta" (Augusto 19/10): cada saldo pasado a su moneda al dólar BNA del día (lib unificarMoneda).
 // Saldos con las mismas reglas que Finanzas (lib/saldo-clientes y lib/saldo-proveedores); semáforo BCRA del último informe.
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { HandCoins, Loader2, Search, Wallet, X } from "lucide-react";
+import { HandCoins, Loader2, Scale, Search, Wallet, X } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
@@ -19,6 +20,7 @@ import { traerDeudas } from "./datos";
 import { CobrarCliente } from "./cobrar";
 import { PagarProveedor } from "./pagar";
 import { SaldoFavorFicha } from "@/components/saldo-favor-proveedor";
+import { AjusteManualCC } from "./ajuste-manual";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -89,6 +91,7 @@ export function FinanzasLazzaCuentasCorrientes({ sociedadId }: { sociedadId: str
   const [movs, setMovs] = useState<any[] | null>(null);
   const [tildadas, setTildadas] = useState<Set<string>>(new Set());
   const [cobrando, setCobrando] = useState(false);
+  const [ajustando, setAjustando] = useState(false);
   const [recarga, setRecarga] = useState(0);
   const hoy = todayAR();
 
@@ -106,7 +109,7 @@ export function FinanzasLazzaCuentasCorrientes({ sociedadId }: { sociedadId: str
     return () => { vivo = false; };
   }, [sociedadId, hoy, recarga]);
 
-  useEffect(() => { setTildadas(new Set()); setCobrando(false); }, [abierta?.entidadId]);
+  useEffect(() => { setTildadas(new Set()); setCobrando(false); setAjustando(false); }, [abierta?.entidadId]);
 
   // Movimientos de la cuenta abierta (últimos 100).
   useEffect(() => {
@@ -216,6 +219,10 @@ export function FinanzasLazzaCuentasCorrientes({ sociedadId }: { sociedadId: str
             )}
             <div className="mb-1 flex items-center justify-between gap-2">
               <h3 className="text-xs font-semibold uppercase text-zinc-500">Facturas con saldo</h3>
+              <button type="button" onClick={() => setAjustando(true)} title="Corrige el saldo de la cuenta corriente (no toca la caja)"
+                className="ml-auto inline-flex items-center gap-1 rounded-lg border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800">
+                <Scale className="h-3.5 w-3.5" /> Ajuste manual
+              </button>
               {abierta.lado === "cliente" ? (
                 <button type="button" onClick={() => setCobrando(true)} title={tildadas.size ? "Cobrar las facturas tildadas" : "Elegir facturas y cobrar"}
                   className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1 text-xs font-medium text-white hover:bg-emerald-700">
@@ -272,6 +279,10 @@ export function FinanzasLazzaCuentasCorrientes({ sociedadId }: { sociedadId: str
       {cobrando && abierta?.lado === "cliente" && (
         <CobrarCliente sociedadId={sociedadId} clienteId={abierta.entidadId} clienteNombre={abierta.nombre} preseleccion={[...tildadas]} directo={tildadas.size > 0}
           onClose={() => setCobrando(false)} onCobrado={() => { setTildadas(new Set()); setRecarga((n) => n + 1); }} />
+      )}
+      {ajustando && abierta && (
+        <AjusteManualCC sociedadId={sociedadId} lado={abierta.lado} entidadId={abierta.entidadId} nombre={abierta.nombre}
+          onClose={() => setAjustando(false)} onGuardado={() => setRecarga((n) => n + 1)} />
       )}
       {cobrando && abierta?.lado === "proveedor" && (
         <PagarProveedor sociedadId={sociedadId} proveedorId={abierta.entidadId} facturaIds={[...tildadas]}
