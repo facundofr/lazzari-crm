@@ -30,7 +30,7 @@ export interface Recibo {
   total: { ARS: number; USD: number };
   /** Todos sus movimientos anulados. */
   anulado: boolean;
-  /** Todos sus movimientos conciliados con el banco. */
+  /** Todos sus medios (sin las retenciones) conciliados con el banco. */
   conciliado: boolean;
 }
 
@@ -67,6 +67,7 @@ export function armarRecibos(args: {
     const movs = movsDe[r.id] || [];
     const vivos = movs.filter((m) => !m.anulado);
     const anulado = movs.length > 0 && vivos.length === 0;
+    const medios = vivos.filter((m) => !String(m.tipo || "").startsWith("retencion_"));
     // Anulado: se muestra con lo que tenía (monto original), para poder verlo igual.
     const usar = anulado ? movs : vivos;
     const renglones: RenglonRecibo[] = usar
@@ -90,7 +91,8 @@ export function armarRecibos(args: {
       id: r.id, numero: r.numero, fecha: String(r.fecha).slice(0, 10), clienteId: r.cliente_id,
       cliente: (r.cliente_id && args.clientes?.[r.cliente_id]) || "Cliente sin nombre",
       renglones, facturas, total, anulado,
-      conciliado: vivos.length > 0 && vivos.every((m) => !!m.conciliado),
+      // Las retenciones no pasan por el banco: cuenta solo lo que entró (transferencias, cheques, efectivo).
+      conciliado: medios.length > 0 && medios.every((m) => !!m.conciliado),
     };
   }).sort((a, b) => b.numero - a.numero);
 }

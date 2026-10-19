@@ -14,13 +14,14 @@ Todo publicado; producción en V1.1.534. Finanzas vieja sigue en el menú (no se
 - Servidor local propio: `.claude/launch.json` → "crm-finanzas" (puerto 3005).
 
 ### Próximo
-- **Tanda 4:** Gastos con todas las variantes + recibos numerados (1 recibo = 1 cobro con su N°, con migración aditiva + rollback) + Descargar (PDF, `generateReciboPDF`) y Enviar recibos por mail (corrección 4). Diseñar con Augusto antes de tocar.
+- **Sin publicar (próxima tanda):** corrección de Recibos (columna Banco); Resumen de cuenta completo en la ficha de CC + Excel/PDF; Pagar sin facturas abre en "Pago a cuenta" (ver ESTADO).
+- **Tanda 4:** (19/10: propuestos 7 grupos de gastos, espera respuesta de Augusto; ver ESTADO) Gastos con todas las variantes + recibos numerados (1 recibo = 1 cobro con su N°, con migración aditiva + rollback) + Descargar (PDF, `generateReciboPDF`) y Enviar recibos por mail (corrección 4). Diseñar con Augusto antes de tocar.
 - **Tanda 5:** Facturar nuevo (no le gusta la de Ventas). A diseñar con Augusto.
 - Corrección 6 (formato/exportación de retenciones, SICORE v9.0): espera al contador.
 - Propuesta sin OK: "Subir Excel del banco" que acepte los 6 juntos y los reconozca solo (ver ESTADO, "EXCEL DE eCHEQ DEL BBVA").
 
 ### Pendientes de Augusto (datos)
-- **Del Sol eCheq 3644** $ 11.801.686,09 en cartera SIN cobro cargado (paga FC 405 y 406 del sistema anterior; diferencia $ 193.792,37 de retenciones a confirmar).
+- **Del Sol:** cobros de las OP 18326 y 18368 cargados el 19/10 (ver ESTADO "DEL SOL: 6 OP CRUZADAS"). FA 16-18: Augusto confirmó que no es venta repetida. Nada pendiente.
 - **11 cheques propios con fecha pasada sin debitar** ($ 23.712.482,92 al 19/10): 6 el banco los da ACTIVO (el que lo recibió no lo cobró), 5 no salen en el Excel (trae solo 100).
 - **~30 líneas del banco sin cruzar** (orden de trabajo más abajo, "A medias / próximo paso exacto").
 

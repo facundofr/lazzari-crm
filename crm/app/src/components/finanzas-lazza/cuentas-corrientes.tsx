@@ -6,6 +6,7 @@
 // Ajuste manual (19/10): mismo ajuste que Finanzas (ajuste-manual.tsx), corrige el saldo sin tocar la caja.
 // Saldo a favor (19/10): si al proveedor se le pagó antes (OP sin factura), se aplica a las facturas tildadas.
 // Opción "Moneda: la de cada cuenta" (Augusto 19/10): cada saldo pasado a su moneda al dólar BNA del día (lib unificarMoneda).
+// Resumen de cuenta (19/10): la ficha muestra TODOS los movimientos con saldo acumulado (resumen-cuenta.tsx).
 // Saldos con las mismas reglas que Finanzas (lib/saldo-clientes y lib/saldo-proveedores); semáforo BCRA del último informe.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { HandCoins, Loader2, Scale, Search, Wallet, X } from "lucide-react";
@@ -14,13 +15,13 @@ import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, unificarMoneda, type FilaCuentaCorriente, type FilaVencimiento, type Semaforo } from "@/lib/finanzas-lazza";
-import { clasificarMovimiento } from "@/lib/tipos-movimiento";
 import { elegirDolares } from "@/lib/dolar-presupuesto";
 import { traerDeudas } from "./datos";
 import { CobrarCliente } from "./cobrar";
 import { PagarProveedor } from "./pagar";
 import { SaldoFavorFicha } from "@/components/saldo-favor-proveedor";
 import { AjusteManualCC } from "./ajuste-manual";
+import { ResumenCuentaFicha } from "./resumen-cuenta";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -88,7 +89,6 @@ export function FinanzasLazzaCuentasCorrientes({ sociedadId }: { sociedadId: str
   const [texto, setTexto] = useState("");
   const [enSuMoneda, setEnSuMoneda] = useState(false);
   const [abierta, setAbierta] = useState<FilaCuentaCorriente | null>(null);
-  const [movs, setMovs] = useState<any[] | null>(null);
   const [tildadas, setTildadas] = useState<Set<string>>(new Set());
   const [cobrando, setCobrando] = useState(false);
   const [ajustando, setAjustando] = useState(false);
@@ -110,18 +110,6 @@ export function FinanzasLazzaCuentasCorrientes({ sociedadId }: { sociedadId: str
   }, [sociedadId, hoy, recarga]);
 
   useEffect(() => { setTildadas(new Set()); setCobrando(false); setAjustando(false); }, [abierta?.entidadId]);
-
-  // Movimientos de la cuenta abierta (últimos 100).
-  useEffect(() => {
-    if (!abierta) return;
-    let vivo = true;
-    setMovs(null);
-    db.from("movimientos").select("id, tipo, monto, monto_original, moneda, descripcion, fecha, anulado, cliente_id, proveedor_id, nota_credito_compra_id, ajuste_sentido")
-      .eq("sociedad_id", sociedadId).eq(abierta.lado === "cliente" ? "cliente_id" : "proveedor_id", abierta.entidadId)
-      .order("fecha", { ascending: false }).limit(100)
-      .then(({ data }: any) => { if (vivo) setMovs(data || []); });
-    return () => { vivo = false; };
-  }, [abierta, sociedadId]);
 
   const q = texto.trim().toLowerCase();
   // "Moneda: la de cada cuenta": saldo y vencido pasados a la moneda del cliente (proveedores en $), solo para mostrar.
@@ -150,6 +138,10 @@ export function FinanzasLazzaCuentasCorrientes({ sociedadId }: { sociedadId: str
     for (const f of visibles) { t[f.lado].ARS += f.saldo.ARS; t[f.lado].USD += f.saldo.USD; }
     return t;
   }, [visibles]);
+
+  // Saldo de la ficha sin pasar de moneda: el resumen se compara contra este.
+  const saldoFichaAbierta = useMemo(() => (!abierta || !datos ? null
+    : datos.filas.find((f) => f.entidadId === abierta.entidadId && f.lado === abierta.lado)?.saldo ?? { ARS: 0, USD: 0 }), [abierta, datos]);
 
   const facturasAbierta: FilaVencimiento[] = useMemo(() => !abierta || !datos ? [] : datos.vencimientos
     .filter((v) => v.entidadId === abierta.entidadId && (v.lado === "venta") === (abierta.lado === "cliente")), [abierta, datos]);
@@ -218,7 +210,7 @@ export function FinanzasLazzaCuentasCorrientes({ sociedadId }: { sociedadId: str
                 onAplicado={() => { setTildadas(new Set()); setRecarga((n) => n + 1); }} />
             )}
             <div className="mb-1 flex items-center justify-between gap-2">
-              <h3 className="text-xs font-semibold uppercase text-zinc-500">Facturas con saldo</h3>
+              <h3 className="text-xs font-semibold uppercase text-zinc-500">Facturas pendientes</h3>
               <button type="button" onClick={() => setAjustando(true)} title="Corrige el saldo de la cuenta corriente (no toca la caja)"
                 className="ml-auto inline-flex items-center gap-1 rounded-lg border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800">
                 <Scale className="h-3.5 w-3.5" /> Ajuste manual
@@ -253,26 +245,8 @@ export function FinanzasLazzaCuentasCorrientes({ sociedadId }: { sociedadId: str
                 </tbody>
               </table>
             )}
-            <h3 className="mb-1 text-xs font-semibold uppercase text-zinc-500">Movimientos (últimos 100)</h3>
-            {movs === null ? <p className="text-xs text-zinc-400">Cargando…</p> : movs.length === 0 ? <p className="text-xs text-zinc-400">Sin movimientos.</p> : (
-              <table className="w-full text-xs">
-                <tbody>
-                  {movs.map((m) => {
-                    const clase = clasificarMovimiento({ ...m, anulado: false });
-                    const monto = m.anulado ? Number(m.monto_original ?? m.monto) : Number(m.monto);
-                    return (
-                      <tr key={m.id} className={`border-t border-zinc-100 dark:border-zinc-800 ${m.anulado ? "text-zinc-400 line-through" : ""}`}>
-                        <td className="py-1 pr-2 whitespace-nowrap">{formatDate(m.fecha)}</td>
-                        <td className="pr-2">{m.descripcion || m.tipo}</td>
-                        <td className={`text-right font-mono whitespace-nowrap ${m.anulado ? "" : clase === "ingreso" || clase === "retencion_sufrida" ? "text-emerald-600" : clase === "egreso" ? "text-red-600" : ""}`}>
-                          {formatCurrency(monto, m.moneda === "USD" ? "USD" : "ARS")}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
+            <ResumenCuentaFicha sociedadId={sociedadId} lado={abierta.lado} entidadId={abierta.entidadId} nombre={abierta.nombre} cuit={abierta.cuit}
+              saldoFicha={saldoFichaAbierta} recarga={recarga} />
           </div>
         </div>
       )}

@@ -13,7 +13,7 @@ const recibos = armarRecibos({
     { recibo_id: "r3", movimiento_id: "m5" }, { recibo_id: "r3", movimiento_id: "m6" },
   ],
   movimientos: [
-    { id: "m1", tipo: "retencion_iibb", monto: "20857.24", moneda: "ARS", conciliado: true },
+    { id: "m1", tipo: "retencion_iibb", monto: "20857.24", moneda: "ARS", conciliado: false }, // la retención no pasa por el banco
     { id: "m2", tipo: "cheque_recibido", monto: 2145833.33, moneda: "ARS", conciliado: true },
     { id: "m3", tipo: "efectivo", monto: 215599.87, moneda: "ARS", conciliado: true, factura_id: "fB" },
     // anulado entero: se muestra con el monto original
@@ -33,7 +33,7 @@ assert.equal(r1.cliente, "TODD SA");
 assert.deepEqual(r1.renglones.map((x) => x.medio), ["Cheque", "Efectivo", "Ret. IIBB"]); // retenciones al final
 assert.equal(r1.total.ARS, 2382290.44);
 assert.deepEqual(r1.facturas, ["FA 0015-00000010", "FA 0015-00000012"]);
-assert.equal(r1.conciliado, true);
+assert.equal(r1.conciliado, true); // cheque y efectivo conciliados; la retención no cuenta
 assert.equal(r1.anulado, false);
 
 const r2 = recibos.find((r) => r.numero === 1001)!;

@@ -1259,6 +1259,59 @@ ${documentFooter(soc, `Recibo ${numero}`)}
 </div></body></html>`;
 }
 
+/** Resumen de cuenta corriente (Finanzas Lazza): todos los movimientos con Debe / Haber / Saldo. */
+export interface ResumenCuentaPDFData {
+  nombre: string;
+  cuit?: string | null;
+  lado: "cliente" | "proveedor";
+  fecha: string;
+  renglones: Array<{ fecha: string; detalle: string; nota?: string; moneda: "ARS" | "USD"; importe: number; debe: number; haber: number; suma: boolean; anulado: boolean; saldo: number }>;
+  saldo: { ARS: number; USD: number };
+}
+
+export function generateResumenCuentaPDF(d: ResumenCuentaPDFData, soc: SociedadPDF): string {
+  const celda = "white-space:nowrap";
+  const filas = d.renglones.map((r) => {
+    const gris = !r.suma || r.anulado;
+    const estilo = `${gris ? "color:#999;" : ""}${r.anulado ? "text-decoration:line-through;" : ""}`;
+    const monto = (v: number) => (v > 0.005 ? formatCurrency(v, r.moneda) : "");
+    return `<tr style="${estilo}"><td style="${celda}">${formatDate(r.fecha)}</td>`
+      + `<td>${textoSeguro(r.detalle)}${r.nota ? `<div style="font-size:8px;color:#888;margin-top:1px">${textoSeguro(r.nota)}</div>` : ""}</td>`
+      + `<td class="right mono" style="${celda}">${gris ? `<span style="font-weight:400">${formatCurrency(r.importe, r.moneda)}</span>` : monto(r.debe)}</td>`
+      + `<td class="right mono" style="${celda}">${gris ? "" : monto(r.haber)}</td>`
+      + `<td class="right mono" style="${celda}">${gris ? "" : formatCurrency(r.saldo, r.moneda)}</td></tr>`;
+  }).join("");
+  const saldoTexto = (["ARS", "USD"] as const).filter((m) => m === "ARS" || Math.abs(d.saldo.USD) > 0.005 || d.renglones.some((r) => r.moneda === "USD"))
+    .map((m) => formatCurrency(d.saldo[m], m)).join(" + ");
+  const quien = d.lado === "cliente" ? "Cliente" : "Proveedor";
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Resumen de cuenta - ${textoSeguro(d.nombre)}</title>
+<style>${baseStyles(soc.colorPrimario)}</style></head><body>
+<div class="page">
+${documentHeader(soc, { title: "Resumen de cuenta corriente", number: textoSeguro(d.nombre), date: formatDate(d.fecha), legalLegend: true })}
+<table class="compact-strip">
+  <tr>
+    <td style="width:64%">
+      <div class="compact-title">${quien}</div>
+      <div class="compact-primary">${textoSeguro(d.nombre)}</div>
+      ${d.cuit ? `<div class="compact-line"><span class="compact-label">CUIT</span>${textoSeguro(d.cuit)}</div>` : ""}
+    </td>
+    <td style="width:36%">
+      <div class="compact-title">Saldo al ${formatDate(d.fecha)}</div>
+      <div class="compact-primary">${saldoTexto}</div>
+      <div class="compact-line">${d.lado === "cliente" ? "Positivo = nos debe" : "Positivo = le debemos"}</div>
+    </td>
+  </tr>
+</table>
+<table style="table-layout:fixed">
+  <thead><tr><th style="width:70px">Fecha</th><th>Comprobante / detalle</th><th class="right" style="width:105px">Debe</th><th class="right" style="width:105px">Haber</th><th class="right" style="width:110px">Saldo</th></tr></thead>
+  <tbody>${filas}</tbody>
+</table>
+<div style="font-size:8px;color:#888;margin-top:6px">En gris: anulados y movimientos que no suman al saldo (por ejemplo, cobros de facturas del sistema anterior).</div>
+${documentFooter(soc, `Resumen de cuenta - ${textoSeguro(d.nombre)}`)}
+</div></body></html>`;
+}
+
 export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
   const c = soc.colorPrimario;
   const mon = op.moneda;

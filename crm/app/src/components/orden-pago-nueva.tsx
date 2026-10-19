@@ -300,14 +300,17 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
         }
 
         if (cancelled) return;
-        setOpFCPendientes((data || []).map((fc: any) => {
+        const pendientes = (data || []).map((fc: any) => {
           const pagado = pagadoPorFC[fc.id] || 0;
           const saldo = roundPaymentMoney(Math.max(0, Number(fc.total) - pagado));
           const esDirecta = pagoParcialDirecto && pagoParcialFCId === fc.id;
           // Desde Finanzas Lazza (Vencimientos) la factura elegida viene tildada; se pueden sumar otras.
           const tildada = esDirecta || (!pagoParcialDirecto && !!facturaIds?.includes(fc.id));
           return { id: fc.id, numero: fc.numero_factura || "S/N", tipo_comprobante: fc.tipo_comprobante || "FC", fecha: fc.fecha, total: Number(fc.total), subtotal: Number(fc.subtotal || 0), iva: Number(fc.iva || 0), percepciones: Number(fc.percepciones || 0), saldo_pendiente: saldo, moneda: fc.moneda || "ARS", selected: tildada, monto_a_pagar: tildada ? saldo : 0 };
-        }).filter((fc: any) => fc.saldo_pendiente > 0));
+        }).filter((fc: any) => fc.saldo_pendiente > 0);
+        setOpFCPendientes(pendientes);
+        // Sin facturas pendientes: abre directo como pago a cuenta (Augusto 19/10). Se puede apagar.
+        if (!pendientes.length && !pagoParcialDirecto) setOpForm(prev => prev.usar_monto_manual ? prev : { ...prev, usar_monto_manual: true, monto_manual: 0 });
 
         // NC del proveedor con crédito disponible (total − aplicaciones vigentes)
         try {
@@ -973,7 +976,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
               {opFCLoading ? (
                 <div className="flex items-center gap-2 text-xs text-zinc-400 py-2"><Loader2 className="h-3 w-3 animate-spin" />Cargando facturas...</div>
               ) : opFCPendientes.length === 0 ? (
-                <p className="text-xs text-zinc-400 py-1">Sin facturas pendientes</p>
+                <p className="text-xs text-zinc-400 py-1">Sin facturas pendientes: se carga como pago a cuenta (queda a favor nuestro y después se aplica a la factura).</p>
               ) : (
                 <div className="border border-zinc-200 dark:border-zinc-700 rounded-lg overflow-hidden">
                   <table className="w-full text-sm">
@@ -1151,7 +1154,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
           {opForm.proveedor_id && (
             <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-1.5">
               <div className="flex items-center justify-between">
-                <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">Monto manual (sin facturas) <span className="font-normal text-zinc-400">— monto libre sin vincular facturas</span></label>
+                <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">Pago a cuenta (sin factura) <span className="font-normal text-zinc-400">— monto libre, sin vincular facturas</span></label>
                 <button type="button" onClick={() => setOpForm({ ...opForm, usar_monto_manual: !opForm.usar_monto_manual, monto_manual: 0 })}
                   className={`relative inline-flex h-5 w-9 items-center rounded-full ${opForm.usar_monto_manual ? "bg-orange-500" : "bg-zinc-300 dark:bg-zinc-600"}`}>
                   <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${opForm.usar_monto_manual ? "translate-x-4.5" : "translate-x-0.5"}`} />
