@@ -1,15 +1,17 @@
 "use client";
 
 // Finanzas Lazza → Cuentas corrientes: clientes y proveedores en UNA lista (solo lectura).
+// Opción "Moneda: la de cada cuenta" (Augusto 19/10): cada saldo pasado a su moneda al dólar BNA del día (lib unificarMoneda).
 // Saldos con las mismas reglas que Finanzas (lib/saldo-clientes y lib/saldo-proveedores); semáforo BCRA del último informe.
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, Search, X } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
-import { armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, type FilaCuentaCorriente, type FilaVencimiento, type Semaforo } from "@/lib/finanzas-lazza";
+import { armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, unificarMoneda, type FilaCuentaCorriente, type FilaVencimiento, type Semaforo } from "@/lib/finanzas-lazza";
 import { clasificarMovimiento } from "@/lib/tipos-movimiento";
+import { elegirDolares } from "@/lib/dolar-presupuesto";
 import { traerDeudas } from "./datos";
 
 const db = supabase as any;
@@ -32,20 +34,27 @@ async function traerSemaforos(tabla: string, campo: string, sociedadId: string):
 }
 
 async function traerCuentas(sociedadId: string, hoy: string) {
-  const [deudas, clientes, proveedores, bcraClientes, bcraProveedores] = await Promise.all([
+  const antes = new Date(Date.parse(`${hoy}T12:00:00Z`) - 15 * 86_400_000).toISOString().slice(0, 10);
+  const [deudas, clientes, proveedores, bcraClientes, bcraProveedores, cotiz] = await Promise.all([
     traerDeudas(sociedadId, hoy),
-    traerTodo<any>(() => db.from("clientes").select("id, razon_social, cuit").eq("sociedad_id", sociedadId).order("id")),
+    traerTodo<any>(() => db.from("clientes").select("id, razon_social, cuit, moneda_predeterminada").eq("sociedad_id", sociedadId).order("id")),
     traerTodo<any>(() => db.from("proveedores").select("id, razon_social, cuit").eq("sociedad_id", sociedadId).order("id")),
     traerSemaforos("cliente_bcra_informes", "cliente_id", sociedadId),
     traerSemaforos("proveedor_bcra_informes", "proveedor_id", sociedadId),
+    db.from("cotizaciones_dolar").select("fecha, tipo, valor_venta, fuente, es_manual").in("tipo", ["oficial_billetes", "oficial_divisas"]).gte("fecha", antes).lte("fecha", hoy).order("fecha", { ascending: false }),
   ]);
+  const dolares = elegirDolares(cotiz?.data || [], hoy);
+  const monedaCliente: Record<string, string | null> = {};
+  for (const c of clientes) monedaCliente[c.id] = c.moneda_predeterminada ?? null;
   return {
+    dolares, monedaCliente,
     filas: armarCuentasCorrientes({ clientes, proveedores, saldosClientes: deudas.saldosClientes, saldosProveedores: deudas.saldosProveedores, vencimientos: deudas.vencimientos, bcraClientes, bcraProveedores }),
     vencimientos: deudas.vencimientos,
   };
 }
 
-const COLUMNAS: Column<FilaCuentaCorriente>[] = [
+// Orden por el valor total en pesos (las cuentas en US$ no se van al fondo).
+const columnas = (enPesos: (m: { ARS: number; USD: number }) => number): Column<FilaCuentaCorriente>[] => [
   { key: "nombre", label: "Nombre", sortable: true, sortValue: (f) => f.nombre, render: (f) => (
     <span className="flex items-center gap-2">
       {f.bcra && <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${COLOR_BCRA[f.bcra]}`} title={`BCRA: ${f.bcra}`} />}
@@ -53,13 +62,13 @@ const COLUMNAS: Column<FilaCuentaCorriente>[] = [
     </span>
   ) },
   { key: "lado", label: "Tipo", sortable: true, sortValue: (f) => f.lado, render: (f) => <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${f.lado === "cliente" ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300" : "bg-orange-50 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300"}`}>{f.lado === "cliente" ? "Cliente" : "Proveedor"}</span> },
-  { key: "saldo", label: "Saldo", sortable: true, sortValue: (f) => f.saldo.ARS, className: "text-right", render: (f) => (
+  { key: "saldo", label: "Saldo", sortable: true, sortValue: (f) => enPesos(f.saldo), className: "text-right", render: (f) => (
     <span className={`whitespace-nowrap font-mono ${f.saldo.ARS < 0 || f.saldo.USD < 0 ? "text-emerald-600" : "font-semibold"}`}>
       {montos(f.saldo, "$ 0")}
       {(f.saldo.ARS < 0 || f.saldo.USD < 0) && <span className="block text-[10px] font-sans">a favor {f.lado === "cliente" ? "del cliente" : "nuestro"}</span>}
     </span>
   ) },
-  { key: "vencido", label: "Vencido", sortable: true, sortValue: (f) => f.vencido.ARS, className: "text-right", render: (f) => <span className={`whitespace-nowrap font-mono ${f.vencido.ARS > 0 || f.vencido.USD > 0 ? "text-red-600" : "text-zinc-400"}`}>{montos(f.vencido)}</span> },
+  { key: "vencido", label: "Vencido", sortable: true, sortValue: (f) => enPesos(f.vencido), className: "text-right", render: (f) => <span className={`whitespace-nowrap font-mono ${f.vencido.ARS > 0 || f.vencido.USD > 0 ? "text-red-600" : "text-zinc-400"}`}>{montos(f.vencido)}</span> },
   { key: "proximo", label: "Próx. vencimiento", sortable: true, sortValue: (f) => f.proximoVencimiento || "9999", render: (f) => (f.proximoVencimiento ? formatDate(f.proximoVencimiento) : "—") },
 ];
 
@@ -69,6 +78,7 @@ export function FinanzasLazzaCuentasCorrientes({ sociedadId }: { sociedadId: str
   const [lado, setLado] = useState<"todos" | "cliente" | "proveedor">("todos");
   const [soloConSaldo, setSoloConSaldo] = useState(true);
   const [texto, setTexto] = useState("");
+  const [enSuMoneda, setEnSuMoneda] = useState(false);
   const [abierta, setAbierta] = useState<FilaCuentaCorriente | null>(null);
   const [movs, setMovs] = useState<any[] | null>(null);
   const hoy = todayAR();
@@ -95,11 +105,26 @@ export function FinanzasLazzaCuentasCorrientes({ sociedadId }: { sociedadId: str
   }, [abierta, sociedadId]);
 
   const q = texto.trim().toLowerCase();
-  const visibles = useMemo(() => (datos?.filas || [])
+  // "Moneda: la de cada cuenta": saldo y vencido pasados a la moneda del cliente (proveedores en $), solo para mostrar.
+  const filas = useMemo(() => {
+    if (!datos) return [];
+    if (!enSuMoneda) return datos.filas;
+    const tc = { billete: datos.dolares.billete?.valor ?? null, divisa: datos.dolares.divisa?.valor ?? null };
+    return datos.filas.map((f) => {
+      const ficha = f.lado === "cliente" ? datos.monedaCliente[f.entidadId] : null;
+      return { ...f, saldo: unificarMoneda(f.saldo, ficha, tc), vencido: unificarMoneda(f.vencido, ficha, tc) };
+    });
+  }, [datos, enSuMoneda]);
+
+  const tcOrden = datos?.dolares.divisa?.valor || datos?.dolares.billete?.valor || 0;
+  const enPesos = useCallback((m: { ARS: number; USD: number }) => m.ARS + m.USD * tcOrden, [tcOrden]);
+  const cols = useMemo(() => columnas(enPesos), [enPesos]);
+
+  const visibles = useMemo(() => filas
     .filter((f) => lado === "todos" || f.lado === lado)
     .filter((f) => !soloConSaldo || tieneSaldo(f))
     .filter((f) => !q || `${f.nombre} ${f.cuit}`.toLowerCase().includes(q))
-    .sort((a, b) => (b.vencido.ARS - a.vencido.ARS) || (b.saldo.ARS - a.saldo.ARS)), [datos, lado, soloConSaldo, q]);
+    .sort((a, b) => (enPesos(b.vencido) - enPesos(a.vencido)) || (enPesos(b.saldo) - enPesos(a.saldo))), [filas, lado, soloConSaldo, q, enPesos]);
 
   const totales = useMemo(() => {
     const t = { cliente: { ARS: 0, USD: 0 }, proveedor: { ARS: 0, USD: 0 } };
@@ -128,13 +153,24 @@ export function FinanzasLazzaCuentasCorrientes({ sociedadId }: { sociedadId: str
         <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-300">
           <input type="checkbox" checked={soloConSaldo} onChange={(e) => setSoloConSaldo(e.target.checked)} className="h-4 w-4 accent-orange-500" /> Solo con saldo
         </label>
+        <select value={enSuMoneda ? "una" : "separadas"} onChange={(e) => setEnSuMoneda(e.target.value === "una")} className={control} title="Pasa cada saldo a la moneda de esa cuenta al dólar BNA del día (solo para ver)">
+          <option value="separadas">Moneda: $ y US$ separados</option>
+          <option value="una">Moneda: la de cada cuenta</option>
+        </select>
       </div>
 
       {!datos ? (
         <p className="flex items-center gap-2 py-6 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Cargando…</p>
       ) : (
         <div className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-          <DataTable columns={COLUMNAS} data={visibles} onRowClick={setAbierta} emptyMessage="No hay cuentas con ese filtro" />
+          {enSuMoneda && (
+            <p className="border-b border-zinc-200 px-3 py-1.5 text-[11px] text-zinc-500 dark:border-zinc-700">
+              Cada cuenta en su moneda (ficha del cliente: US$ divisa, US$ billete o $; proveedores en $), al dólar BNA
+              {datos.dolares.divisa ? ` divisa ${formatCurrency(datos.dolares.divisa.valor)} (${formatDate(datos.dolares.divisa.fecha)})` : " divisa: sin dato"}
+              {datos.dolares.billete ? ` · billete ${formatCurrency(datos.dolares.billete.valor)} (${formatDate(datos.dolares.billete.fecha)})` : " · billete: sin dato"}. Solo para ver: no cambia nada.
+            </p>
+          )}
+          <DataTable columns={cols} data={visibles} onRowClick={setAbierta} emptyMessage="No hay cuentas con ese filtro" />
           <div className="flex flex-wrap justify-end gap-x-6 gap-y-1 border-t border-zinc-200 px-3 py-2 text-xs dark:border-zinc-700">
             <span className="text-zinc-400">{visibles.length} cuentas</span>
             {lado !== "proveedor" && <span className="text-zinc-500">Nos deben <b className="font-mono text-emerald-700 dark:text-emerald-400">{montos(totales.cliente, "$ 0")}</b></span>}

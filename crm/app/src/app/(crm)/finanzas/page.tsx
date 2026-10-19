@@ -30,6 +30,7 @@ import { supabase } from "@/lib/supabase/client";
 import { generateOrdenPagoPDF, generateReciboPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
+import { EnviarOrdenPago } from "@/components/finanzas-lazza/orden-pago-doc";
 import * as XLSX from "xlsx";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
 import { useCargaMasiva, EVENTO_FACTURAS_COMPRA } from "@/components/carga-masiva-global";
@@ -822,6 +823,7 @@ export default function FinanzasPage() {
   const [editingOP, setEditingOP] = useState(false);
   const [editOPForm, setEditOPForm] = useState<{ fecha: string; moneda: "ARS" | "USD"; notas: string }>({ fecha: "", moneda: "ARS", notas: "" });
   const [savingOP, setSavingOP] = useState(false);
+  const [opEnviarId, setOpEnviarId] = useState<string | null>(null);
   const [emailModal, setEmailModal] = useState<{ open: boolean; id: string; to: string; subject: string; body: string; filename: string; suggestedEmails: { email: string; label?: string }[]; extraAttachments: { filename: string; url: string }[] }>({ open: false, id: "", to: "", subject: "", body: "", filename: "", suggestedEmails: [], extraAttachments: [] });
 
   // Gastos manuales state
@@ -2357,7 +2359,8 @@ export default function FinanzasPage() {
     return true;
   }
 
-  async function handleCreateOP() {
+  // "Guardar y enviar" (Augusto 19/10/2026): al crear la OP se abre el mail al proveedor con la OP y los comprobantes.
+  async function handleCreateOP(enviar = false) {
     if (!sociedadActiva?.id) { setOpError("No se pudo determinar la sociedad activa"); return; }
     if (!opForm.proveedor_id) { setOpError("Selecciona un proveedor"); return; }
     const selectedFCs = opFCPendientes.filter(f => f.selected);
@@ -2522,6 +2525,7 @@ export default function FinanzasPage() {
       setOpModalOpen(false);
       opRequestKeyRef.current = "";
       await fetchData();
+      if (enviar && opId) setOpEnviarId(opId);
       if (Number(opData?.saldo_a_favor || 0) > 0) {
         alert(`${opNumero} registrada. Crédito a nuestro favor: ${formatCurrency(Number(opData.saldo_a_favor), opForm.moneda)}.`);
       }
@@ -6963,10 +6967,19 @@ export default function FinanzasPage() {
             </div>
             <div className="flex justify-end gap-3 mt-3 pt-3 border-t border-zinc-200 dark:border-zinc-700">
               <button onClick={() => setOpModalOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
-              <button onClick={pagoParcialDirecto ? handleRegistrarPagoParcialDirecto : handleCreateOP} disabled={opSaving || !opForm.proveedor_id || (opMontoBruto <= 0)}
+              {!pagoParcialDirecto && (
+                <button onClick={() => handleCreateOP(false)} disabled={opSaving || !opForm.proveedor_id || (opMontoBruto <= 0)}
+                  title="Crea la OP sin mandar nada; la mandás después desde la lista"
+                  className="flex items-center gap-2 rounded-lg border border-orange-300 px-4 py-2 text-sm font-medium text-orange-600 hover:bg-orange-50 disabled:opacity-50 dark:hover:bg-orange-950/30">
+                  {opSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                  Guardar
+                </button>
+              )}
+              <button onClick={pagoParcialDirecto ? handleRegistrarPagoParcialDirecto : () => handleCreateOP(true)} disabled={opSaving || !opForm.proveedor_id || (opMontoBruto <= 0)}
+                title={pagoParcialDirecto ? undefined : "Crea la OP y abre el mail al proveedor con la OP y los comprobantes"}
                 className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
                 {opSaving && <Loader2 className="h-4 w-4 animate-spin" />}
-                {pagoParcialDirecto ? "Registrar pago parcial" : "Crear Orden de pago"}
+                {pagoParcialDirecto ? "Registrar pago parcial" : "Guardar y enviar"}
               </button>
             </div>
           </div>
@@ -7849,6 +7862,7 @@ export default function FinanzasPage() {
           </div>
         </>
       )}
+      <EnviarOrdenPago opId={opEnviarId} onClose={() => setOpEnviarId(null)} onEnviada={() => { void fetchData(); }} />
       <EmailComposeModal
         open={emailModal.open}
         onClose={() => setEmailModal(prev => ({ ...prev, open: false }))}

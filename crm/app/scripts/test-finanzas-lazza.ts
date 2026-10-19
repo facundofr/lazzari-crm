@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { armarRetenciones, armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, armarTcDelDia, armarVencimientos, filtrarVencimientos, ivaDelMes, nivelObjetivo, reporteBasico, saldoFacturaCompra, type FacturaVentaFL } from "../src/lib/finanzas-lazza";
+import { armarRetenciones, armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, armarTcDelDia, armarVencimientos, filtrarVencimientos, ivaDelMes, nivelObjetivo, reporteBasico, saldoFacturaCompra, unificarMoneda, sumarDias, conVencimiento, type FacturaVentaFL } from "../src/lib/finanzas-lazza";
 
 const tcDia = armarTcDelDia([{ fecha: "2026-10-09", valor_venta: 1400 }, { fecha: "2026-10-14", valor_venta: 1500 }]);
 assert.equal(tcDia("2026-10-14"), 1500);
@@ -153,5 +153,19 @@ const ret = armarRetenciones({
   ],
 });
 assert.deepEqual(ret.map((r) => [r.id, r.lado, r.impuesto, r.monto]), [["pd-m1", "practicada", "Ganancias", 200], ["rs-m2", "sufrida", "IIBB", 300], ["op-o1", "practicada", "Ganancias", 1000]]);
+
+// Cuentas corrientes en una sola moneda
+const tcU = { billete: 1000, divisa: 1100 };
+assert.deepEqual(unificarMoneda({ ARS: 550000, USD: 100 }, "USD Divisa", tcU), { ARS: 0, USD: 600 });
+assert.deepEqual(unificarMoneda({ ARS: 500000, USD: 100 }, "USD", tcU), { ARS: 0, USD: 600 });
+assert.deepEqual(unificarMoneda({ ARS: 1000, USD: 10 }, "ARS", tcU), { ARS: 12000, USD: 0 });
+assert.deepEqual(unificarMoneda({ ARS: 1000, USD: 10 }, null, { billete: 1000, divisa: null }), { ARS: 11000, USD: 0 });
+assert.deepEqual(unificarMoneda({ ARS: 1000, USD: 10 }, "USD", { billete: null, divisa: null }), { ARS: 1000, USD: 10 });
+
+// Vencimientos editables
+assert.equal(sumarDias("2026-10-19", 30), "2026-11-18");
+assert.equal(sumarDias("2026-02-27", 2), "2026-03-01");
+const fvto = { lado: "venta" as const, id: "x", entidadId: "c", fecha: "2026-10-01", vence: "2026-10-01", sinVencimiento: true, comprobante: "FA", nombre: "C", moneda: "ARS" as const, total: 1, saldo: 1, dias: -18 };
+assert.deepEqual([conVencimiento(fvto, "2026-10-31", "2026-10-19").dias, conVencimiento(fvto, "2026-10-31", "2026-10-19").sinVencimiento], [12, false]);
 
 console.log("test-finanzas-lazza OK");

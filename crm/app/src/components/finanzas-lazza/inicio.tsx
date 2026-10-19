@@ -137,12 +137,12 @@ function loaders(sociedadId: string, periodo: string, hoy: string): (() => Promi
         movimientos: { valor: `${hoyCount.count ?? 0} hoy`, sub: "ver historial" },
       };
     },
-    // Bancos: saldo según banco de las cuentas activas en pesos.
+    // Bancos: lo mismo que el total de la pantalla Bancos (cuentas, FCI y efectivo en pesos; saldo según banco o, si no hay, al corte).
     async () => {
-      const { data, error } = await db.from("cuentas_financieras").select("tipo, moneda, activa, saldo_banco").eq("sociedad_id", sociedadId);
+      const { data, error } = await db.from("cuentas_financieras").select("tipo, moneda, activa, saldo_banco, saldo_inicial").eq("sociedad_id", sociedadId);
       if (error) throw error;
-      const ars = (data || []).filter((c: any) => c.activa !== false && c.moneda !== "USD" && ["cuenta_corriente", "caja_ahorro", "efectivo"].includes(c.tipo))
-        .reduce((s: number, c: any) => s + Number(c.saldo_banco || 0), 0);
+      const ars = (data || []).filter((c: any) => c.activa !== false && c.moneda !== "USD" && ["cuenta_corriente", "caja_ahorro", "fci", "efectivo"].includes(c.tipo))
+        .reduce((s: number, c: any) => s + Number(c.saldo_banco ?? c.saldo_inicial ?? 0), 0);
       return { bancos: { valor: millones(ars), sub: "según banco" } };
     },
     // Cheques propios a debitar en los próximos 7 días.

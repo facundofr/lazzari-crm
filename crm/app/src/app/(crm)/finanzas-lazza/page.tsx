@@ -1,11 +1,12 @@
 "use client";
 
 /**
- * Finanzas Lazza (ex "Admin Augu"), al lado de Finanzas, que NO se toca. Solo lectura, sin migraciones.
+ * Finanzas Lazza (ex "Admin Augu"), al lado de Finanzas, que NO se toca.
  * Tanda 1 (18/10/2026): Reportes, IVA y Vencimientos. Tanda 2 (18/10/2026): inicio con 14 tarjetas
  * (Augusto: "juntá la A y la B") y todo adentro, sin abrir las pantallas viejas: Facturas, Cuentas corrientes,
  * Vencimientos de deuda, Órdenes de pago, Recibos, Retenciones, IVA, Movimientos, Objetivos y Reportes.
- * Facturar, Bancos, Cheques y Gastos son pantallas nuevas que se arman en las próximas tandas.
+ * Tanda 3 (19/10/2026): Bancos y Cheques nuevos, y correcciones de Augusto (mandar OP, moneda única en cuentas corrientes,
+ * vencimientos editables, columna OP en facturas de compra). Facturar y Gastos se arman en las próximas tandas.
  * Por ahora la ve solo super_admin (en armado con Augusto).
  */
 import { useState } from "react";
@@ -20,13 +21,13 @@ import { FinanzasLazzaObjetivos, FinanzasLazzaReportes } from "@/components/fina
 import { FinanzasLazzaIva } from "@/components/finanzas-lazza/iva";
 import { FinanzasLazzaVencimientos } from "@/components/finanzas-lazza/vencimientos";
 import { FinanzasLazzaCuentasCorrientes } from "@/components/finanzas-lazza/cuentas-corrientes";
+import { FinanzasLazzaCheques } from "@/components/finanzas-lazza/cheques";
+import { FinanzasLazzaBancos } from "@/components/finanzas-lazza/bancos";
 import { FinanzasLazzaMovimientos, FinanzasLazzaOrdenesPago, FinanzasLazzaRecibos, FinanzasLazzaRetenciones } from "@/components/finanzas-lazza/listas";
 
 /** Pantallas nuevas que todavía no están (se diseñan con Augusto en las próximas tandas). */
 const EN_ARMADO: Partial<Record<SeccionFL, string>> = {
   facturar: "La pantalla nueva de Facturar se diseña con vos en la Tanda 5.",
-  bancos: "Bancos (efectivo, tarjetas, préstamos y BAVSA) se arma en la Tanda 3.",
-  cheques: "Cheques (totales, lista completa, Martín F. y subir el Excel del banco) se arma en la Tanda 3.",
   gastos: "Gastos con todas las variantes (grupos, fijos/eventuales, débito automático, editable) se arma en la Tanda 4.",
 };
 
@@ -71,6 +72,8 @@ export default function FinanzasLazzaPage() {
       case "recibos": return <FinanzasLazzaRecibos sociedadId={sociedadId} />;
       case "retenciones": return <FinanzasLazzaRetenciones sociedadId={sociedadId} />;
       case "iva": return <FinanzasLazzaIva sociedadId={sociedadId} periodo={periodo} />;
+      case "bancos": return <FinanzasLazzaBancos sociedadId={sociedadId} />;
+      case "cheques": return <FinanzasLazzaCheques sociedadId={sociedadId} />;
       case "movimientos": return <FinanzasLazzaMovimientos sociedadId={sociedadId} />;
       case "objetivos": return <FinanzasLazzaObjetivos sociedadId={sociedadId} periodo={periodo} />;
       case "reportes": return <FinanzasLazzaReportes sociedadId={sociedadId} periodo={periodo} />;
@@ -80,7 +83,7 @@ export default function FinanzasLazzaPage() {
 
   return (
     <div>
-      <Header title="Finanzas Lazza" subtitle={sociedadActiva?.nombre ? `${sociedadActiva.nombre} · solo lectura` : "Solo lectura"} />
+      <Header title="Finanzas Lazza" subtitle={sociedadActiva?.nombre || undefined} />
       <div className="space-y-3 px-3 py-3 sm:px-4">
         {vista && (
           <div className="flex flex-wrap items-center justify-between gap-2">

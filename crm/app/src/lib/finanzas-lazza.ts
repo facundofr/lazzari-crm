@@ -559,3 +559,30 @@ export function armarRetenciones(input: {
   }
   return out.sort((a, b) => a.fecha.localeCompare(b.fecha));
 }
+
+// ── Cuentas corrientes en una sola moneda (Augusto 19/10/2026) ─────────
+/**
+ * Pasa el saldo de una cuenta a SU moneda, solo para mostrar: cliente con ficha "USD Divisa" → todo en US$ al
+ * dólar divisa; "USD" (billete) → todo en US$ al billete; pesos o sin ficha (y proveedores) → todo en $ al divisa.
+ * Sin dólar del tipo que corresponde usa el otro; sin ninguno devuelve el saldo como está.
+ */
+export function unificarMoneda(m: { ARS: number; USD: number }, monedaFicha: string | null | undefined, tc: { billete: number | null; divisa: number | null }): { ARS: number; USD: number } {
+  const f = String(monedaFicha || "").trim().toLowerCase();
+  const enUsd = f.startsWith("usd");
+  const divisa = f.includes("divisa");
+  const t = (enUsd && !divisa ? (tc.billete || tc.divisa) : (tc.divisa || tc.billete)) || 0;
+  if (!(t > 0)) return { ...m };
+  const r2 = (x: number) => Math.round(x * 100) / 100;
+  return enUsd ? { ARS: 0, USD: r2(m.USD + m.ARS / t) } : { ARS: r2(m.ARS + m.USD * t), USD: 0 };
+}
+
+// ── Vencimientos editables (Augusto 19/10/2026) ──────────────────────
+/** Fecha + días (AAAA-MM-DD). */
+export function sumarDias(fecha: string, dias: number): string {
+  return new Date(Date.parse(`${fecha.slice(0, 10)}T12:00:00Z`) + Math.round(dias) * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** La fila con un vencimiento nuevo (recalcula los días que faltan). */
+export function conVencimiento(f: FilaVencimiento, vence: string, hoy: string): FilaVencimiento {
+  return { ...f, vence, sinVencimiento: false, dias: diasEntre(hoy, vence) };
+}

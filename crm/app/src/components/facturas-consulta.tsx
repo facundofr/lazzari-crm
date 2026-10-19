@@ -3,7 +3,8 @@
 // Consulta de facturas (SOLO LECTURA), para todos los roles: facturas de venta y de compra.
 // Venta: ver detalle, PDF y reenviarla al cliente por mail. Compra: ver detalle y el archivo del proveedor.
 // No emite, no cobra, no paga, no anula: eso sigue en Finanzas (solo administración).
-// La usan el menú "Facturas" (/consulta-facturas) y Finanzas Lazza (`completa`: pestaña "Todas" + filtros de estado, moneda y fechas).
+// La usan el menú "Facturas" (/consulta-facturas) y Finanzas Lazza (`completa`: pestaña "Todas" + filtros de estado, moneda y fechas,
+// y en compras la columna "OP" al final para descargar la orden de pago que la pagó — Augusto 19/10/2026).
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -18,7 +19,7 @@ import { generateFacturaPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64, doc
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { estadoVisibleFactura } from "@/lib/estado-factura-venta";
 import { emisorDeSociedad } from "@/lib/emisor-sociedad";
-import { cargarOPsDeFacturas, abrirOrdenPagoPDF, type OPResumen } from "@/lib/orden-pago-pdf";
+import { cargarOPsDeFacturas, abrirOrdenPagoPDF, opsPorFactura, type OPResumen } from "@/lib/orden-pago-pdf";
 import { Download, FileText, Mail, Paperclip, Search, X } from "lucide-react";
 import { destinatariosCortos } from "@/lib/envio-factura-texto";
 
@@ -128,6 +129,7 @@ export function FacturasConsulta({ completa = false }: { completa?: boolean }) {
   const [itemsCompra, setItemsCompra] = useState<ItemCompra[]>([]);
   const [opsCompra, setOpsCompra] = useState<OPResumen[] | null>(null);
   const [bajandoOP, setBajandoOP] = useState<string | null>(null);
+  const [opsDeFC, setOpsDeFC] = useState<Map<string, OPResumen[]>>(new Map());
   const [mail, setMail] = useState<{ open: boolean; to: string; subject: string; body: string; filename: string; sugeridos: { email: string; label?: string }[] }>({ open: false, to: "", subject: "", body: "", filename: "", sugeridos: [] });
 
   const cargar = useCallback(async () => {
@@ -147,12 +149,13 @@ export function FacturasConsulta({ completa = false }: { completa?: boolean }) {
       ]);
       setVentas(v);
       setCompras(c);
+      if (completa) opsPorFactura(supabase, c.map((f) => f.id)).then(setOpsDeFC).catch(() => setOpsDeFC(new Map()));
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudieron traer las facturas");
     } finally {
       setCargando(false);
     }
-  }, [sociedadActiva?.id]);
+  }, [sociedadActiva?.id, completa]);
 
   useEffect(() => { cargar(); }, [cargar]);
 
@@ -305,6 +308,22 @@ export function FacturasConsulta({ completa = false }: { completa?: boolean }) {
     ) : <span className="text-xs text-zinc-400">—</span> },
   ];
 
+  // Columna OP: cada orden de pago (sin anuladas) que pagó la factura, con su PDF.
+  const celdaOP = (facturaId: string) => {
+    const ops = opsDeFC.get(facturaId) || [];
+    if (!ops.length) return <span className="text-xs text-zinc-300">—</span>;
+    return (
+      <span className="flex flex-col items-start gap-0.5">
+        {ops.map((op) => (
+          <button key={op.id} type="button" disabled={bajandoOP === op.id} onClick={(e) => { e.stopPropagation(); bajarOP(op.id); }} title="Descargar la orden de pago"
+            className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1 font-mono text-xs text-orange-600 hover:bg-orange-50 disabled:opacity-50 dark:hover:bg-zinc-800">
+            <Download className="h-3 w-3" /> {bajandoOP === op.id ? "Armando…" : op.numero}
+          </button>
+        ))}
+      </span>
+    );
+  };
+
   const colCompras: Column<FacturaCompra>[] = [
     { key: "fecha", label: "Fecha", sortable: true, sortValue: (f) => f.fecha, render: (f) => formatDate(f.fecha) },
     { key: "comp", label: "Comprobante", sortable: true, sortValue: (f) => f.numero_factura, render: (f) => <span className="font-mono text-xs">{[f.tipo_comprobante, f.numero_factura].filter(Boolean).join(" ")}</span> },
@@ -313,6 +332,7 @@ export function FacturasConsulta({ completa = false }: { completa?: boolean }) {
     { key: "total", label: "Total", sortable: true, sortValue: (f) => Number(f.total), className: "text-right", render: (f) => <span className="tabular-nums">{formatCurrency(Number(f.total), f.moneda as Moneda)}</span> },
     { key: "estado", label: "Estado", render: (f) => <Badge variant={f.estado === "pagada" ? "success" : f.estado === "anulada" ? "default" : "info"}>{f.estado === "pagada" ? "Pagada" : f.estado === "anulada" ? "Anulada" : "A pagar"}</Badge> },
     { key: "archivo", label: "", render: (f) => f.archivo_url ? <Paperclip className="h-3.5 w-3.5 text-zinc-400" /> : null },
+    ...(completa ? [{ key: "op", label: "OP", render: (f: FacturaCompra) => celdaOP(f.id) }] : []),
   ];
 
   const colTodas: Column<FilaTodas>[] = [
@@ -323,6 +343,7 @@ export function FacturasConsulta({ completa = false }: { completa?: boolean }) {
     { key: "ref", label: "PR / OC", render: (f) => <span className="text-xs text-zinc-500">{f.ref || "—"}</span> },
     { key: "total", label: "Total", sortable: true, sortValue: (f) => f.total, className: "text-right", render: (f) => <span className="tabular-nums">{formatCurrency(f.total, f.moneda)}</span> },
     { key: "estado", label: "Estado", sortable: true, sortValue: (f) => f.estado.label, render: (f) => <Badge variant={f.estado.variant}>{f.estado.label}</Badge> },
+    ...(completa ? [{ key: "op", label: "OP", render: (f: FilaTodas) => (f.compra ? celdaOP(f.compra.id) : null) }] : []),
   ];
 
   const fila = (label: React.ReactNode, valor: React.ReactNode) => (

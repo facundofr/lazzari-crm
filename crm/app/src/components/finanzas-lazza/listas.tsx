@@ -3,13 +3,15 @@
 // Finanzas Lazza → Órdenes de pago, Recibos, Retenciones y Movimientos (solo lectura).
 // Mismos datos y reglas que las pestañas de Finanzas; acá solo se miran, con filtros y orden por columna.
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Loader2, Search } from "lucide-react";
+import { Download, Loader2, Mail, MailCheck, Search } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { clasificarMovimiento, esCobroDeCliente, type ClaseMovimiento } from "@/lib/tipos-movimiento";
 import { armarRetenciones, type FilaRetencion } from "@/lib/finanzas-lazza";
+import { useUser } from "@/lib/auth-context";
+import { descargarOP, EnviarOrdenPago } from "@/components/finanzas-lazza/orden-pago-doc";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -78,7 +80,7 @@ const sumar = <T,>(filas: T[], monto: (f: T) => number, moneda: (f: T) => "ARS" 
   return <>{formatCurrency(t.ARS)}{Math.abs(t.USD) >= 0.01 && <> + {formatCurrency(t.USD, "USD")}</>}</>;
 };
 
-// ── Órdenes de pago ─────────────────────────────────────────────────
+// ── Órdenes de pago (Augusto 19/10: descargarlas y mandarlas desde acá) ──
 
 interface OP { id: string; numero: string; fecha: string; proveedor: string; cuit: string; bruto: number; retGan: number; retPct: number | null; neto: number; moneda: "ARS" | "USD"; medios: string[]; estado: string; enviada: string | null; sobreVerde: boolean }
 
@@ -97,15 +99,18 @@ export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string })
       };
     });
   }, [sociedadId]);
+  const { sociedadActiva } = useUser();
+  const [enviando, setEnviando] = useState<string | null>(null);
+  const [enviadas, setEnviadas] = useState<Record<string, string>>({});
   const [texto, setTexto] = useState("");
   const [estado, setEstado] = useState("");
   const [envio, setEnvio] = useState("");
   const [desde, setDesde] = useState("");
   const [hasta, setHasta] = useState("");
   const q = sinAcentos(texto.trim());
-  const visibles = useMemo(() => (datos || []).filter((o) =>
+  const visibles = useMemo(() => (datos || []).map((o) => (enviadas[o.id] ? { ...o, enviada: enviadas[o.id] } : o)).filter((o) =>
     (!estado || o.estado === estado) && (!envio || (envio === "si") === !!o.enviada) && enRango(o.fecha, desde, hasta)
-    && (!q || sinAcentos(`${o.numero} ${o.proveedor} ${o.cuit} ${o.medios.join(" ")}`).includes(q))), [datos, estado, envio, desde, hasta, q]);
+    && (!q || sinAcentos(`${o.numero} ${o.proveedor} ${o.cuit} ${o.medios.join(" ")}`).includes(q))), [datos, enviadas, estado, envio, desde, hasta, q]);
   const cols: Column<OP>[] = [
     { key: "numero", label: "N°", sortable: true, sortValue: (o) => o.numero, render: (o) => <span className="font-mono text-xs">{o.numero}</span> },
     { key: "fecha", label: "Fecha", sortable: true, sortValue: (o) => o.fecha, render: (o) => formatDate(o.fecha) },
@@ -116,6 +121,16 @@ export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string })
     { key: "medio", label: "Medio", sortable: true, sortValue: (o) => o.medios.join(" "), render: (o) => <span className="text-xs">{o.medios.join(" · ")}</span> },
     { key: "estado", label: "Estado", sortable: true, sortValue: (o) => o.estado, render: (o) => <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${o.estado === "pagada" ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300" : o.estado === "anulada" ? "bg-red-50 text-red-700 line-through dark:bg-red-950/40 dark:text-red-300" : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"}`}>{o.estado === "pagada" ? "Pagada" : o.estado === "anulada" ? "Anulada" : "Pendiente"}</span> },
     { key: "enviada", label: "Enviada", sortable: true, sortValue: (o) => o.enviada || "", render: (o) => o.enviada ? <span className="text-xs text-emerald-600">✓ {formatDate(o.enviada)}</span> : o.sobreVerde ? <span className="text-xs text-zinc-500">Sobre verde</span> : <span className="text-xs text-zinc-400">—</span> },
+    { key: "acciones", label: "", render: (o) => (
+      <span className="flex justify-end gap-0.5">
+        <button type="button" title="Descargar la OP" onClick={(e) => { e.stopPropagation(); if (sociedadActiva) descargarOP(o.id, sociedadActiva); }}
+          className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-orange-600 dark:hover:bg-zinc-800"><Download className="h-3.5 w-3.5" /></button>
+        {o.estado !== "anulada" && (
+          <button type="button" title={o.enviada ? `Enviada el ${formatDate(o.enviada)}: mandarla otra vez` : "Mandar la OP por mail (con los comprobantes)"} onClick={(e) => { e.stopPropagation(); setEnviando(o.id); }}
+            className={`rounded p-1.5 hover:bg-orange-50 dark:hover:bg-zinc-800 ${o.enviada ? "text-emerald-600" : "text-orange-500"}`}>{o.enviada ? <MailCheck className="h-3.5 w-3.5" /> : <Mail className="h-3.5 w-3.5" />}</button>
+        )}
+      </span>
+    ) },
   ];
   return (
     <Marco error={error} cargando={!datos} filtros={<>
@@ -125,6 +140,7 @@ export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string })
       <Fechas desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} />
     </>} pie={<><span>{visibles.length} órdenes</span><span>Entregado <b className="font-mono">{sumar(visibles.filter((o) => o.estado !== "anulada"), (o) => o.neto, (o) => o.moneda)}</b></span></>}>
       <DataTable columns={cols} data={visibles} emptyMessage="No hay órdenes de pago con ese filtro" />
+      <EnviarOrdenPago opId={enviando} onClose={() => setEnviando(null)} onEnviada={(id, fecha) => setEnviadas((e) => ({ ...e, [id]: fecha }))} />
     </Marco>
   );
 }
