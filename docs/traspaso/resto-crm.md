@@ -30,7 +30,7 @@ Que Augusto y los chicos trabajen sin trabas: arreglar lo que falla, simplificar
 - **Falta verlo en producción** (hoy va por V1.1.517) con el usuario de Augusto, sin guardar: que esos 4 no estén en el menú, que /importaciones diga "Próximamente" y la versión de abajo. El 17/10 se abrió el login en el navegador de la app pero no llegó a entrar (cambio de cuenta).
 
 ## Sin publicar
-- 20/10: Finanzas Lazza > Retenciones con botones TXT SICORE y Excel por rango de fechas (`listas.tsx`, `api/sicore/route.ts` con `formato=json`, `lib/sicore-linea.ts`). Ver ESTADO. Falta ver la pantalla, porque en local pide login.
+- Nada. Retenciones TXT SICORE + Excel salió en V1.1.541 (20/10). Pendiente: cargar concepto "servicios" a los proveedores que corresponda (hoy todo sale 78 bienes; Augusto lo deja para más adelante).
 Nada. "Se sacan 3 IA" salió en V1.1.532; "Sin datos inventados" sale en la tanda V1.1.534 (19/10, junto con Remitos y Transportes).
 - El cambio local en `crm/app/tsconfig.json` NO es de este chat (no se publica).
 
