@@ -74,6 +74,8 @@ const MEDIO_TIPOS = [
   { value: "efectivo", label: "Efectivo" },
   { value: "echeq", label: "Cheque / E-Cheq" },
   { value: "deposito", label: "Depósito" },
+  // Augusto 20/10/2026: cobros con link de pago de Mercado Pago (sin cuenta de banco).
+  { value: "link_pago", label: "Link de pago (Mercado Pago)" },
 ];
 
 const RETENCION_TIPOS = [

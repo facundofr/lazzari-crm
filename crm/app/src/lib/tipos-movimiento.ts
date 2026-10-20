@@ -19,7 +19,7 @@ export interface MovimientoClasificable {
 }
 
 /** Medios con los que un cliente nos paga. */
-export const TIPOS_COBRO = ["cobro", "transferencia", "efectivo", "tarjeta", "cheque_recibido", "echeq", "deposito"] as const;
+export const TIPOS_COBRO = ["cobro", "transferencia", "efectivo", "tarjeta", "link_pago", "cheque_recibido", "echeq", "deposito"] as const;
 /** Medios con los que pagamos a un proveedor. */
 export const TIPOS_PAGO = ["pago", "cheque_emitido", "transferencia", "efectivo", "tarjeta", "echeq"] as const;
 export const TIPOS_RETENCION = ["retencion_iva", "retencion_ganancias", "retencion_iibb", "retencion_suss"] as const;

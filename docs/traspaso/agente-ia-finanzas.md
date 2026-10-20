@@ -14,6 +14,7 @@ Todo publicado; producción en V1.1.539. Finanzas vieja sigue en el menú (no se
 - Servidor local propio: `.claude/launch.json` → "crm-finanzas" (puerto 3005).
 
 ### Próximo
+- **Link de pago (20/10):** forma de cobro nueva `link_pago` (migración 20261020180000 corrida; código publicado en V1.1.545). Daletto FB 16-1 cobrada con link de pago el 02/09 (recibo 1066).
 - **Gastos (Tanda 4, 20/10, migración corrida; publicado V1.1.544):** `components/finanzas-lazza/gastos.tsx` + `lib/gastos-lazza.ts`; migración `20261020150000_gastos_grupos_debito_automatico.sql` CORRIDA. Detalle en ESTADO ("FINANZAS LAZZA › GASTOS (TANDA 4)").
 - **V1.1.540 (20/10):** Anular OP (y "Anular y pagar de nuevo"), N° de OP en un renglón, "Marcar pagada con tarjeta" en la ficha de compra. Publicado y probado.
 - **Facturas (19/10, PUBLICADO V1.1.539 y probado en producción):** `components/finanzas-lazza/facturas.tsx` reemplaza Pagar, Cobrar y Vencimientos (una fila por factura, Ventas | Compras, Pendientes/Vencidas/Todas, tildar → Pagar/Cobrar (n), Cobrada/Pagada con con Ver/Descargar/Enviar, Enviar recibo por mail). Detalle en ESTADO ("FINANZAS LAZZA › FACTURAS").

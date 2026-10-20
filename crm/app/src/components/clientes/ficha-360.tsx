@@ -58,7 +58,7 @@ function textoMonedas(t: { ARS: number; USD: number }) {
 }
 
 // Los cobros se guardan con el medio de pago como tipo (ver facturacion-content.tsx), no solo "cobro".
-const TIPOS_COBRO = ["cobro", "transferencia", "efectivo", "tarjeta", "cheque_recibido", "echeq", "retencion_iibb", "retencion_ganancias", "retencion_iva"];
+const TIPOS_COBRO = ["cobro", "transferencia", "efectivo", "tarjeta", "link_pago", "cheque_recibido", "echeq", "retencion_iibb", "retencion_ganancias", "retencion_iva"];
 
 export function Ficha360({ sociedadId, cliente }: { sociedadId: string | undefined; cliente: { id: string; razon_social: string; cuit?: string | null; limite_credito?: number | null } }) {
   const [loading, setLoading] = useState(true);

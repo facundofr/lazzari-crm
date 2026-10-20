@@ -29,7 +29,7 @@ const primeroDelMes = () => `${todayAR().slice(0, 7)}-01`;
 
 const TIPO_LABEL: Record<string, string> = {
   cobro: "Cobro", pago: "Pago", cheque_emitido: "Cheque emitido", cheque_recibido: "Cheque recibido", transferencia: "Transferencia",
-  efectivo: "Efectivo", deposito: "Depósito", ajuste: "Ajuste", tarjeta: "Tarjeta", echeq: "E-Cheq",
+  efectivo: "Efectivo", deposito: "Depósito", ajuste: "Ajuste", tarjeta: "Tarjeta", link_pago: "Link de pago", echeq: "E-Cheq",
   retencion_iva: "Ret. IVA", retencion_ganancias: "Ret. Ganancias", retencion_iibb: "Ret. IIBB", retencion_suss: "Ret. SUSS",
 };
 const MEDIO_LABEL: Record<string, string> = { transferencia: "Transf.", cheque: "Cheque", cheque_propio: "Ch. propio", echeq: "E-Cheq", deposito: "Depósito", tarjeta: "Tarjeta", efectivo: "Efectivo" };

@@ -37,7 +37,7 @@ export interface Recibo {
 }
 
 export const MEDIO_RECIBO: Record<string, string> = {
-  cobro: "Cobro", transferencia: "Transferencia", efectivo: "Efectivo", tarjeta: "Tarjeta", cheque_recibido: "Cheque",
+  cobro: "Cobro", transferencia: "Transferencia", efectivo: "Efectivo", tarjeta: "Tarjeta", link_pago: "Link de pago", cheque_recibido: "Cheque",
   echeq: "E-Cheq", deposito: "Depósito", retencion_iva: "Ret. IVA", retencion_ganancias: "Ret. Ganancias",
   retencion_iibb: "Ret. IIBB", retencion_suss: "Ret. SUSS",
 };
