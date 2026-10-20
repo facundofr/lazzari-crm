@@ -648,7 +648,9 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
                   {/* ¿Quién lo lleva? */}
                   <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-4">
                     <label className="col-span-2 flex flex-col gap-0.5 text-[11px] text-zinc-500">¿Quién lo lleva?
-                      <Select value={valorTransporte} onChange={(e) => elegirTransporte(e.target.value)} options={opcionesTransporte} />
+                      <Autocompletar className="w-full !rounded-md !border-zinc-300 !px-2 !py-1 !text-sm placeholder:text-zinc-800 dark:placeholder:text-zinc-100" mostrarSinEscribir
+                        placeholder={opcionesTransporte.find((o) => o.value === valorTransporte)?.label || "Todavía no sé"}
+                        opciones={opcionesTransporte.map((o) => ({ valor: o.value, texto: o.label }))} onElegir={elegirTransporte} />
                     </label>
                     {(entrega.modo === "transporte" || entrega.modo === "propio") ? (
                       <label className="col-span-2 flex flex-col gap-0.5 text-[11px] text-zinc-500 sm:col-span-1">Costo flete $ (opcional)

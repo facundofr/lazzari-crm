@@ -14,13 +14,13 @@ assert.equal(costoNumero("12.500,50"), 12500.5);
 assert.equal(costoNumero("$ 12500.5"), 12500.5);
 assert.equal(costoNumero("abc"), null);
 
-// Remito nuevo: lo de la sucursal; sin transportista de sucursal, el último del cliente; sin nada, "no sé".
-assert.deepEqual(entregaInicial(suc, null, "t2"), { modo: "transporte", transportista_id: "t1", domicilio: "Ruta 8 km 371", localidad: "Venado Tuerto", costo: "" });
-assert.equal(entregaInicial({ ...suc, transportista_id: null }, null, "t2").transportista_id, "t2");
+// Remito nuevo: domicilio de la sucursal; el transporte arranca SIEMPRE en "no sé" (nunca se asigna solo).
+assert.deepEqual(entregaInicial(suc, null, "t2"), { modo: "nose", transportista_id: null, domicilio: "Ruta 8 km 371", localidad: "Venado Tuerto", costo: "" });
+assert.equal(entregaInicial({ ...suc, transportista_id: null }, null, "t2").transportista_id, null);
 assert.deepEqual(entregaInicial(null, { direccion: "Av. Siempre Viva 1", localidad: "Rosario" }, null), { modo: "nose", transportista_id: null, domicilio: "Av. Siempre Viva 1", localidad: "Rosario", costo: "" });
 
 // Remito guardado
-const def = entregaInicial(suc, null, null);
+const def = { ...entregaInicial(suc, null, null), modo: "transporte" as const, transportista_id: "t1" }; // lo que elige una persona: el transportista de la sucursal
 const viaje: FilaTransporte = { id: "v1", transportista: "Cruz del Sur", transportista_id: "t1", tipo: "externo", estado: "solicitado", destino: null, costo: 8000, created_at: "2026-10-16T10:00" };
 assert.deepEqual(entregaGuardada({ direccion_entrega_snapshot: "Otra 123", localidad_entrega_snapshot: "Rufino", transportista_id: "t1" }, viaje, def), { modo: "transporte", transportista_id: "t1", domicilio: "Otra 123", localidad: "Rufino", costo: "8000" });
 assert.equal(entregaGuardada({ direccion_entrega_snapshot: RETIRA_TEXTO, localidad_entrega_snapshot: null, transportista_id: null }, null, def).modo, "retira");
@@ -31,7 +31,7 @@ assert.equal(entregaGuardada({ direccion_entrega_snapshot: null, localidad_entre
 // ¿Distinto de la sucursal?
 assert.deepEqual(difiereDeSucursal(def, suc), { domicilio: false, transportista: false });
 assert.deepEqual(difiereDeSucursal({ ...def, domicilio: "ruta 8 KM 371 " }, suc), { domicilio: false, transportista: false }, "mayúsculas/espacios no cuentan");
-assert.deepEqual(difiereDeSucursal({ ...def, transportista_id: "t2" }, suc), { domicilio: false, transportista: true });
+assert.deepEqual(difiereDeSucursal({ ...def, modo: "transporte", transportista_id: "t2" }, suc), { domicilio: false, transportista: true });
 assert.deepEqual(difiereDeSucursal({ ...def, localidad: "Rufino" }, suc), { domicilio: true, transportista: false });
 assert.deepEqual(difiereDeSucursal({ ...def, modo: "retira" }, suc), { domicilio: false, transportista: false });
 

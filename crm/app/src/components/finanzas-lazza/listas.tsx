@@ -484,12 +484,12 @@ export function FinanzasLazzaRetenciones({ sociedadId }: { sociedadId: string })
     ]);
     return armarRetenciones({ ops, movimientos: movs });
   }, [sociedadId]);
-  const [lado, setLado] = useState<"" | "practicada" | "sufrida">("");
+  const [lado, setLado] = useState<"practicada" | "sufrida">("practicada");
   const [texto, setTexto] = useState("");
   const [desde, setDesde] = useState(primeroDelMes());
   const [hasta, setHasta] = useState("");
   const q = sinAcentos(texto.trim());
-  const visibles = useMemo(() => (datos || []).filter((r) => (!lado || r.lado === lado) && enRango(r.fecha, desde, hasta)
+  const visibles = useMemo(() => (datos || []).filter((r) => r.lado === lado && enRango(r.fecha, desde, hasta)
     && (!q || sinAcentos(`${r.nombre} ${r.cuit} ${r.origen} ${r.impuesto}`).includes(q))), [datos, lado, desde, hasta, q]);
   const cols: Column<FilaRetencion>[] = [
     { key: "fecha", label: "Fecha", sortable: true, sortValue: (r) => r.fecha, render: (r) => formatDate(r.fecha) },
@@ -503,7 +503,7 @@ export function FinanzasLazzaRetenciones({ sociedadId }: { sociedadId: string })
   ];
   return (
     <Marco error={error} cargando={!datos} filtros={<>
-      {([["", "Todas"], ["practicada", "Practicadas"], ["sufrida", "Sufridas"]] as const).map(([k, l]) => (
+      {([["practicada", "Practicadas"], ["sufrida", "Sufridas"]] as const).map(([k, l]) => (
         <button key={k} type="button" onClick={() => setLado(k)}
           className={`rounded-lg border px-3 py-1 text-xs font-medium ${lado === k ? "border-orange-400 bg-orange-50 text-orange-700 dark:bg-orange-950/30 dark:text-orange-300" : "border-zinc-200 bg-white text-zinc-600 hover:border-orange-300 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"}`}>
           {l}
@@ -514,8 +514,7 @@ export function FinanzasLazzaRetenciones({ sociedadId }: { sociedadId: string })
       <ExportarSicore sociedadId={sociedadId} desde={desde} hasta={hasta} />
     </>} pie={<>
       <span>{visibles.length} retenciones</span>
-      {lado !== "sufrida" && <span>Practicadas <b className="font-mono">{sumar(visibles.filter((r) => r.lado === "practicada"), (r) => r.monto, (r) => r.moneda)}</b></span>}
-      {lado !== "practicada" && <span>Sufridas <b className="font-mono">{sumar(visibles.filter((r) => r.lado === "sufrida"), (r) => r.monto, (r) => r.moneda)}</b></span>}
+      <span>{lado === "practicada" ? "Practicadas" : "Sufridas"} <b className="font-mono">{sumar(visibles, (r) => r.monto, (r) => r.moneda)}</b></span>
     </>}>
       <DataTable columns={cols} data={visibles} emptyMessage="No hay retenciones con ese filtro" />
     </Marco>

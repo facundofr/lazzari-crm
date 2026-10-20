@@ -63,11 +63,11 @@ export function filaVigente(filas: FilaTransporte[]): FilaTransporte | null {
   return vivas[0] || null;
 }
 
-/** Entrega para un remito nuevo: domicilio de la sucursal (o del cliente) y su transportista; si no tiene, el último que usó el cliente. */
-export function entregaInicial(suc: SucursalEntrega | null, cliente: { direccion: string | null; localidad: string | null } | null, ultimoTransportista: string | null): Entrega {
-  const base = suc || { direccion: cliente?.direccion ?? null, localidad: cliente?.localidad ?? null, transportista_id: null };
-  const tid = suc?.transportista_id || ultimoTransportista || null;
-  return { modo: tid ? "transporte" : "nose", transportista_id: tid, domicilio: limpio(base.direccion), localidad: limpio(base.localidad), costo: "" };
+/** Entrega para un remito nuevo: domicilio de la sucursal (o del cliente). El transporte arranca SIEMPRE en "Todavía no sé":
+ *  nunca se asigna solo, lo elige una persona (los parámetros de transportista se ignoran). */
+export function entregaInicial(suc: SucursalEntrega | null, cliente: { direccion: string | null; localidad: string | null } | null, _ultimoTransportista?: string | null): Entrega {
+  const base = suc || { direccion: cliente?.direccion ?? null, localidad: cliente?.localidad ?? null };
+  return { modo: "nose", transportista_id: null, domicilio: limpio(base.direccion), localidad: limpio(base.localidad), costo: "" };
 }
 
 /** Entrega de un remito ya hecho (lo guardado manda; si es un remito viejo sin nada, la de la sucursal). */

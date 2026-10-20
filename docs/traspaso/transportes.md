@@ -1,4 +1,4 @@
-# Traspaso — chat Transportes (18/10/2026)
+# Traspaso — chat Transportes (actualizado 19/10/2026)
 
 ## Objetivo del chat
 Solo Transportes del CRM: transportistas, envíos y fletes (los que trabajan para Lazzari y los que cobra un proveedor en su factura),
@@ -7,7 +7,7 @@ Solo Transportes del CRM: transportistas, envíos y fletes (los que trabajan par
 ## Lo que hizo ESTE chat
 **Nada de código.** Se abrió y saludó a Augusto. También confirmó en el código que la E y lo de "Fletes del mes" NO están hechos: `transportes/page.tsx` tiene solo las pestañas "viajes" y "catalogo", y no hay liquidación ni reporte en ningún lado.
 Coordinó con el chat Remitos. Quedó esperando que Augusto elija por cuál arrancar.
-No tocó archivos ni migraciones, y no deja nada sin publicar. Producción va por V1.1.517.
+(Eso fue el 1er chat. Después se hizo la pantalla nueva: ver abajo.) Producción va por **V1.1.534** (19/10/2026).
 
 ## Lo que ya existe sobre transportes (hecho en otros chats, según `docs/ESTADO.md`)
 - **Publicado V1.1.446:** "Envío interno 🔒" en el PR (flete que paga Lazzari y no se cobra al cliente). Columna `presupuestos.costo_envio_interno`
@@ -43,10 +43,19 @@ No tocó archivos ni migraciones, y no deja nada sin publicar. Producción va po
 - Precios faltantes: quedan SIN precio por decisión de Augusto (18/10): 4 viajes de Conte, 14 de Álvarez, 3 de Cáceres, 2 de Mateo.
 - Comisionistas que importan hoy: Cernuda/Ingrid (Bs. As., lleva y trae), Álvarez (internos Pergamino, precio fijo por viaje), Cáceres, Mateo, Rodríguez (Rosario).
 
-## PANTALLA NUEVA — EN CÓDIGO 19/10, SIN PUBLICAR (Augusto avisa cuándo publicar)
+## PANTALLA SIMPLE (contador) — EN CÓDIGO 19/10, SIN PUBLICAR (reemplaza a la de V1.1.534)
+Augusto (19/10): "solo quiero… tipo un contador, por transportista, marcarle la cantidad de viajes… corte mensual… monto a cada viaje… todo editable… liquidar un viaje o más".
+- Mes ◀ ▶. Renglón por transportista: − viajes +, "$ a todos" (pisa los montos de los viajes del mes sin liquidar), total, Liquidar (tildados o todos los pendientes del mes; misma ventana de factura / liquidación interna).
+- Clic en el nombre: viajes del mes (fecha, monto, nota editables; ✕ cancela, no borra). El − cancela el último sin liquidar. El + usa hoy (o el último día si se mira otro mes).
+- **Viajes de remitos NO aparecen ni suman** (decisión de Augusto): quedan solo en Remitos. Por eso Cáceres R-1038/1078/1079/1080 (si tienen remito_id) ya no figuran en Transportes.
+- **Nada toma monto solo**, salvo el + de José Álvarez: arranca con su fijo $3.000 (`20261019230000_alvarez_precio_fijo.sql`, CORRIDA, con rollback). Al liquidar ya no se rellenan montos.
+- Se sacaron: anotador por día, grilla, historial con filtros, "$ fijo x viaje" editable.
+- Archivos: `transportes/page.tsx`, `lib/transportes-anotador.ts`, `scripts/test-transportes-anotador.ts`. tsc 0, hooks OK. Falta verla en el navegador (pide login).
+
+## PANTALLA ANTERIOR (anotador) — PUBLICADA en V1.1.534, reemplazada por la simple (commit d158623, 19/10/2026, verificada en producción)
 Archivos: `src/app/(crm)/transportes/page.tsx` (reescrita: se fue el formulario "Nuevo viaje", el cuadro de internos y "+ Parada"; quedan el catálogo y la ventana "Enviar factura a pagos"), `src/lib/transportes-anotador.ts` + `scripts/test-transportes-anotador.ts` (OK).
 Migración `20261019170000_transportistas_precio_viaje_fijo.sql` (+ rollback) **CORRIDA 19/10 con OK de Augusto.**
-tsc 0 y hooks OK. Resumen de sep/oct calculado sobre datos reales (solo lectura) OK. Vista en local 19/10 sin guardar: anotador, resumen, historial y grilla OK, sin errores en consola (no se apretó + ni Enviar a pagos porque guardan). "Liquidar" sin precio dice "(sin precio)". TRANSPORTE HERO aparece en el resumen pero no está en el catálogo (nombre viejo). Remitos YA cambió `lib/remito-entrega.ts` (19/10, sin publicar, va en su tanda): cancela o corrige el viaje siempre que no esté liquidado; si está liquidado, avisa "corregilo en Transportes".
+tsc 0 y hooks OK. Resumen de sep/oct calculado sobre datos reales (solo lectura) OK. Vista en local 19/10 sin guardar: anotador, resumen, historial y grilla OK, sin errores en consola (no se apretó + ni Enviar a pagos porque guardan). "Liquidar" sin precio dice "(sin precio)". TRANSPORTE HERO aparece en el resumen pero no está en el catálogo (nombre viejo). Remitos cambió `lib/remito-entrega.ts` (publicado también en V1.1.534): cancela o corrige el viaje siempre que no esté liquidado; si está liquidado, avisa "corregilo en Transportes".
 Al liquidar: los viajes sin precio toman el fijo; el total sale con el precio fijo. Los viejos con remito_id también muestran "Remito".
 
 ### Correcciones pendientes (Augusto las va pasando; NO ejecutar hasta que diga "ejecutá")
@@ -80,16 +89,20 @@ Descartado: resumen por WhatsApp al transportista y carga por IA.
 - Sin campo "flete incluido" por ahora (no hay monto fijo; el flete es proporcional y a veces va metido en los precios; algunos clientes no quieren ver "Envío").
 
 ## Pendiente / próximo paso
-- Augusto tiene que elegir por cuál arrancar (todavía no contestó). Antes de codear, pasarle el plan y esperar su OK.
-- Candidatos ya acordados y no hechos (confirmar antes en el código si no se hicieron en otro chat):
-  1. **E** — liquidación del mes por transportista armada sola.
-  2. Margen antes/después del flete real por venta + reporte "Fletes del mes" por cliente.
+- **a** y **b** de "Correcciones pendientes": NO ejecutar hasta que Augusto diga "ejecutá". Para b, preguntarle quién llevó R-1078/1079/1080 o si se cancelan.
+- **c** (que "¿Quién lo lleva?" arranque en "Todavía no sé") es del chat Remitos: no relayarlo desde acá salvo que Augusto lo pida.
+- Pregunta abierta: "poneme el otro desplegable" en "¿Quién lo lleva?" (no se entendió).
+- **TRANSPORTE HERO** aparece en el resumen pero no está en el catálogo (nombre viejo). Preguntarle a Augusto qué hacer; no inventar.
+- Después (con plan y OK antes de codear): margen antes/después del flete real por venta + reporte **"Fletes del mes" por cliente**.
 - Leer `docs/ARQUITECTURA.md` antes de tocar código.
 
 ## Migraciones pendientes / errores conocidos
-Ninguna de este chat. Ningún error conocido propio.
+Las 6 migraciones de datos de transportistas, más `20261019230000_alvarez_precio_fijo`, están **CORRIDAS en la base pero SIN COMMITEAR** (van en la próxima tanda, con su rollback):
+`20261018120000_comisionista_ingrid_martin`, `20261018123000_transportista_credifin_speed`, `20261018124500_transportista_conte_datos`,
+`20261018130000_proveedor_mateo_perrone`, `20261019150000_transportistas_desde_proveedores`, `20261019160000_rapido_plus_ultra`.
+Ningún error conocido propio.
 
 ## Prompt para seguir en un chat nuevo
 ```
-Sos el chat de Transportes. Leé CLAUDE.md, docs/traspaso/transportes.md y docs/ARQUITECTURA.md. Está el "PLAN APROBADO EN IDEA" para rearmar la pantalla Transportes (anotador de viajes por día y transportista, historial editable, viajes de remitos con "+", resumen del mes con Liquidar, vista Lista/Grilla). Preguntale a Augusto si arrancamos. Antes de correr la migración, mostrásela y esperá su OK. Probá en local sin guardar y no publiques hasta que lo pida. Pendiente aparte: cargar a Mateo Perrone como proveedor (datos en el traspaso) con su OK.
+Sos el chat de Transportes del CRM Lazzari. Leé CLAUDE.md, la memoria (MEMORY.md y sus archivos), docs/traspaso/transportes.md y las primeras entradas de docs/ESTADO.md. La pantalla Transportes SIMPLE (contador por transportista, $ a todos, Liquidar) está en código SIN PUBLICAR; falta verla en el navegador. Los viajes de remitos ya no aparecen en Transportes. Pendientes que NO ejecutás hasta que diga "ejecutá": (a) Cáceres R-2026-1038 al 29/9; (b) Cáceres R-1078/1079/1080: preguntame quién los llevó o si se cancelan (fijate antes si ahora quedan solo en Remitos). Después: margen antes/después del flete y reporte "Fletes del mes" por cliente (plan y OK antes de codear). TRANSPORTE HERO no está en el catálogo: preguntame. Las 7 migraciones de datos de transportistas están corridas pero sin commitear: van en la próxima tanda. Nunca asignes nada solo. No toques la base ni publiques sin mi OK.
 ```

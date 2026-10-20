@@ -326,7 +326,10 @@ export default function ComprasListaOC({ sociedadId, lazza }: {
                 : <span className="text-xs text-zinc-400">—</span> },
             { key: "estadoVista", label: "Estado", sortValue: f => ["por_enviar", "enviada", "parcial", "completo"].indexOf(f.estadoVista), render: f => (
               <span className="inline-flex items-center gap-1">
-                {lazza && (f.estadoVista === "por_enviar" || f.estadoVista === "enviada")
+                {/* Anulada (pestaña Anuladas, Augusto 20/10): cartel fijo; se reactiva abriendo la OC. */}
+                {lazza && f.estado === "cancelada"
+                  ? <span className="inline-flex whitespace-nowrap rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">Anulada</span>
+                  : lazza && (f.estadoVista === "por_enviar" || f.estadoVista === "enviada")
                   ? <button onClick={e => { e.stopPropagation(); void cambiarPedido(f); }} disabled={cambiandoPedido === f.id}
                       title={f.estadoVista === "enviada" ? "Tocá para volver a Por pedir" : "Tocá para marcarla Pedido (con la fecha de hoy)"}
                       className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium hover:ring-1 hover:ring-orange-400 disabled:opacity-60 ${ESTILO_ESTADO[f.estadoVista]}`}>
@@ -334,7 +337,7 @@ export default function ComprasListaOC({ sociedadId, lazza }: {
                       {etiqueta[f.estadoVista]}{f.estadoVista === "enviada" && f.pedido_at ? ` ${formatDate(f.pedido_at)}` : ""}
                     </button>
                   : <span className={`inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${ESTILO_ESTADO[f.estadoVista]}`}>{etiqueta[f.estadoVista]}</span>}
-                {lazza && f.estadoVista === "enviada" && (editandoFecha === f.id
+                {lazza && f.estado !== "cancelada" && f.estadoVista === "enviada" && (editandoFecha === f.id
                   ? <input type="date" autoFocus defaultValue={diaAR(f.pedido_at)} max={todayAR()} onClick={e => e.stopPropagation()}
                       onChange={e => { if (e.target.value >= "2020") void cambiarFechaPedido(f, e.target.value); }} onBlur={() => setEditandoFecha(null)}
                       onKeyDown={e => { if (e.key === "Escape") setEditandoFecha(null); }}
