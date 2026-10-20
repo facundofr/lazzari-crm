@@ -2200,7 +2200,7 @@ export default function PresupuestosPage() {
           } catch { /* si no se puede saber, sigue como siempre */ }
         }
         if (comprasSeEncarga) {
-          toast.info(profile?.prueba_compras_nueva ? "Pedidos armados: mandalos desde Compras nueva → Para pedir." : "Listo: Compras se encarga de pedirle a los proveedores.");
+          toast.info(profile?.prueba_compras_nueva ? "Pedidos armados: están en Compras Lazza, Por pedir." : "Listo: Compras se encarga de pedirle a los proveedores.");
         } else
         // Propuesta: enviar ya las OC con proveedor que todavía no se pidieron (sugerencia, se puede cerrar).
         try {

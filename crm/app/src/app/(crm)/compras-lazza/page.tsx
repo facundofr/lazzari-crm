@@ -8,87 +8,52 @@
  * - "Llegó": Completo o Parcial por artículo (components/compras-lazza-llego).
  * - "Cargar factura": simple y permisiva (components/compras-lazza-factura). Desde el 19/10 la factura ya no se ata a ninguna OC:
  *   va directo a la cuenta corriente del proveedor (lo ya vinculado queda como está). La OC solo controla que llegue todo.
- * Solo la ven en el menú los que tienen la casilla "Prueba: Compras nueva".
+ * La marca 👁 Observar se sacó (Augusto 19/10); las columnas quedan en la base.
+ * - "Nueva OC" a mano, sin PR (components/compras-lazza-nueva-oc). Abriendo la OC: operador, Anular / Reactivar (Augusto 19/10).
+ * Solo la ven en el menú los que tienen la casilla "Compras Lazza" (columna prueba_compras_nueva). La pantalla vieja "Compras" quedó fuera del menú.
  */
 import { useState } from "react";
 import { Header } from "@/components/layout/header";
 import { useUser } from "@/lib/auth-context";
-import { useToast } from "@/components/ui/toast";
-import { supabase } from "@/lib/supabase/client";
 import ComprasListaOC, { type OcLazza } from "@/components/compras-lista-oc";
 import ComprasLazzaLlego from "@/components/compras-lazza-llego";
 import ComprasLazzaFactura from "@/components/compras-lazza-factura";
 import ComprasLazzaOc from "@/components/compras-lazza-oc";
-import { EVENTO_FACTURAS_COMPRA } from "@/components/carga-masiva-global";
-import { Check, FileUp, Loader2, X } from "lucide-react";
-
-const db = supabase as any;
+import ComprasLazzaNuevaOc from "@/components/compras-lazza-nueva-oc";
+import { FileUp, Plus } from "lucide-react";
 
 export default function ComprasLazzaPage() {
-  const { profile, sociedadActiva } = useUser();
-  const { toast } = useToast();
+  const { sociedadActiva } = useUser();
   const sociedadId = sociedadActiva?.id;
   const [factura, setFactura] = useState(false);
+  const [nueva, setNueva] = useState(false);
   const [llego, setLlego] = useState<OcLazza | null>(null);
   // El número de la OC abre la OC para editarla (proveedor, artículos, cantidades, precios).
   const [abrir, setAbrir] = useState<OcLazza | null>(null);
-  const [observar, setObservar] = useState<OcLazza | null>(null);
-  const [sacando, setSacando] = useState(false);
-
-  async function yaEstaBien(oc: OcLazza) {
-    if (!sociedadId) return;
-    setSacando(true);
-    try {
-      const firma = `[Resuelta ${new Date().toLocaleDateString("es-AR", { timeZone: "America/Argentina/Buenos_Aires" })}${profile?.full_name ? ` por ${profile.full_name}` : ""}]`;
-      const nota = `${firma} ${oc.observar_nota || ""}`.trim();
-      const { error } = await db.from("ordenes_compra").update({ observar: false, observar_nota: nota }).eq("id", oc.id).eq("sociedad_id", sociedadId);
-      if (error) throw error;
-      // Las facturas de esa OC que estaban en Observar también se sacan.
-      const { data: links } = await db.from("factura_compra_ocs").select("factura_compra_id").eq("orden_compra_id", oc.id);
-      const ids = ((links || []) as { factura_compra_id: string }[]).map(l => l.factura_compra_id);
-      if (ids.length) await db.from("facturas_compra").update({ observar: false }).in("id", ids).eq("observar", true).eq("sociedad_id", sociedadId);
-      toast.success(`${oc.numero}: ya no está en Observar`);
-      window.dispatchEvent(new Event(EVENTO_FACTURAS_COMPRA));
-      setObservar(null);
-    } catch (e: any) {
-      toast.error(`No se pudo sacar la marca (${e?.message || "error"})`);
-    } finally { setSacando(false); }
-  }
 
   return (
     <div>
       <Header title="Compras Lazza" subtitle="Las OC se arman solas al aprobar un PR. Marcás lo que llegó. Las facturas se cargan aparte." />
       <div className="space-y-3 p-4 md:p-6">
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          <button onClick={() => setNueva(true)} disabled={!sociedadId}
+            className="inline-flex items-center gap-1 rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-600 dark:hover:bg-zinc-800"
+            title="OC a mano, sin PR (stock, insumos, complementaria)">
+            <Plus className="h-4 w-4" /> Nueva OC
+          </button>
           <button onClick={() => setFactura(true)} disabled={!sociedadId}
             className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-40"
             title="Subí la factura o nota de crédito del proveedor: va a su cuenta corriente">
             <FileUp className="h-4 w-4" /> Cargar factura
           </button>
         </div>
-        <ComprasListaOC sociedadId={sociedadId} lazza={{ onLlego: setLlego, onObservar: setObservar, onAbrir: setAbrir }} />
+        <ComprasListaOC sociedadId={sociedadId} lazza={{ onLlego: setLlego, onAbrir: setAbrir }} />
       </div>
 
+      {nueva && sociedadId && <ComprasLazzaNuevaOc sociedadId={sociedadId} onClose={() => setNueva(false)} />}
       {factura && sociedadId && <ComprasLazzaFactura sociedadId={sociedadId} onClose={() => setFactura(false)} />}
       {abrir && sociedadId && <ComprasLazzaOc sociedadId={sociedadId} oc={abrir} onClose={() => setAbrir(null)} />}
       {llego && sociedadId && <ComprasLazzaLlego sociedadId={sociedadId} oc={llego} onClose={() => setLlego(null)} />}
-      {observar && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4" onClick={() => { if (!sacando) setObservar(null); }}>
-          <div className="w-full max-w-md rounded-xl bg-white p-4 text-sm shadow-2xl dark:bg-zinc-900 dark:text-zinc-100" onClick={e => e.stopPropagation()}>
-            <div className="mb-2 flex items-center justify-between">
-              <h2 className="font-bold">👁 Observar · <span className="font-mono">{observar.numero}</span></h2>
-              <button onClick={() => setObservar(null)} disabled={sacando} className="rounded p-1 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
-            </div>
-            <p className="mb-3 whitespace-pre-wrap rounded-lg bg-amber-50 p-2 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">{observar.observar_nota || "Sin nota."}</p>
-            <div className="flex justify-end gap-2">
-              <button onClick={() => setObservar(null)} disabled={sacando} className="rounded-lg border px-3 py-1.5 dark:border-zinc-600">Cerrar</button>
-              <button onClick={() => void yaEstaBien(observar)} disabled={sacando} className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 font-medium text-white hover:bg-emerald-700 disabled:opacity-40">
-                {sacando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Ya está bien
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

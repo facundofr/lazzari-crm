@@ -97,11 +97,7 @@ export default function PendientesPage() {
         .in("estado", ["emitida", "parcial", "vencida"]).lt("fecha_vencimiento", hoy))
         .then((n) => ({ id: "fv", label: "Facturas de venta vencidas sin cobrar", count: n, href: "/finanzas?tab=cc_clientes" })));
     }
-    if (puede(role, "ordenes_compra")) {
-      tareas.push(contar(db.from("ordenes_compra").select("id", { count: "exact", head: true }).eq("sociedad_id", sociedadId)
-        .not("estado", "in", "(cancelada,borrador)").eq("estado_facturacion", "sin_factura"))
-        .then((n) => ({ id: "oc", label: "OC sin factura del proveedor", count: n, href: "/ordenes-compra" })));
-    }
+    // "OC sin factura del proveedor" se sacó (Augusto 19/10): las facturas de compra ya no se atan a la OC.
     if (puede(role, "presupuestos")) {
       tareas.push(contar(db.from("presupuestos").select("id", { count: "exact", head: true }).eq("sociedad_id", sociedadId).eq("estado", "solicitud"))
         .then((n) => ({ id: "pr", label: "Presupuestos en \"Solicitud\" sin armar", count: n, href: "/presupuestos" })));

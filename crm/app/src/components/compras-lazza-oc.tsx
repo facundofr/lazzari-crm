@@ -12,6 +12,8 @@
  *   del proveedor nuevo del mismo PR, o a una OC nueva. La OC que queda vacía se cancela (no se borra).
  *   Se muestra y se confirma antes de guardar. El proveedor también cambia en el PR.
  * Con factura cargada o algo ya llegado: avisa, nunca traba.
+ * Augusto 19/10 (al sacar del menú la pantalla vieja de Compras): se cambia el operador de la OC (`created_by`) y se puede
+ * Anular la OC (queda cancelada, no se borra, con nota de quién y cuándo) o Reactivarla desde la pestaña "Anuladas".
  */
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
@@ -22,7 +24,7 @@ import { EVENTO_FACTURAS_COMPRA } from "@/components/carga-masiva-global";
 import { estadoPorRecibido } from "@/lib/compras-recepcion";
 import { asignarRenglonesAProveedor } from "@/lib/oc-sin-proveedor";
 import { monedaRenglonOc, prDeRenglones, totalesOc } from "@/lib/compras-lazza";
-import { Check, Loader2, Plus, Trash2, Undo2, X } from "lucide-react";
+import { Ban, Check, Loader2, Plus, RotateCcw, Trash2, Undo2, X } from "lucide-react";
 
 const db = supabase as any;
 // "1.234,56" o "1234.56" → número.
@@ -38,8 +40,8 @@ type Item = {
 type Renglon = { id: string; codigo: string; descripcion: string; cantidad: string; precio: string; moneda: Moneda; recibida: number; iva: number | null; prov?: string; nuevo?: boolean };
 type Oc = {
   id: string; numero: string; estado: string; moneda: string | null; iva: number | null; proveedor_id: string | null;
-  fecha_entrega_estimada: string | null; observaciones: string | null; presupuesto_origen_id: string | null;
-  presupuesto_origen: { numero: string; modalidad_emision: string | null } | null;
+  fecha_entrega_estimada: string | null; observaciones: string | null; presupuesto_origen_id: string | null; created_by: string | null;
+  presupuesto_origen: { numero: string; modalidad_emision: string | null; created_by: string | null } | null;
 };
 type Proveedor = { id: string; razon_social: string; nombre_fantasia: string | null; cuit: string | null };
 type PrItem = { id: string; codigo: string | null; descripcion: string | null; proveedor_id: string | null; precio_costo: number | null; costo_moneda: string | null };
@@ -62,6 +64,8 @@ export default function ComprasLazzaOc({ sociedadId, oc: ocRef, onClose }: { soc
   // La moneda por artículo existe recién cuando se corre la migración 20261019180000: si falta, se ve pero no se guarda en la OC.
   const [conMoneda, setConMoneda] = useState(true);
   const [entrega, setEntrega] = useState("");
+  const [perfiles, setPerfiles] = useState<{ id: string; full_name: string | null }[]>([]);
+  const [operador, setOperador] = useState("");
   const [obs, setObs] = useState("");
   const [facturas, setFacturas] = useState(0);
   const [cargando, setCargando] = useState(true);
@@ -73,12 +77,13 @@ export default function ComprasLazzaOc({ sociedadId, oc: ocRef, onClose }: { soc
     (async () => {
       try {
         const traerItems = (sel: string) => db.from("orden_compra_items").select(sel).eq("orden_id", ocRef.id).order("orden");
-        const [o, provs, links, viejas] = await Promise.all([
-          db.from("ordenes_compra").select("id, numero, estado, moneda, iva, proveedor_id, fecha_entrega_estimada, observaciones, presupuesto_origen_id, presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision)")
+        const [o, provs, links, viejas, perfs] = await Promise.all([
+          db.from("ordenes_compra").select("id, numero, estado, moneda, iva, proveedor_id, fecha_entrega_estimada, observaciones, presupuesto_origen_id, created_by, presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision, created_by)")
             .eq("id", ocRef.id).eq("sociedad_id", sociedadId).single(),
           db.from("proveedores").select("id, razon_social, nombre_fantasia, cuit").eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social"),
           db.from("factura_compra_ocs").select("facturas_compra(id, estado)").eq("orden_compra_id", ocRef.id),
           db.from("facturas_compra").select("id, estado").eq("orden_compra_id", ocRef.id).eq("sociedad_id", sociedadId),
+          db.from("profiles").select("id, full_name").order("full_name"),
         ]);
         let its = await traerItems(`${ITEM_SEL}, moneda`);
         let tieneMoneda = true;
@@ -109,6 +114,9 @@ export default function ComprasLazzaOc({ sociedadId, oc: ocRef, onClose }: { soc
         setProveedores((provs.data || []) as Proveedor[]);
         setProveedorId(oc_.proveedor_id || "");
         setEntrega(oc_.fecha_entrega_estimada || "");
+        setPerfiles(((perfs.data || []) as { id: string; full_name: string | null }[]).filter(p => p.full_name));
+        // Operador: el de la OC; si no tiene, el que cargó el PR (como se ve en la lista).
+        setOperador(oc_.created_by || oc_.presupuesto_origen?.created_by || "");
         setObs(oc_.observaciones || "");
         const ids = new Set<string>();
         for (const l of (links.data || []) as any[]) for (const f of Array.isArray(l.facturas_compra) ? l.facturas_compra : [l.facturas_compra]) if (f?.id && f.estado !== "anulada") ids.add(f.id);
@@ -208,6 +216,7 @@ export default function ComprasLazzaOc({ sociedadId, oc: ocRef, onClose }: { soc
       const { error: e4 } = await db.from("ordenes_compra").update({
         proveedor_id: proveedorId || null, subtotal: tot.subtotal, iva: tot.iva, total: tot.total, estado,
         fecha_entrega_estimada: entrega || null, observaciones: obs,
+        ...(operador !== (oc.created_by || oc.presupuesto_origen?.created_by || "") ? { created_by: operador || null } : {}),
       }).eq("id", oc.id).eq("sociedad_id", sociedadId);
       if (e4) throw new Error(`No se pudo guardar la OC (${e4.message})`);
 
@@ -259,12 +268,47 @@ export default function ComprasLazzaOc({ sociedadId, oc: ocRef, onClose }: { soc
     } finally { setGuardando(false); }
   }
 
+  const anulada = oc?.estado === "cancelada";
+  const quien = profile?.full_name || "alguien";
+  const hoyTxt = () => new Date().toLocaleDateString("es-AR", { timeZone: "America/Argentina/Buenos_Aires" });
+
+  // Anular: la OC queda cancelada (no se borra) con nota de quién y cuándo. El PR no se toca. Lo que llegó o la factura: avisa, no traba.
+  async function anular() {
+    if (!oc) return;
+    const llegoAlgo = items.some(i => Number(i.cantidad_recibida) > 0);
+    const avisos = [
+      llegoAlgo ? "• Ya llegó mercadería de esta OC." : "",
+      facturas > 0 ? `• Tiene ${facturas === 1 ? "una factura cargada" : `${facturas} facturas cargadas`}: la factura no se anula.` : "",
+    ].filter(Boolean);
+    if (!confirm([`¿Anulás ${oc.numero}?`, ...(avisos.length ? ["", "Ojo:", ...avisos] : []), "", "Queda en la pestaña \"Anuladas\" (no se borra) y se puede reactivar. El PR no cambia."].join("\n"))) return;
+    setGuardando(true); setError("");
+    const { error: e } = await db.from("ordenes_compra").update({ estado: "cancelada", observaciones: `${oc.observaciones || ""} · Anulada el ${hoyTxt()} por ${quien}`.replace(/^ · /, "") }).eq("id", oc.id).eq("sociedad_id", sociedadId);
+    setGuardando(false);
+    if (e) { setError(`No se pudo anular (${e.message})`); return; }
+    toast.success(`${oc.numero} anulada`);
+    window.dispatchEvent(new Event(EVENTO_FACTURAS_COMPRA));
+    onClose();
+  }
+  // Reactivar: vuelve al estado que corresponde por lo que llegó (Por pedir / Pedido / Parcial / Completo).
+  async function reactivar() {
+    if (!oc) return;
+    setGuardando(true); setError("");
+    const estado = estadoPorRecibido(items.map(i => ({ id: i.id, cantidad: Number(i.cantidad), cantidad_recibida: Number(i.cantidad_recibida || 0) })), "enviada");
+    const { error: e } = await db.from("ordenes_compra").update({ estado, observaciones: `${oc.observaciones || ""} · Reactivada el ${hoyTxt()} por ${quien}`.replace(/^ · /, "") }).eq("id", oc.id).eq("sociedad_id", sociedadId);
+    setGuardando(false);
+    if (e) { setError(`No se pudo reactivar (${e.message})`); return; }
+    toast.success(`${oc.numero} reactivada`);
+    window.dispatchEvent(new Event(EVENTO_FACTURAS_COMPRA));
+    onClose();
+  }
+
   return (
     <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-black/50 p-2 md:p-4" onClick={() => { if (!guardando) onClose(); }}>
       <div className="w-full max-w-5xl rounded-xl bg-white p-4 shadow-2xl dark:bg-zinc-900 dark:text-zinc-100" onClick={e => e.stopPropagation()}>
         <div className="mb-3 flex items-center justify-between gap-2">
           <h2 className="text-base font-bold"><span className="font-mono">{ocRef.numero}</span>
             {oc?.presupuesto_origen?.numero && <span className="ml-2 text-xs font-normal text-zinc-500">de {oc.presupuesto_origen.numero}</span>}
+            {anulada && <span className="ml-2 rounded bg-red-100 px-1.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">Anulada</span>}
           </h2>
           <button onClick={onClose} disabled={guardando} className="rounded p-1 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-5 w-5" /></button>
         </div>
@@ -273,7 +317,7 @@ export default function ComprasLazzaOc({ sociedadId, oc: ocRef, onClose }: { soc
           <p className="rounded-lg bg-red-50 p-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400">{error || "No se encontró la OC."}</p>
         ) : (
           <>
-            <div className="mb-3 grid gap-2 text-sm md:grid-cols-[2fr_1fr]">
+            <div className="mb-3 grid gap-2 text-sm md:grid-cols-[2fr_1fr_1fr]">
               <div>
                 <span className="mb-0.5 block text-xs text-zinc-500">Proveedor de toda la OC</span>
                 {cambiandoProv ? (
@@ -294,6 +338,13 @@ export default function ComprasLazzaOc({ sociedadId, oc: ocRef, onClose }: { soc
               <label className="block">
                 <span className="mb-0.5 block text-xs text-zinc-500">Entrega estimada</span>
                 <input type="date" value={entrega} onChange={e => setEntrega(e.target.value)} className={inputCls} />
+              </label>
+              <label className="block">
+                <span className="mb-0.5 block text-xs text-zinc-500">Operador</span>
+                <select value={operador} onChange={e => setOperador(e.target.value)} className={inputCls}>
+                  <option value="">Sin operador</option>
+                  {perfiles.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
+                </select>
               </label>
             </div>
             {facturas > 0 && <p className="mb-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">Esta OC ya tiene {facturas === 1 ? "una factura cargada" : `${facturas} facturas cargadas`}: los cambios no modifican la factura ni los pagos.</p>}
@@ -359,7 +410,10 @@ export default function ComprasLazzaOc({ sociedadId, oc: ocRef, onClose }: { soc
             </label>
 
             {error && <p className="mb-2 rounded-lg bg-red-50 p-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400">{error}</p>}
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
+              {anulada
+                ? <button onClick={() => void reactivar()} disabled={guardando} title="Vuelve a En curso (o Terminadas si ya llegó todo)" className="mr-auto inline-flex items-center gap-1 rounded-lg border border-emerald-300 px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50 disabled:opacity-40 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-950/30"><RotateCcw className="h-4 w-4" /> Reactivar</button>
+                : <button onClick={() => void anular()} disabled={guardando} title="La OC queda anulada (no se borra) y se puede reactivar" className="mr-auto inline-flex items-center gap-1 rounded-lg border border-red-200 px-3 py-2 text-sm text-red-600 hover:bg-red-50 disabled:opacity-40 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/30"><Ban className="h-4 w-4" /> Anular OC</button>}
               <button onClick={onClose} disabled={guardando} className="rounded-lg border px-3 py-2 text-sm dark:border-zinc-600">Cerrar sin guardar</button>
               <button onClick={() => void guardar()} disabled={guardando} className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-40">
                 {guardando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Guardar

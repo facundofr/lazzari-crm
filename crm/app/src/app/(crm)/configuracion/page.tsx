@@ -776,9 +776,9 @@ export default function ConfiguracionPage() {
                   },
                   { key: "active", label: "Estado", sortable: true, render: (row) => <Badge variant={row.active ? "success" : "outline"}>{row.active ? "Activo" : "Inactivo"}</Badge> },
                   {
-                    key: "pruebaComprasNueva", label: "Prueba: Compras nueva", sortable: false,
+                    key: "pruebaComprasNueva", label: "Compras Lazza", sortable: false,
                     render: (row) => (
-                      <label className="inline-flex items-center gap-1.5 text-xs text-zinc-500" title="Ve la pantalla Compras nueva y se encarga de mandar los pedidos a los proveedores">
+                      <label className="inline-flex items-center gap-1.5 text-xs text-zinc-500" title="Ve la pantalla Compras Lazza y se encarga de mandar los pedidos a los proveedores">
                         <input
                           type="checkbox"
                           checked={!!row.pruebaComprasNueva}

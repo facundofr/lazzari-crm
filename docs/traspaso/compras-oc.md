@@ -103,8 +103,33 @@ Al final: prueba en `scripts/test-compras-lazza.ts` (texto copiado, OC destino d
 - `components/compras-lista-oc.tsx` (solo con `lazza`): el cartel del Estado es un botón cuando está en "Por enviar" o "Enviada". Clic en Por enviar → Enviada con la fecha de hoy (`pedido`, `pedido_at`, `pedido_via: "manual"` y `pedido_por`, los mismos campos de "Enviar al proveedor"). Clic en Enviada → vuelve a Por enviar y borra la fecha. "Enviada" muestra la fecha (ej. "Enviada 19/10/2026"). Parcial y Completo no cambian. Compras nueva queda igual.
 - tsc 0, hooks OK. NO probado en pantalla (local y producción piden iniciar sesión): la primera vez, que Augusto mire que el clic cambia el estado y aparece la fecha.
 
+## 19/10: "Por pedir" / "Pedido", fecha editable y sin Observar (SIN PUBLICAR, sin migración)
+- Augusto: "En la columna enviado cambialo por pedido y dejame editar la fecha en que se pidió" (y "Por enviar" → "Por pedir"). Después: "Hay que sacar el observar".
+- `components/compras-lista-oc.tsx` (solo con `lazza`): `ESTADO_LAZZA_LABEL` → "Por pedir" / "Pedido" (estado, filtro y avisos). Lápiz ✏️ al lado de "Pedido dd/mm/aaaa": calendario (hasta hoy); al elegir el día guarda `pedido_at` = ese día 12:00 de Argentina. Esc o salir sin elegir no cambia nada.
+- Observar fuera de Compras Lazza: sin cartel 👁, sin filtro "Observar" y sin la ventana "Ya está bien" (`app/(crm)/compras-lazza/page.tsx`). Las columnas `observar`/`observar_nota` quedan en la base (no se borra nada).
+- tsc 0, hooks OK. NO probado en pantalla (el local pide iniciar sesión): la primera vez, mirar con Augusto que el lápiz cambie la fecha.
+
+## 19/10: Todo en Compras Lazza, "Compras" fuera del menú (SIN PUBLICAR, sin migración)
+- Augusto: quedarse solo con Compras Lazza. Se relevó qué había solo en las pantallas viejas; eligió (19/10): sacar los accesos directos, NO avisar al vendedor cuando llega, NO juntar pedidos ni "sin stock", Mariana tiene que ver Compras Lazza, poder cambiar el operador; "el resto lo que vos digas".
+- **Nueva OC a mano** (`components/compras-lazza-nueva-oc.tsx`, botón en `compras-lazza/page.tsx`): sin PR; proveedor opcional, entrega, observaciones, artículos con moneda. Queda "Por pedir", operador = quien la crea. La moneda de la OC = la que más se repite (`monedaNuevaOc` en `lib/compras-lazza.ts`, con prueba). Si fallan los artículos, la OC se cancela (no queda vacía).
+- **Anular / Reactivar** (abriendo la OC, `compras-lazza-oc.tsx`): cancelada con nota "Anulada el … por …"; avisa si llegó algo o tiene factura; el PR no se toca. Pestaña **Anuladas** en la lista (`compras-lista-oc.tsx`, solo con `lazza`); Reactivar vuelve al estado por lo llegado.
+- **Operador**: desplegable al abrir la OC (guarda `ordenes_compra.created_by`). En la lista, Op = el de la OC; si no tiene, el que cargó el PR (antes siempre el del PR; solo 5 OC de 154 cambian lo que muestran).
+- Accesos directos sacados: Remitos "OC vinculada" (queda el número, sin link), Ventas "Compras a proveedor" (queda la sección, sin link), Pendientes "OC sin factura del proveedor" (sacada).
+- Guía de ayuda: `docs/GUIA-USO.md` (dos secciones nuevas de Compras Lazza) → `node scripts/guia-a-ts.mjs` → `lib/asistente-guia-datos.ts`; `/compras-lazza` con módulo `ordenes_compra` en el script.
+- Textos: casilla de Configuración "Compras Lazza" (antes "Prueba: Compras nueva"; misma columna `prueba_compras_nueva`), aviso al aprobar PR "están en Compras Lazza, Por pedir".
+- `sidebar.tsx`: "Compras" (/ordenes-compra) con `oculto: true` (sigue por link).
+- **Falta (Augusto)**: tildarle la casilla "Compras Lazza" a Mariana en Configuración → Usuarios (si no, se queda sin compras en el menú).
+- tsc 0, hooks OK, `test-compras-lazza.ts` OK. NO probado en pantalla (el local pide iniciar sesión): al publicar, mirar Nueva OC, Anular/Reactivar y Operador.
+- Quedó sin pasar a propósito: facturas atadas a OC (diferencias, cerrar saldo, conciliar), stock al recibir (en pausa), mail/WhatsApp con PDF (se usa Copiar), aviso al vendedor, juntar pedidos / sin stock, PDF de la OC, totales y KPIs.
+
 ## Próximos pasos
 1. **Primera factura real con V1.1.533: cargada por Augusto, "pasó bien" (19/10).** Falta la **primera OC donde cambie el proveedor de un artículo**: que el renglón pase a la OC correcta (o nueva), la vieja vacía quede cancelada y el PR cambie de proveedor.
+   - **Primer caso real revisado 19/10 (solo lectura): ANDUVO BIEN.** El 19/10 14:50 en OC-2026-1215 (PR-2026-1217, sin proveedor, ya pedida) se pasó "LOCTITE LB 771 ANTI SEIZE NICKEL 454GR" (1 u, $254.930, ya llegado 1) a Rafada S.A.:
+     - Fue a una **OC nueva OC-2026-1270** (bien: la única OC abierta de Rafada, OC-2026-1046, es de otro PR). Lo llegado viajó con el renglón; quedó `recibida` (Completo). Nota: "Proveedor real Rafada S.A.: renglones pasados desde OC-2026-1215…".
+     - En el PR el artículo quedó con proveedor Rafada S.A.; costo igual ($254.930 ARS).
+     - OC-2026-1215 quedó con los otros 11 artículos (no se canceló, bien) y su total ya no cuenta el Loctite ($1.585.548,26 = 1.310.370,46 + IVA). OC-2026-1270: $308.465,30 = 254.930 + IVA.
+     - Sin facturas atadas a ninguna de las dos.
+     - Detalle chico (no se tocó): el aviso "ya figuraba como pedida: revisá con el proveedor anterior" que arma `asignarRenglonesAProveedor` no se muestra en `compras-lazza-oc.tsx` (solo usa `ocDestino`). Acá no importaba (OC-1215 no tenía proveedor). Falta ver un caso donde la OC vieja quede vacía (que quede `cancelada`).
 2. Cuando Compras Lazza esté probada: proponer ocultar del menú "Compras nueva" y "Compras" (que sigan andando por link).
 3. En pausa (Augusto: "dejalo como está"): Deshacer de una factura guardada. Si se retoma: solo para "me equivoqué al cargarla"; si el proveedor la anula, va con su NC, no con Deshacer.
 4. Sin definir con Augusto: artículo parecido pero distinto, talle cambiado y curva de talles en el PR.

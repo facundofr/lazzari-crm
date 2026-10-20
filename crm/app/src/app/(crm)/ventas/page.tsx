@@ -639,8 +639,7 @@ function DetalleVenta({
 
         {/* Compras a proveedores para esta venta */}
         {v.ordenesCompra.length > 0 && (
-          <Seccion titulo={`Compras a proveedor (${v.ordenesCompra.length})`} icon={ClipboardList} estado={v.ordenesCompra.every(oc => oc.estado === "completada" || oc.estado === "cancelada") ? "done" : "in-progress"}
-            extra={<Link href="/ordenes-compra" className="text-[11px] text-orange-600 hover:underline">Compras</Link>}>
+          <Seccion titulo={`Compras a proveedor (${v.ordenesCompra.length})`} icon={ClipboardList} estado={v.ordenesCompra.every(oc => oc.estado === "completada" || oc.estado === "cancelada") ? "done" : "in-progress"}>
             {v.ordenesCompra.map(oc => (
               <div key={oc.id} className="flex items-center gap-2">
                 <span className="font-mono font-semibold">{oc.numero}</span>

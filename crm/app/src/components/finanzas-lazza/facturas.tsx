@@ -243,7 +243,8 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
             </>
           )} />
       ) : (
-        <FichaFacturaCompra facturaId={ficha.id} onClose={() => setFicha(null)} conAcciones onCambio={recargar} />
+        <FichaFacturaCompra facturaId={ficha.id} onClose={() => setFicha(null)} conAcciones onCambio={recargar} pagable={sePuedeTildar(ficha)}
+          onPagar={() => { const f = ficha; setFicha(null); setPagando({ entidadId: f.entidadId, nombre: f.nombre, ids: [f.id] }); }} />
       ))}
 
       {editando && (

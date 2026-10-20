@@ -228,3 +228,13 @@ export function prDeRenglones(
   for (const [k, v] of resto) out.set(k, v);
   return out;
 }
+
+/**
+ * Nueva OC a mano (Compras Lazza, Augusto 19/10): cada artículo lleva su moneda; la OC queda en la que más se repite
+ * (empate o vacía = pesos). La de la OC solo se usa cuando un artículo no tiene moneda propia.
+ */
+export function monedaNuevaOc(monedas: Array<string | null | undefined>): "ARS" | "USD" {
+  const usd = monedas.filter(m => m === "USD").length;
+  const ars = monedas.filter(m => m !== "USD").length;
+  return usd > ars ? "USD" : "ARS";
+}

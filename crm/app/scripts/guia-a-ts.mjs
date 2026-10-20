@@ -14,7 +14,7 @@ const MODULO_POR_RUTA = {
   "/dashboard": "dashboard", "/pendientes": "dashboard", "/calendario": "calendario",
   "/clientes": "clientes", "/oportunidades": "clientes", "/presupuestos": "presupuestos", "/ventas": "presupuestos",
   "/muestras": "muestras", "/consulta-facturas": "consulta_facturas",
-  "/proveedores": "proveedores", "/ordenes-compra": "ordenes_compra", "/personalizacion": "ordenes_compra",
+  "/proveedores": "proveedores", "/ordenes-compra": "ordenes_compra", "/compras-lazza": "ordenes_compra", "/personalizacion": "ordenes_compra",
   "/remitos": "remitos", "/transportes": "remitos", "/stock": "stock",
   "/finanzas": "finanzas", "/facturacion": "facturacion", "/reportes": "reportes", "/configuracion": "configuracion",
   "/papelera": null,

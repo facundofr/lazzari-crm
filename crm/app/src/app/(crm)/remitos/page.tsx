@@ -1016,13 +1016,10 @@ export default function RemitosPage() {
                 {detailOC && (
                   <div>
                     <span className="text-zinc-400">OC vinculada</span>
-                    <button
-                      onClick={() => window.open(`/ordenes-compra`, "_self")}
-                      className="flex items-center gap-1 mt-0.5"
-                      title="Ir a órdenes de compra"
-                    >
+                    {/* Sin acceso directo: la pantalla vieja de Compras salió del menú (Augusto 19/10). */}
+                    <div className="flex items-center gap-1 mt-0.5">
                       <Badge variant="purple">{detailOC.numero}</Badge>
-                    </button>
+                    </div>
                   </div>
                 )}
                 {detailRemito.sucursal_nombre && (

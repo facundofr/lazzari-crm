@@ -1,7 +1,7 @@
 // Compras Lazza: comparación factura vs OC, neto estimado y cruces seguros de precio.
 // Uso (desde crm/app): npx tsx scripts/test-compras-lazza.ts
 import assert from "node:assert/strict";
-import { comparar, netoFactura, netoPorOc, crucesSeguros, notaObservar, aFacturarPorRenglon, costoPrAnterior, vencimientoPorDias, tipoNotaCredito, ivaYPercepciones, totalesOc, renglonesPrDeOc, monedaRenglonOc, prDeRenglones } from "../src/lib/compras-lazza";
+import { comparar, netoFactura, netoPorOc, crucesSeguros, notaObservar, aFacturarPorRenglon, costoPrAnterior, vencimientoPorDias, tipoNotaCredito, ivaYPercepciones, totalesOc, renglonesPrDeOc, monedaRenglonOc, prDeRenglones, monedaNuevaOc } from "../src/lib/compras-lazza";
 import { repartirEnvio } from "../src/lib/cargar-factura";
 
 // Neto
@@ -137,5 +137,10 @@ const atado = prDeRenglones([
   { id: "p2", codigo: "G2", descripcion: "Guante", proveedor_id: "VIEJO" },
 ], "VIEJO");
 assert.deepEqual([...atado], [["a", "p9"], ["b", "p2"]], "el atado manda; el que no existe en el PR no se toca");
+
+// Nueva OC a mano: la moneda que más se repite; empate o vacía = pesos.
+assert.equal(monedaNuevaOc(["USD", "USD", "ARS"]), "USD");
+assert.equal(monedaNuevaOc(["USD", "ARS"]), "ARS");
+assert.equal(monedaNuevaOc([]), "ARS");
 
 console.log("test-compras-lazza OK");

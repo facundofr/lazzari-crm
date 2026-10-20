@@ -21,7 +21,7 @@ import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { estadoVisibleFactura } from "@/lib/estado-factura-venta";
 import { emisorDeSociedad } from "@/lib/emisor-sociedad";
 import { cargarOPsDeFacturas, abrirOrdenPagoPDF, opsPorFactura, type OPResumen } from "@/lib/orden-pago-pdf";
-import { CreditCard, Download, Eye, FileText, HandCoins, Mail, Paperclip, Search, X } from "lucide-react";
+import { CreditCard, Download, Eye, FileText, HandCoins, Mail, Paperclip, Search, Wallet, X } from "lucide-react";
 import { movimientoPagoTarjeta, registrarPagoTarjeta, tarjetaSugerida, traerTarjetas, type Tarjeta } from "@/lib/pago-tarjeta";
 import { CobrarCliente } from "@/components/finanzas-lazza/cobrar";
 import { EnviarOrdenPago, verOP } from "@/components/finanzas-lazza/orden-pago-doc";
@@ -532,10 +532,12 @@ export function FichaFacturaVenta({ factura, facturaId, cobrable = false, onCobr
  * Ficha de una factura de compra: datos, renglones, archivo del proveedor (Ver / Descargar) y las OP que la pagaron.
  * `conAcciones` (Finanzas Lazza): en cada OP, Ver, Descargar y Enviar por mail (la misma ventana de la OP).
  */
-export function FichaFacturaCompra({ factura, facturaId, onClose, conAcciones = false, onCambio }: {
+export function FichaFacturaCompra({ factura, facturaId, onClose, conAcciones = false, onCambio, pagable = false, onPagar }: {
   factura?: FacturaCompra | null; facturaId?: string | null; onClose: () => void; conAcciones?: boolean;
   /** Después de marcarla pagada con tarjeta (para recargar la lista de atrás). */
   onCambio?: () => void;
+  /** Botón "Pagar" arriba (20/10): abre la misma ventana de pago de Finanzas Lazza → Facturas. */
+  pagable?: boolean; onPagar?: () => void;
 }) {
   const { sociedadActiva } = useUser();
   const { toast } = useToast();
@@ -561,7 +563,7 @@ export function FichaFacturaCompra({ factura, facturaId, onClose, conAcciones = 
   async function pagadaConTarjeta() {
     const t = (tarjetas || []).find((x) => x.id === tarjetaId);
     if (!compra || !t || !sociedadActiva) return;
-    if (!confirm(`¿Marcar ${[compra.tipo_comprobante, compra.numero_factura].filter(Boolean).join(" ")} como pagada con ${t.nombre}?\n\nSe registra el pago por lo que falta pagar, sale de Pagos y la deuda pasa a la tarjeta.`)) return;
+    if (!confirm(`¿Estás seguro? Se marca ${[compra.tipo_comprobante, compra.numero_factura].filter(Boolean).join(" ")} como pagada con ${t.nombre}.\n\nSe registra el pago por lo que falta pagar, sale de Pagos y la deuda pasa a la tarjeta.`)) return;
     setMarcando(true);
     const r = await registrarPagoTarjeta(supabase, compra.id, t, movimientoPagoTarjeta({
       sociedadId: sociedadActiva.id, proveedorId: (compra as any).proveedor_id || "", facturaId: compra.id, tarjeta: t, total: Number(compra.total), moneda: compra.moneda,
@@ -616,22 +618,8 @@ export function FichaFacturaCompra({ factura, facturaId, onClose, conAcciones = 
                     <a href={compra.archivo_url} download={compra.archivo_nombre || true} target="_blank" rel="noreferrer" className={botonFicha}><Download className="h-4 w-4" /> Descargar</a>
                   </>
                 ) : <span className="text-xs text-zinc-400">Sin archivo del proveedor cargado.</span>}
+                {pagable && onPagar && <button type="button" onClick={onPagar} className="inline-flex items-center gap-1 rounded-lg bg-orange-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-700"><Wallet className="h-4 w-4" /> Pagar</button>}
               </div>
-              {sePuedeConTarjeta && (
-                <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1.5 text-sm dark:border-blue-900 dark:bg-blue-950/30">
-                  <CreditCard className="h-4 w-4 text-blue-600" />
-                  <span className="text-blue-800 dark:text-blue-200">¿Ya se pagó con tarjeta?</span>
-                  {tarjetas === null ? <span className="text-xs text-zinc-500">Buscando tarjetas…</span> : tarjetas.length === 0 ? <span className="text-xs text-zinc-500">No hay tarjetas cargadas (Bancos).</span> : (
-                    <>
-                      <select value={tarjetaId} onChange={(e) => setTarjetaId(e.target.value)} className="h-7 rounded border border-zinc-200 bg-white px-1 text-sm dark:border-zinc-700 dark:bg-zinc-900">
-                        {tarjetas.map((t) => <option key={t.id} value={t.id}>{t.nombre}</option>)}
-                      </select>
-                      <button type="button" disabled={marcando || !tarjetaId} onClick={pagadaConTarjeta}
-                        className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50">{marcando ? "Guardando…" : "Marcar pagada con tarjeta"}</button>
-                    </>
-                  )}
-                </div>
-              )}
               <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
                 {filaFicha("Fecha", formatDate(compra.fecha))}
                 {filaFicha("Vencimiento", compra.fecha_vencimiento ? formatDate(compra.fecha_vencimiento) : "—")}
@@ -670,6 +658,22 @@ export function FichaFacturaCompra({ factura, facturaId, onClose, conAcciones = 
                 {items !== null && !items.length && <p className="text-xs text-zinc-400">Sin renglones cargados (puede ser una factura cargada solo con totales).</p>}
               </div>
               {compra.notas && <p className="mt-3 whitespace-pre-wrap text-xs text-zinc-500">{compra.notas}</p>}
+              {/* Pagada con tarjeta: abajo (20/10), con "¿Estás seguro?". */}
+              {sePuedeConTarjeta && (
+                <div className="mt-4 flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1.5 text-sm dark:border-blue-900 dark:bg-blue-950/30">
+                  <CreditCard className="h-4 w-4 text-blue-600" />
+                  <span className="text-blue-800 dark:text-blue-200">¿Ya se pagó con tarjeta?</span>
+                  {tarjetas === null ? <span className="text-xs text-zinc-500">Buscando tarjetas…</span> : tarjetas.length === 0 ? <span className="text-xs text-zinc-500">No hay tarjetas cargadas (Bancos).</span> : (
+                    <>
+                      <select value={tarjetaId} onChange={(e) => setTarjetaId(e.target.value)} className="h-7 rounded border border-zinc-200 bg-white px-1 text-sm dark:border-zinc-700 dark:bg-zinc-900">
+                        {tarjetas.map((t) => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+                      </select>
+                      <button type="button" disabled={marcando || !tarjetaId} onClick={pagadaConTarjeta}
+                        className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50">{marcando ? "Guardando…" : "Marcar pagada con tarjeta"}</button>
+                    </>
+                  )}
+                </div>
+              )}
             </>
           )}
         </div>
