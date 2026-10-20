@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { etapaVenta, enBandeja, resumenBandeja, type VentaEtapaInput } from "../src/lib/ventas-etapas";
+import { detalleDePr, etapaVenta, enBandeja, fechaParaFacturar, resumenBandeja, type VentaEtapaInput } from "../src/lib/ventas-etapas";
 
 const hoy = "2026-10-12";
 const base: VentaEtapaInput = { fechaPr: "2026-10-01", totalPr: 1000, monedaPr: "ARS", ocCliente: null, clientePideOc: false, facturas: [], remitos: [] };
@@ -69,5 +69,14 @@ const etapas = [
 assert.deepEqual(resumenBandeja(etapas, "facturar"), { cantidad: 2, ARS: 1000, USD: 50 });
 assert.deepEqual(resumenBandeja(etapas, "cobrar"), { cantidad: 1, ARS: 700, USD: 0 });
 assert.equal(resumenBandeja(etapas, "todas").cantidad, 3);
+
+// Fecha P/Fact: con OC, la fecha de la OC; sin OC, el día de aprobación (en Argentina); sin nada, la del PR.
+assert.equal(fechaParaFacturar({ fecha: "2026-10-01", oc_cliente: "4500", oc_cliente_fecha: "2026-10-05", respondido_at: "2026-10-03T15:00:00Z" }), "2026-10-05");
+assert.equal(fechaParaFacturar({ fecha: "2026-10-01", oc_cliente: null, oc_cliente_fecha: null, respondido_at: "2026-10-04T01:30:00+00:00" }), "2026-10-03");
+assert.equal(fechaParaFacturar({ fecha: "2026-10-01", oc_cliente: "4500", oc_cliente_fecha: null, respondido_at: null }), "2026-10-01");
+
+// Detalle como en Presupuestos.
+assert.deepEqual(detalleDePr([{ descripcion: "Botín" }, { descripcion: "Guante" }, { descripcion: "Casco" }]), { texto: "Botín, Guante...", completo: "Botín, Guante, Casco" });
+assert.equal(detalleDePr([], "Pedido por mail").texto, "Pedido por mail");
 
 console.log("test-ventas-etapas OK");

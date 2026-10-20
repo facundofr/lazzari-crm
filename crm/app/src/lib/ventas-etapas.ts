@@ -117,3 +117,32 @@ export function resumenBandeja(etapas: VentaEtapa[], b: BandejaVenta): { cantida
   }
   return out;
 }
+
+/** Día (AAAA-MM-DD) en Argentina de una fecha o de un timestamp. */
+function diaAR(valor: string): string {
+  if (valor.length <= 10) return valor;
+  const d = new Date(valor);
+  if (Number.isNaN(d.getTime())) return valor.slice(0, 10);
+  return new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: "America/Argentina/Buenos_Aires" }).format(d);
+}
+
+/**
+ * "Fecha P/Fact" de Finanzas Lazza → Facturar (Augusto 20/10/2026): si el PR tiene OC, la fecha de la OC;
+ * si no, el día en que se aprobó (respondido_at). Sin esos datos, la fecha del PR.
+ */
+export function fechaParaFacturar(p: { fecha: string; oc_cliente?: string | null; oc_cliente_fecha?: string | null; respondido_at?: string | null }): string {
+  if ((p.oc_cliente || "").trim() && p.oc_cliente_fecha) return diaAR(p.oc_cliente_fecha);
+  return diaAR(p.respondido_at || p.fecha || "");
+}
+
+/** Detalle corto de un PR, igual que la columna "Detalle" de Presupuestos: 2 primeros ítems; sin ítems, las observaciones. */
+export function detalleDePr(items: { descripcion?: string | null; codigo?: string | null }[], observaciones?: string | null): { texto: string; completo: string } {
+  if (!items.length) {
+    const t = (observaciones || "").trim();
+    return { texto: t.length > 60 ? t.slice(0, 57) + "..." : t, completo: t };
+  }
+  let texto = items.slice(0, 2).map((it) => it.descripcion || it.codigo || "").filter(Boolean).join(", ");
+  if (texto.length > 50) texto = texto.slice(0, 47) + "...";
+  else if (items.length > 2) texto += "...";
+  return { texto, completo: items.map((it) => it.descripcion || "").filter(Boolean).join(", ") };
+}

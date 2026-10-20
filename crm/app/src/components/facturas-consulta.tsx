@@ -292,8 +292,6 @@ export function FacturasConsulta({ completa = false }: { completa?: boolean }) {
       <div className={completa ? "space-y-2.5" : "space-y-2.5 p-3 sm:p-4"}>
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex rounded-lg border border-zinc-200 p-0.5 dark:border-zinc-700">
-            {/* "Facturar" antes de "De venta": atajo a la pantalla de Facturación (Augusto 20/10/2026; la ven todos). */}
-            {!completa && <Link href="/facturacion" className="rounded-md px-3 py-1 text-sm font-medium text-orange-600 hover:bg-orange-50 dark:text-orange-400 dark:hover:bg-orange-950/30">Facturar</Link>}
             {(completa ? (["todas", "venta", "compra"] as const) : (["venta", "compra"] as const)).map((t) => (
               <button key={t} type="button" onClick={() => setTab(t)}
                 className={`rounded-md px-3 py-1 text-sm font-medium ${tab === t ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"}`}>

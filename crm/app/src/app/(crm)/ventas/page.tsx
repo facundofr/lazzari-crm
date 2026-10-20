@@ -334,7 +334,7 @@ export default function VentasPage() {
 
   async function handleCancelarVenta(prId: string) {
     if (!sociedadActiva?.id) return;
-    if (!confirm("¿Cancelar esta venta? El presupuesto pasará a estado «rechazado» y saldrá de Ventas.")) return;
+    if (!confirm("¿No facturar este presupuesto? Pasará a estado «rechazado» y saldrá de Ventas.")) return;
     const { error } = await (supabase as any).from("presupuestos").update({ estado: "rechazado" }).eq("id", prId).eq("sociedad_id", sociedadActiva.id);
     if (error) { alert("Error al cancelar: " + error.message); return; }
     setSelectedVentaId(null);
@@ -699,7 +699,7 @@ function DetalleVenta({
               <Link href={`/finanzas?tab=facturacion&grupo=cobrar&factura=${factura.id}`} className={`${linkClass} ml-auto`}>Facturación <ArrowRight className="h-3 w-3" /></Link>
             </div>
           </>) : (<>
-            <p className="text-zinc-500">{e.refacturar ? "Anulada por NC: podés volver a facturar o cancelar la venta." : "Sin factura emitida"}</p>
+            <p className="text-zinc-500">{e.refacturar ? "Anulada por NC: podés volver a facturar o no facturar." : "Sin factura emitida"}</p>
             {e.esperandoOc && <p className="flex items-center gap-1 text-amber-600 dark:text-amber-400"><AlertTriangle className="h-3 w-3" /> Falta la OC del cliente: se puede facturar igual.</p>}
             {e.dias > DIAS_AVISO_SIN_FACTURAR && <p className="flex items-center gap-1 text-amber-600 dark:text-amber-400"><Clock className="h-3 w-3" /> {e.dias} días aprobado sin facturar.</p>}
             {puedeFacturar ? (
@@ -708,7 +708,7 @@ function DetalleVenta({
                   <Receipt className="h-3.5 w-3.5" /> {e.refacturar ? "Re-facturar" : "Facturar"}
                 </button>
                 <button onClick={onCancelar} className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-50 hover:text-red-600 dark:hover:bg-zinc-800">
-                  <X className="h-3.5 w-3.5" /> Cancelar venta
+                  <X className="h-3.5 w-3.5" /> No facturar
                 </button>
               </div>
             ) : <p className="text-zinc-400">La factura la emite administración.</p>}

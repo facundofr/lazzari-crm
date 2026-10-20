@@ -29,9 +29,7 @@ import { FinanzasLazzaBancos } from "@/components/finanzas-lazza/bancos";
 import { FinanzasLazzaMovimientos, FinanzasLazzaOrdenesPago, FinanzasLazzaRecibos, FinanzasLazzaRetenciones } from "@/components/finanzas-lazza/listas";
 
 /** Pantallas nuevas que todavía no están (se diseñan con Augusto en las próximas tandas). */
-const EN_ARMADO: Partial<Record<SeccionFL, string>> = {
-  facturar: "La pantalla nueva de Facturar se diseña con vos en la Tanda 5.",
-};
+const EN_ARMADO: Partial<Record<SeccionFL, string>> = {};
 
 const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 const nombreMes = (p: string) => `${MESES[Number(p.slice(5, 7)) - 1]} ${p.slice(0, 4)}`;
@@ -71,6 +69,8 @@ export default function FinanzasLazzaPage() {
       case "cobrar": return <FinanzasLazzaFacturas key="cobrar" sociedadId={sociedadId} ladoInicial="venta" />;
       case "pagar": return <FinanzasLazzaFacturas key="pagar" sociedadId={sociedadId} ladoInicial="compra" />;
       case "facturas": return <FinanzasLazzaFacturas key="facturas" sociedadId={sociedadId} ladoInicial="venta" />;
+      // Facturar (20/10): la pestaña "Facturar" de Facturas (PR que faltan facturar).
+      case "facturar": return <FinanzasLazzaFacturas key="facturar" sociedadId={sociedadId} ladoInicial="facturar" />;
       case "cuentas": return <FinanzasLazzaCuentasCorrientes sociedadId={sociedadId} />;
       case "vencimientos": return <FinanzasLazzaVencimientos sociedadId={sociedadId} />;
       case "ordenes_pago": return <FinanzasLazzaOrdenesPago sociedadId={sociedadId} />;

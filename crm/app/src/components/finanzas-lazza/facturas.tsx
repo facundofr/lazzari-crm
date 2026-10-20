@@ -23,6 +23,7 @@ import { abrirFacturaVenta, FichaFacturaCompra, FichaFacturaVenta } from "@/comp
 import { sumarMeses } from "@/lib/reportes-comprobantes";
 import { traerComprobantesMes, traerFacturasFL } from "./datos";
 import { CobrarCliente } from "./cobrar";
+import { FinanzasLazzaFacturar } from "./facturar";
 import { PagarProveedor } from "./pagar";
 import { descargarOP, EnviarOrdenPago, verOP } from "./orden-pago-doc";
 import { abrirRecibo, EnviarRecibo } from "./recibo-doc";
@@ -51,9 +52,11 @@ const boton = (activo: boolean) => `rounded-md px-3 py-1 text-sm font-medium ${a
 
 type Datos = { filas: FilaFactura[]; recibos: Recibo[]; todas: boolean };
 
-export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { sociedadId: string; ladoInicial?: LadoFactura }) {
+export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { sociedadId: string; ladoInicial?: LadoFactura | "facturar" }) {
   const { sociedadActiva } = useUser();
-  const [lado, setLado] = useState<LadoFactura>(ladoInicial);
+  // "Facturar" (Augusto 20/10): primera pestaña, los PR que faltan facturar (facturar.tsx).
+  const [verFacturar, setVerFacturar] = useState(ladoInicial === "facturar");
+  const [lado, setLado] = useState<LadoFactura>(ladoInicial === "facturar" ? "venta" : ladoInicial);
   const [filtro, setFiltro] = useState<FiltroFacturas>("pendientes");
   const [texto, setTexto] = useState("");
   const [envio, setEnvio] = useState<"" | "si" | "no">("");
@@ -206,13 +209,25 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
 
   const abrirPago = () => { if (seleccion) setPagando({ entidadId: seleccion.entidadId, nombre: seleccion.nombre, ids: seleccion.ids }); };
 
+  const pestanas = (
+    <div className="flex rounded-lg border border-zinc-200 p-0.5 dark:border-zinc-700">
+      <button type="button" onClick={() => setVerFacturar(true)} className={boton(verFacturar)}>Facturar</button>
+      <button type="button" onClick={() => { setVerFacturar(false); setLado("venta"); }} className={boton(!verFacturar && esVenta)}>Ventas</button>
+      <button type="button" onClick={() => { setVerFacturar(false); setLado("compra"); }} className={boton(!verFacturar && !esVenta)}>Compras</button>
+    </div>
+  );
+
+  if (verFacturar) return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-1.5">{pestanas}</div>
+      <FinanzasLazzaFacturar sociedadId={sociedadId} />
+    </div>
+  );
+
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-1.5">
-        <div className="flex rounded-lg border border-zinc-200 p-0.5 dark:border-zinc-700">
-          <button type="button" onClick={() => setLado("venta")} className={boton(esVenta)}>Ventas</button>
-          <button type="button" onClick={() => setLado("compra")} className={boton(!esVenta)}>Compras</button>
-        </div>
+        {pestanas}
         <div className="flex rounded-lg border border-zinc-200 p-0.5 dark:border-zinc-700">
           {([["pendientes", "Pendientes"], ["por_vencer", "Por vencer"], ["vencidas", "Vencidas"], ["todas", "Todas"]] as const).map(([k, l]) => (
             <button key={k} type="button" onClick={() => setFiltro(k)} className={boton(filtro === k)}>{l}</button>
