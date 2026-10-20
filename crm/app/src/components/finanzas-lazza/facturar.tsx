@@ -6,13 +6,15 @@
 // (EmitirFacturaModal); "Esperando OC" es un aviso, se puede facturar igual.
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Loader2, Receipt, Search } from "lucide-react";
+import { Loader2, Receipt, Search, X } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { EmitirFacturaModal, type PresupuestoAFacturar } from "@/components/facturacion/emitir-factura-modal";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { useArcaStatus } from "@/lib/use-arca-status";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
+import { comprobanteVenta } from "@/lib/finanzas-lazza";
+import { esNotaCredito } from "@/lib/ventas-documentos";
 import { detalleDePr, enBandeja, etapaVenta, fechaParaFacturar } from "@/lib/ventas-etapas";
 
 const db = supabase as any;
@@ -31,7 +33,28 @@ interface FilaFacturar {
   total: number;
   esperandoOc: boolean;
   refacturar: boolean;
+  /** Si la factura se anuló con NC: el número de esa NC (para el estado "Anulada por NC …"). */
+  ncAnula: string | null;
   presupuesto: PresupuestoAFacturar;
+}
+
+/** NC que anulan cada factura: por factura_origen_id y por nota_credito_venta_aplicaciones (NC de varias facturas). Si falla, queda vacío. */
+async function ncDeFacturas(sociedadId: string, ids: string[]): Promise<Map<string, string>> {
+  const nc = new Map<string, string>();
+  for (let i = 0; i < ids.length; i += 200) {
+    const trozo = ids.slice(i, i + 200);
+    const [directas, aplicadas] = await Promise.all([
+      db.from("facturas").select("id, tipo, punto_venta, numero, factura_origen_id").eq("sociedad_id", sociedadId).in("factura_origen_id", trozo),
+      db.from("nota_credito_venta_aplicaciones").select("nota_credito_id, factura_id").in("factura_id", trozo),
+    ]);
+    for (const f of directas.data || []) if (!nc.has(f.factura_origen_id)) nc.set(f.factura_origen_id, comprobanteVenta(f));
+    const faltan = (aplicadas.data || []).filter((a: any) => !nc.has(a.factura_id));
+    if (!faltan.length) continue;
+    const { data } = await db.from("facturas").select("id, tipo, punto_venta, numero").in("id", [...new Set(faltan.map((a: any) => a.nota_credito_id))]);
+    const porId = new Map<string, any>((data || []).map((f: any) => [f.id, f]));
+    for (const a of faltan) { const f = porId.get(a.nota_credito_id); if (f && !nc.has(a.factura_id)) nc.set(a.factura_id, comprobanteVenta(f)); }
+  }
+  return nc;
 }
 
 async function traerParaFacturar(sociedadId: string, hoy: string): Promise<FilaFacturar[]> {
@@ -50,12 +73,18 @@ async function traerParaFacturar(sociedadId: string, hoy: string): Promise<FilaF
     facturas.push(...(data || []));
   }
   const filas: FilaFacturar[] = [];
+  const anuladaDe = new Map<string, string>(); // PR → su última factura anulada
   for (const p of prs) {
     const e = etapaVenta({
       fechaPr: p.fecha, totalPr: Number(p.total) || 0, monedaPr: p.moneda, ocCliente: p.oc_cliente,
       clientePideOc: !!p.clientes?.pide_oc_para_facturar, facturas: facturas.filter((f) => f.presupuesto_id === p.id), remitos: [],
     }, null, hoy);
     if (!enBandeja(e, "facturar") && !enBandeja(e, "esperando_oc")) continue;
+    if (e.refacturar) {
+      const ultima = facturas.filter((f) => f.presupuesto_id === p.id && f.estado === "anulada" && !esNotaCredito(f.tipo))
+        .sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""))[0];
+      if (ultima) anuladaDe.set(p.id, ultima.id);
+    }
     const items = [...(p.presupuesto_items || [])].sort((a: any, b: any) => Number(a.orden || 0) - Number(b.orden || 0));
     filas.push({
       id: p.id,
@@ -70,6 +99,7 @@ async function traerParaFacturar(sociedadId: string, hoy: string): Promise<FilaF
       total: Number(p.total) || 0,
       esperandoOc: e.esperandoOc,
       refacturar: e.refacturar,
+      ncAnula: null,
       presupuesto: {
         id: p.id, numero: p.numero, cliente_id: p.cliente_id, moneda: p.moneda,
         cotizacion_modalidad: p.cotizacion_modalidad, modalidad_emision: p.modalidad_emision,
@@ -78,6 +108,12 @@ async function traerParaFacturar(sociedadId: string, hoy: string): Promise<FilaF
         items,
       },
     });
+  }
+  if (anuladaDe.size) {
+    try {
+      const nc = await ncDeFacturas(sociedadId, [...anuladaDe.values()]);
+      for (const f of filas) { const id = anuladaDe.get(f.id); if (id) f.ncAnula = nc.get(id) || null; }
+    } catch (e) { console.error("Finanzas Lazza · Facturar (NC):", e); }
   }
   return filas.sort((a, b) => a.fechaPFact.localeCompare(b.fechaPFact));
 }
@@ -118,6 +154,14 @@ export function FinanzasLazzaFacturar({ sociedadId }: { sociedadId: string }) {
     setEmitir(f);
   };
 
+  // Igual que "No facturar" de Ventas: el PR pasa a «rechazado» y sale de la lista; la factura anulada y su NC quedan como están.
+  const noFacturar = async (f: FilaFacturar) => {
+    if (!confirm(`¿No facturar ${f.numero}? La factura anulada y su NC quedan como están, y el PR pasa a «rechazado» (sale de esta lista y de Ventas).`)) return;
+    const { error } = await db.from("presupuestos").update({ estado: "rechazado" }).eq("id", f.id).eq("sociedad_id", sociedadId);
+    if (error) { alert("No se pudo guardar: " + error.message); return; }
+    setRecarga((n) => n + 1);
+  };
+
   const cols: Column<FilaFacturar>[] = [
     { key: "fecha", label: "Fecha P/Fact", sortable: true, sortValue: (f) => f.fechaPFact, render: (f) => (
       <span className="whitespace-nowrap" title={f.ocCliente ? "Fecha de la OC del cliente" : "Fecha en que se aprobó el PR"}>{formatDate(f.fechaPFact)}</span>
@@ -132,16 +176,24 @@ export function FinanzasLazzaFacturar({ sociedadId }: { sociedadId: string }) {
     { key: "sucursal", label: "Sucursal", sortable: true, sortValue: (f) => f.sucursal, render: (f) => <span className="block max-w-[130px] truncate text-xs text-zinc-600 dark:text-zinc-300" title={f.sucursal}>{f.sucursal || "—"}</span> },
     { key: "neto", label: "Neto", sortable: true, sortValue: (f) => f.neto, className: "text-right", render: (f) => <span className="whitespace-nowrap font-mono text-zinc-500">{formatCurrency(f.neto, f.moneda)}</span> },
     { key: "total", label: "Total", sortable: true, sortValue: (f) => f.total, className: "text-right", render: (f) => <span className="whitespace-nowrap font-mono font-semibold">{formatCurrency(f.total, f.moneda)}</span> },
-    { key: "estado", label: "Estado", sortable: true, sortValue: (f) => (f.esperandoOc ? 1 : 0), render: (f) => (
-      <span className={`whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium ${f.esperandoOc ? "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300" : "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"}`}>
-        {f.esperandoOc ? "Esperando OC" : f.refacturar ? "Re-facturar" : "Listo"}
+    { key: "estado", label: "Estado", sortable: true, sortValue: (f) => (f.esperandoOc ? 1 : f.refacturar ? 2 : 0), render: (f) => (
+      <span className={`whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium ${f.esperandoOc ? "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300" : f.refacturar ? "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300" : "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"}`}>
+        {f.esperandoOc ? "Esperando OC" : f.refacturar ? (f.ncAnula ? `Anulada por ${f.ncAnula}` : "Anulada") : "Listo"}
       </span>
     ) },
     { key: "facturar", label: "", render: (f) => (
-      <button type="button" onClick={(e) => { e.stopPropagation(); facturar(f); }} title={f.esperandoOc ? "El cliente pide OC: avisa y se puede facturar igual" : "Hacer la factura de este PR"}
-        className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg bg-orange-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-orange-600">
-        <Receipt className="h-3.5 w-3.5" /> {f.refacturar ? "Re-facturar" : "Facturar"}
-      </button>
+      <div className="flex items-center gap-1">
+        <button type="button" onClick={(e) => { e.stopPropagation(); facturar(f); }} title={f.esperandoOc ? "El cliente pide OC: avisa y se puede facturar igual" : f.refacturar ? "Hacer una factura nueva de este PR" : "Hacer la factura de este PR"}
+          className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg bg-orange-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-orange-600">
+          <Receipt className="h-3.5 w-3.5" /> {f.refacturar ? "Re-facturar" : "Facturar"}
+        </button>
+        {f.refacturar && (
+          <button type="button" onClick={(e) => { e.stopPropagation(); noFacturar(f); }} title="Dejar la factura anulada como está y sacar el PR de la lista"
+            className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-50 hover:text-red-600 dark:hover:bg-zinc-800">
+            <X className="h-3.5 w-3.5" /> No facturar
+          </button>
+        )}
+      </div>
     ) },
   ];
 
