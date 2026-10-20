@@ -43,6 +43,11 @@ assert.deepEqual(filtrarFacturas(filas, { filtro: "vencidas" }).map((f) => f.id)
 assert.equal(filtrarFacturas(filas, { filtro: "todas" }).length, 6);
 assert.deepEqual(filtrarFacturas(filas, { filtro: "todas", texto: "op-000072" }).map((f) => f.id), ["b"]);
 assert.deepEqual(filtrarFacturas(filas, { filtro: "pendientes", texto: "segufer" }).map((f) => f.id), ["e", "f"]);
+// Enviadas / no enviadas (rebotada cuenta como no enviada)
+const conEnvio = filas.map((f) => f.id === "a" ? { ...f, enviada: "2026-10-01" } : f.id === "b" ? { ...f, enviada: "2026-10-02", envioEstado: "bounced" } : f);
+assert.deepEqual(filtrarFacturas(conEnvio, { filtro: "todas", envio: "si" }).map((f) => f.id), ["a"]);
+assert.equal(filtrarFacturas(conEnvio, { filtro: "todas", envio: "no" }).length, 5);
+assert.deepEqual(filtrarFacturas(conEnvio, { filtro: "pendientes", envio: "no" }).map((f) => f.id), ["b", "e", "f"]);
 
 // Totales: solo lo que tiene saldo
 const t = totalesFacturas(filas);

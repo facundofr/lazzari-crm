@@ -35,6 +35,8 @@ interface EmailComposeModalProps {
   extraAttachments?: { filename: string; url: string }[];
   /** Si se pasa, un mail escrito a mano que no está entre los contactos se puede guardar con "Guardar este contacto". */
   guardarContacto?: { entityType: "cliente" | "proveedor"; entityId: string; cargo?: string };
+  /** Aviso arriba de "Para" (ej.: quién pidió el PR de la factura). */
+  aviso?: React.ReactNode;
 }
 
 /** Cuántos contactos se muestran arriba; el resto queda detrás de "Ver todos". */
@@ -65,6 +67,7 @@ export function EmailComposeModal({
   onMarkSent,
   extraAttachments = [],
   guardarContacto,
+  aviso,
 }: EmailComposeModalProps) {
   const [to, setTo] = useState(defaultTo);
   const [subject, setSubject] = useState(defaultSubject);
@@ -201,6 +204,7 @@ export function EmailComposeModal({
 
         {/* Form */}
         <div className="space-y-3">
+          {aviso && <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">{aviso}</div>}
           {/* To */}
           <div>
             <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Para *</label>

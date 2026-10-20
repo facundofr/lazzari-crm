@@ -5,7 +5,7 @@
 // Se tildan varias y "Pagar (n)" / "Cobrar (n)" abre la MISMA ventana de siempre (OP de Finanzas / liquidación de cobro).
 // Una OP es de un solo proveedor y un cobro de un solo cliente (y de una moneda): si se tilda de más, aviso y se sigue con el primero.
 // Ventas suma OC del cliente y vendedor (Augusto: "oc nuestra no la sumes"). Cobrada/Pagada con: recibo u OP, con Ver / Descargar / Enviar.
-// Clic en la fila = la ficha de la factura (Ver, Descargar, Enviar). Lápiz en "Vence" = cambiar vencimiento (la ventana de Vencimientos).
+// Clic en la fila = la ficha de la factura (Ver, Descargar, Enviar). "Enviar" en la columna Enviada = directo la ventana de mail. Lápiz en "Vence" = cambiar vencimiento (la ventana de Vencimientos).
 // "Todas" trae también cobradas/pagadas, anuladas y NC: se carga recién cuando se toca (es más pesado).
 // Ventas (Augusto 20/10): arriba "Facturado del mes" en $ (Neto + IVA, ◀ mes ▶), vencidas y por vencer (clic = filtra);
 // columnas Fecha · Vence · Cliente · N° · OC · Vend. (iniciales) · Mon. · Neto · Total · Saldo · Estado · Enviada · Ver/Descargar.
@@ -56,11 +56,14 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
   const [lado, setLado] = useState<LadoFactura>(ladoInicial);
   const [filtro, setFiltro] = useState<FiltroFacturas>("pendientes");
   const [texto, setTexto] = useState("");
+  const [envio, setEnvio] = useState<"" | "si" | "no">("");
   const [datos, setDatos] = useState<Datos | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recarga, setRecarga] = useState(0);
   const [tildadas, setTildadas] = useState<string[]>([]);
   const [ficha, setFicha] = useState<FilaFactura | null>(null);
+  // "Enviar" en la columna Enviada: abre directo la ventana de mail (sin la ficha).
+  const [enviarDe, setEnviarDe] = useState<FilaFactura | null>(null);
   const [editando, setEditando] = useState<FilaFactura | null>(null);
   const [pagando, setPagando] = useState<{ entidadId: string | null; nombre: string; ids: string[] } | null>(null);
   const [enviarOP, setEnviarOP] = useState<string | null>(null);
@@ -95,7 +98,7 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
     return () => { vivo = false; };
   }, [sociedadId, lado, mes, recarga]);
 
-  const visibles = useMemo(() => filtrarFacturas(datos?.filas || [], { filtro, texto }), [datos, filtro, texto]);
+  const visibles = useMemo(() => filtrarFacturas(datos?.filas || [], { filtro, texto, envio: lado === "venta" ? envio : "" }), [datos, filtro, texto, envio, lado]);
   const totales = useMemo(() => totalesFacturas(visibles), [visibles]);
   const venc = useMemo(() => resumenVencimientos(datos?.filas || []), [datos]);
   const porId = useMemo(() => new Map((datos?.filas || []).map((f) => [f.id, f])), [datos]);
@@ -164,10 +167,10 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
     // Ventas: sin "Cobrada con" (Augusto 20/10: "si está cobrada está bien"); el recibo sigue en la ficha.
     ...(esVenta ? [
       { key: "enviada", label: "Enviada", sortable: true, sortValue: (f: FilaFactura) => f.enviada || "", render: (f: FilaFactura) => (
-        f.enviada && f.envioEstado !== "bounced" ? <span className="whitespace-nowrap text-xs text-emerald-600">✓ {formatDate(f.enviada)}</span> : (
+        f.enviada && f.envioEstado !== "bounced" ? <span className="whitespace-nowrap text-xs text-emerald-600">✓ {formatDate(f.enviada)}{f.porFuera ? " · por fuera" : ""}</span> : (
           <span className="flex items-center gap-1 whitespace-nowrap text-xs">
             <span className="font-medium text-red-600">{f.envioEstado === "bounced" ? "Rebotó" : "No enviada"}</span>
-            <button type="button" onClick={(e) => { e.stopPropagation(); setFicha(f); }} title="Abre la factura para mandarla por mail"
+            <button type="button" onClick={(e) => { e.stopPropagation(); setEnviarDe(f); }} title="Mandar la factura por mail al cliente"
               className="inline-flex items-center gap-0.5 rounded border border-red-200 px-1.5 py-0.5 text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950/30"><Mail className="h-3 w-3" /> Enviar</button>
           </span>
         )
@@ -219,6 +222,11 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
           <Search className="absolute left-2.5 top-2 h-4 w-4 text-zinc-400" />
           <input value={texto} onChange={(e) => setTexto(e.target.value)} placeholder={esVenta ? "Buscar cliente, N° factura, OC, vendedor o recibo" : "Buscar proveedor, N° factura u OP"} className={`${control} w-full pl-8`} />
         </div>
+        {esVenta && (
+          <select value={envio} onChange={(e) => setEnvio(e.target.value as "" | "si" | "no")} title="Filtrar por envío por mail" className={control}>
+            <option value="">Enviadas y no</option><option value="si">Enviadas</option><option value="no">No enviadas</option>
+          </select>
+        )}
         {esVenta ? (
           <button type="button" onClick={() => setPagando({ entidadId: null, nombre: "", ids: [] })} title="Cobro sin factura o eligiendo el cliente"
             className="inline-flex h-8 items-center gap-1 rounded-lg border border-emerald-300 px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-950/30">
@@ -302,6 +310,7 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
         </div>
       )}
 
+      {enviarDe && <FichaFacturaVenta facturaId={enviarDe.id} soloMail onClose={() => setEnviarDe(null)} onEnviada={recargar} />}
       {ficha && (esVenta ? (
         <FichaFacturaVenta facturaId={ficha.id} onClose={() => setFicha(null)} cobrable={sePuedeTildar(ficha)} onEnviada={recargar}
           onCobrar={() => { const f = ficha; setFicha(null); setPagando({ entidadId: f.entidadId, nombre: f.nombre, ids: [f.id] }); }}

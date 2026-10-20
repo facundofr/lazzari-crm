@@ -7,6 +7,7 @@
 // y en compras la columna "OP" al final para descargar la orden de pago que la pagó — Augusto 19/10/2026).
 // En Finanzas Lazza (`completa`) las facturas de venta con saldo tienen "Cobrar": la misma liquidación de Finanzas (finanzas-lazza/cobrar.tsx).
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable, type Column } from "@/components/ui/data-table";
@@ -21,11 +22,11 @@ import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { estadoVisibleFactura } from "@/lib/estado-factura-venta";
 import { emisorDeSociedad } from "@/lib/emisor-sociedad";
 import { cargarOPsDeFacturas, abrirOrdenPagoPDF, opsPorFactura, type OPResumen } from "@/lib/orden-pago-pdf";
-import { CreditCard, Download, Eye, FileText, HandCoins, Mail, Paperclip, Search, Wallet, X } from "lucide-react";
+import { Ban, CreditCard, Download, Eye, FileText, HandCoins, Mail, Paperclip, Search, Wallet, X } from "lucide-react";
 import { movimientoPagoTarjeta, registrarPagoTarjeta, tarjetaSugerida, traerTarjetas, type Tarjeta } from "@/lib/pago-tarjeta";
 import { CobrarCliente } from "@/components/finanzas-lazza/cobrar";
 import { EnviarOrdenPago, verOP } from "@/components/finanzas-lazza/orden-pago-doc";
-import { destinatariosCortos } from "@/lib/envio-factura-texto";
+import { destinatariosConNombre, destinatariosCortos } from "@/lib/envio-factura-texto";
 
 type Moneda = "ARS" | "USD";
 
@@ -291,6 +292,8 @@ export function FacturasConsulta({ completa = false }: { completa?: boolean }) {
       <div className={completa ? "space-y-2.5" : "space-y-2.5 p-3 sm:p-4"}>
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex rounded-lg border border-zinc-200 p-0.5 dark:border-zinc-700">
+            {/* "Facturar" antes de "De venta": atajo a la pantalla de Facturación (Augusto 20/10/2026; la ven todos). */}
+            {!completa && <Link href="/facturacion" className="rounded-md px-3 py-1 text-sm font-medium text-orange-600 hover:bg-orange-50 dark:text-orange-400 dark:hover:bg-orange-950/30">Facturar</Link>}
             {(completa ? (["todas", "venta", "compra"] as const) : (["venta", "compra"] as const)).map((t) => (
               <button key={t} type="button" onClick={() => setTab(t)}
                 className={`rounded-md px-3 py-1 text-sm font-medium ${tab === t ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"}`}>
@@ -352,6 +355,16 @@ const filaFicha = (label: React.ReactNode, valor: React.ReactNode) => (
 const botonFicha = "inline-flex items-center gap-1 rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800";
 
 /** Trae la factura por id si no vino armada. */
+/** Solicitante del PR (el contacto del presupuesto). null si no hay PR o no tiene contacto. */
+async function buscarSolicitante(presupuestoId: string | null): Promise<{ nombre: string; email: string } | null> {
+  if (!presupuestoId) return null;
+  try {
+    const { data } = await (supabase as any).from("presupuestos").select("contacto:contacto_id(nombre, email)").eq("id", presupuestoId).maybeSingle();
+    const c = data?.contacto;
+    return c ? { nombre: String(c.nombre || "").trim(), email: String(c.email || "").trim() } : null;
+  } catch { return null; }
+}
+
 /** PDF de una factura de venta (el mismo de la ficha). */
 async function htmlFacturaVenta(f: FacturaVenta, sociedadActiva: any): Promise<string | null> {
   if (!sociedadActiva) return null;
@@ -393,17 +406,43 @@ function useFactura<T>(tabla: string, select: string, factura?: T | null, factur
 /**
  * Ficha de una factura de venta: datos, renglones, Ver / Descargar el PDF y Enviar al cliente (marca de enviada).
  * `extra`: lo que se muestra abajo (en Finanzas Lazza: "Cobrada con", los recibos con Ver / Descargar / Enviar).
+ * `soloMail`: abre directo la ventana de mail, sin la ficha (botón "Enviar" de la lista; al cerrarla se cierra todo).
  */
-export function FichaFacturaVenta({ factura, facturaId, cobrable = false, onCobrar, onClose, onEnviada, extra }: {
+export function FichaFacturaVenta({ factura, facturaId, cobrable = false, onCobrar, onClose, onEnviada, extra, soloMail = false }: {
   factura?: FacturaVenta | null; facturaId?: string | null; cobrable?: boolean; onCobrar?: () => void;
-  onClose: () => void; onEnviada?: () => void; extra?: React.ReactNode;
+  onClose: () => void; onEnviada?: () => void; extra?: React.ReactNode; soloMail?: boolean;
 }) {
   const { sociedadActiva, profile } = useUser();
   const { toast } = useToast();
   const venta = useFactura<FacturaVenta>("facturas", SELECT_VENTA, factura, facturaId);
   const [items, setItems] = useState<ItemVenta[] | null>(null);
   const [mail, setMail] = useState<{ open: boolean; to: string; subject: string; body: string; filename: string; sugeridos: { email: string; label?: string }[] }>({ open: false, to: "", subject: "", body: "", filename: "", sugeridos: [] });
+  // Quién pidió el PR (contacto del presupuesto): undefined = cargando, null = sin solicitante.
+  const [solicitante, setSolicitante] = useState<{ nombre: string; email: string } | null | undefined>(undefined);
+  // Mails con nombre conocido (contactos del cliente + mail de facturación/general), para mostrar a quién se mandó.
+  const [conocidos, setConocidos] = useState<{ email: string; nombre: string }[]>([]);
   const hoy = todayAR();
+
+  useEffect(() => {
+    if (!venta?.id) return;
+    let vivo = true;
+    buscarSolicitante(venta.presupuesto_id).then((s) => { if (vivo) setSolicitante(s); });
+    const delCliente = [
+      ...(venta.clientes?.email_facturacion || "").split(",").map((e) => ({ email: e.trim(), nombre: "Facturación" })),
+      { email: (venta.clientes?.email || "").trim(), nombre: "Mail del cliente" },
+    ].filter((c) => c.email);
+    if (venta.cliente_id) {
+      (supabase as any).from("contactos").select("nombre, email").eq("entity_type", "cliente").eq("entity_id", venta.cliente_id)
+        .then(({ data }: any) => { if (vivo) setConocidos([...(data || []).filter((c: any) => c.email && c.nombre).map((c: any) => ({ email: String(c.email), nombre: String(c.nombre) })), ...delCliente]); });
+    } else setConocidos(delCliente);
+    return () => { vivo = false; };
+  }, [venta?.id, venta?.presupuesto_id]);
+
+  // "Enviar" desde la lista: la ventana de mail se abre sola apenas está la factura.
+  useEffect(() => {
+    if (soloMail && venta?.id) void prepararMail(venta);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soloMail, venta?.id]);
 
   useEffect(() => {
     if (!venta?.id) return;
@@ -436,17 +475,13 @@ export function FichaFacturaVenta({ factura, facturaId, cobrable = false, onCobr
       for (const c of contactos || []) if (c.email && !sugeridos.some((x) => x.email === c.email)) sugeridos.push({ email: c.email, label: c.nombre || "Contacto" });
     } catch { /* sin contactos */ }
     // El solicitante del PR va primero y marcado en "Para".
-    let solicitante = "";
-    if (f.presupuesto_id) {
-      try {
-        const { data: pr } = await (supabase as any).from("presupuestos").select("contacto:contacto_id(nombre, email)").eq("id", f.presupuesto_id).maybeSingle();
-        solicitante = String(pr?.contacto?.email || "").trim();
-        if (solicitante) {
-          const label = `⭐ Solicitante: ${pr.contacto.nombre || solicitante}`;
-          const ya = sugeridos.find((x) => x.email.toLowerCase() === solicitante.toLowerCase());
-          if (ya) ya.label = label; else sugeridos.unshift({ email: solicitante, label });
-        }
-      } catch { /* sin PR */ }
+    const sol = await buscarSolicitante(f.presupuesto_id);
+    setSolicitante(sol);
+    const solicitante = sol?.email || "";
+    if (solicitante) {
+      const label = `⭐ Solicitante: ${sol!.nombre || solicitante}`;
+      const ya = sugeridos.find((x) => x.email.toLowerCase() === solicitante.toLowerCase());
+      if (ya) ya.label = label; else sugeridos.unshift({ email: solicitante, label });
     }
     const base = f.clientes?.email_facturacion?.split(",")[0]?.trim() || f.clientes?.email || "";
     setMail({
@@ -459,9 +494,17 @@ export function FichaFacturaVenta({ factura, facturaId, cobrable = false, onCobr
     });
   }
 
+  const cerrarMail = () => { setMail((m) => ({ ...m, open: false })); if (soloMail) onClose(); };
+  const pr = venta?.presupuestos?.numero || "el PR";
+  const avisoSolicitante = !venta?.presupuesto_id ? "La factura no tiene PR asociado: no hay solicitante."
+    : solicitante === undefined ? null
+    : solicitante ? <>Solicitante de {pr}: <b>{solicitante.nombre || solicitante.email}</b>{solicitante.email ? (solicitante.nombre ? ` (${solicitante.email})` : "") : " — sin mail cargado"}</>
+    : `${pr} no tiene solicitante cargado.`;
+
   return (
     <>
-      <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose}>
+      {soloMail && !mail.open && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onClose}><p className="rounded-lg bg-white px-4 py-2 text-sm text-zinc-600 shadow dark:bg-zinc-900 dark:text-zinc-300">Preparando el mail…</p></div>}
+      {!soloMail && <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose}>
         <div className="h-full w-full max-w-xl overflow-y-auto bg-white p-4 shadow-2xl dark:bg-zinc-900" onClick={(e) => e.stopPropagation()}>
           {!venta ? <p className="text-sm text-zinc-500">Cargando…</p> : (
             <>
@@ -476,6 +519,8 @@ export function FichaFacturaVenta({ factura, facturaId, cobrable = false, onCobr
                 <button type="button" onClick={() => pdf(venta, true)} className={botonFicha}><Eye className="h-4 w-4" /> Ver</button>
                 <button type="button" onClick={() => pdf(venta, false)} className={botonFicha}><Download className="h-4 w-4" /> Descargar</button>
                 <button type="button" onClick={() => prepararMail(venta)} className="inline-flex items-center gap-1 rounded-lg bg-orange-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-600"><Mail className="h-4 w-4" /> Enviar al cliente</button>
+                {/* Hacer NC: lleva a la NC de siempre (Facturación, con ARCA) con esta factura ya elegida. */}
+                {venta.estado !== "anulada" && !/^NC/i.test(venta.tipo) && <Link href={`/facturacion?factura=${venta.id}&accion=nc`} title="Hacer una nota de crédito de esta factura" className="inline-flex items-center gap-1 rounded-lg border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/30"><Ban className="h-4 w-4" /> Hacer NC</Link>}
                 {cobrable && onCobrar && <button type="button" onClick={onCobrar} className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700"><HandCoins className="h-4 w-4" /> Cobrar</button>}
               </div>
               <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
@@ -483,10 +528,19 @@ export function FichaFacturaVenta({ factura, facturaId, cobrable = false, onCobr
                 {filaFicha("Vencimiento", venta.fecha_vencimiento ? formatDate(venta.fecha_vencimiento) : "—")}
                 {filaFicha("Estado", (ESTADO_VENTA[estadoVisibleFactura(venta, venta.fecha_vencimiento, hoy)] || { label: venta.estado }).label)}
                 {filaFicha("Presupuesto", venta.presupuestos?.numero || "—")}
+                {venta.presupuesto_id && filaFicha("Solicitante", solicitante === undefined ? "…" : solicitante ? `${solicitante.nombre || solicitante.email}${solicitante.email && solicitante.nombre ? ` (${solicitante.email})` : ""}` : "—")}
                 {filaFicha("OC del cliente", venta.oc_cliente || "—")}
                 {filaFicha("Condición de venta", venta.condicion_venta || "—")}
                 {filaFicha("CAE", venta.cae ? `${venta.cae}${venta.cae_vencimiento ? ` (vto. ${formatDate(venta.cae_vencimiento)})` : ""}` : "—")}
-                {filaFicha("Enviada por mail", venta.email_enviado_at ? `${formatDate(venta.email_enviado_at)}${venta.email_enviado_a ? ` a ${venta.email_enviado_a}` : ""}` : "No figura enviada")}
+                {filaFicha("Enviada por mail", !venta.email_enviado_at ? "No figura enviada" : (() => {
+                  const destinos = destinatariosConNombre(venta.email_enviado_a, solicitante?.email ? [{ email: solicitante.email, nombre: `${solicitante.nombre || solicitante.email} (solicitante)` }, ...conocidos] : conocidos);
+                  return (
+                    <span className="block text-right">
+                      {formatDate(venta.email_enviado_at)}{/por fuera/i.test(venta.email_enviado_a || "") ? <b> · Enviada por fuera (marcada a mano)</b> : !destinos.length && venta.email_enviado_a ? ` · ${venta.email_enviado_a}` : ""}
+                      {destinos.map((d) => <span key={d.email} className="block text-xs">{d.nombre ? <><b>{d.nombre}</b> · </> : null}<span className="text-zinc-500">{d.email}</span></span>)}
+                    </span>
+                  );
+                })())}
                 {filaFicha("Subtotal", formatCurrency(Number(venta.subtotal), venta.moneda as Moneda))}
                 {filaFicha("IVA", formatCurrency(Number(venta.iva), venta.moneda as Moneda))}
                 {filaFicha(<b>Total</b>, <b>{formatCurrency(Number(venta.total), venta.moneda as Moneda)}</b>)}
@@ -506,10 +560,11 @@ export function FichaFacturaVenta({ factura, facturaId, cobrable = false, onCobr
             </>
           )}
         </div>
-      </div>
+      </div>}
       <EmailComposeModal
         open={mail.open}
-        onClose={() => setMail((m) => ({ ...m, open: false }))}
+        onClose={cerrarMail}
+        aviso={avisoSolicitante}
         documentType="factura"
         sociedadId={sociedadActiva?.id}
         userEmail={profile?.email || undefined}
@@ -525,14 +580,23 @@ export function FichaFacturaVenta({ factura, facturaId, cobrable = false, onCobr
           if (!html) throw new Error("No se pudo generar el PDF");
           return htmlToPdfBase64(html);
         }}
+        onMarkSent={async () => {
+          if (!venta) return;
+          // "Enviada por fuera": la mandaron sin el sistema; queda marcada con ese texto (igual que en Facturación).
+          const { error: e } = await (supabase as any).rpc("marcar_factura_enviada", { p_factura_id: venta.id, p_to: "enviada por fuera", p_resend_id: null });
+          if (e) { toast.error("No se pudo marcar como enviada por fuera"); return; }
+          toast.success("Marcada como enviada por fuera");
+          onEnviada?.();
+          cerrarMail();
+        }}
         onSuccess={async (emailId, enviadoA) => {
           if (!venta) return;
           // Marca de envío con función de la base (los vendedores no pueden cambiar facturas).
           const { error: e } = await (supabase as any).rpc("marcar_factura_enviada", { p_factura_id: venta.id, p_to: (enviadoA?.length ? enviadoA.join(", ") : mail.to) || null, p_resend_id: emailId || null });
           if (e) console.error("No se pudo guardar la marca de envío:", e);
           toast.success("Factura enviada");
-          setMail((m) => ({ ...m, open: false }));
           onEnviada?.();
+          cerrarMail();
         }}
       />
     </>

@@ -16,3 +16,15 @@ export function textoEnvioCorto(enviadoAt: string | null | undefined, enviadoA: 
   const quien = destinatariosCortos(enviadoA);
   return [fecha, quien].filter(Boolean).join(" · ");
 }
+
+/**
+ * Cada mail al que se mandó, con el nombre de quien es si está cargado (contacto del cliente, "Facturación", etc.).
+ * "Enviada por fuera" no tiene mails: devuelve la lista vacía.
+ */
+export function destinatariosConNombre(enviadoA: string | null | undefined, conocidos: { email: string; nombre: string }[]): { email: string; nombre: string }[] {
+  const a = String(enviadoA || "").trim();
+  if (!a || /por fuera/i.test(a)) return [];
+  const mails = a.split(",").map((e) => e.trim()).filter(Boolean);
+  return mails.filter((e, i) => mails.findIndex((x) => x.toLowerCase() === e.toLowerCase()) === i)
+    .map((email) => ({ email, nombre: conocidos.find((c) => c.email.trim().toLowerCase() === email.toLowerCase())?.nombre?.trim() || "" }));
+}

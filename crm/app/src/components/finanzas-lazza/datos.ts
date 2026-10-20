@@ -138,7 +138,7 @@ export async function traerDeudas(sociedadId: string, hoy: string): Promise<Deud
 
 // ── Facturas (Augusto 19/10): una fila por factura, Ventas o Compras, con saldo y con qué se cobró/pagó ──
 
-const CAMPOS_FACTURAS_VENTA = "id, fecha, fecha_vencimiento, tipo, estado, moneda, subtotal, total, punto_venta, numero, cliente_id, oc_cliente, email_enviado_at, email_estado, clientes(razon_social)";
+const CAMPOS_FACTURAS_VENTA = "id, fecha, fecha_vencimiento, tipo, estado, moneda, subtotal, total, punto_venta, numero, cliente_id, oc_cliente, email_enviado_at, email_enviado_a, email_estado, clientes(razon_social)";
 const VENDEDOR_PR = ", presupuestos:presupuesto_id(vendedor_profile:vendedor_id(full_name))";
 
 /**
@@ -178,7 +178,7 @@ export async function traerFacturasFL(sociedadId: string, lado: LadoFactura, hoy
         id: r.id, entidadId: r.cliente_id ?? null, nombre: r.clientes?.razon_social || "", fecha: r.fecha, fecha_vencimiento: r.fecha_vencimiento,
         comprobante: comprobanteVenta(r), moneda: r.moneda, total: r.total, estado: r.estado, nc: esNotaCredito(r.tipo),
         saldo: saldos.get(r.id) ?? 0, ocCliente: r.oc_cliente, vendedor: r.presupuestos?.vendedor_profile?.full_name || "",
-        neto: r.subtotal, enviada: r.email_enviado_at, envioEstado: r.email_estado,
+        neto: r.subtotal, enviada: r.email_enviado_at, envioEstado: r.email_estado, porFuera: /por fuera/i.test(r.email_enviado_a || ""),
       })),
     });
     return { filas, recibos };

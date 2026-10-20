@@ -48,6 +48,8 @@ export interface FilaFactura {
   /** Solo ventas: cuándo se mandó por mail (null = no figura enviada) y estado del mail ("bounced" = rebotó). */
   enviada: string | null;
   envioEstado: string | null;
+  /** Marcada a mano como "Enviada por fuera" (sin mail del sistema). */
+  porFuera?: boolean;
 }
 
 export interface FacturaBase {
@@ -68,6 +70,7 @@ export interface FacturaBase {
   neto?: number | string | null;
   enviada?: string | null;
   envioEstado?: string | null;
+  porFuera?: boolean;
 }
 
 const num = (v: unknown) => Number(v || 0) || 0;
@@ -149,7 +152,7 @@ export function armarFilasFacturas(input: { lado: LadoFactura; hoy: string; fact
       lado: input.lado, id: f.id, entidadId: f.entidadId, nombre: f.nombre || "", fecha, vence, sinVencimiento: !f.fecha_vencimiento, dias,
       comprobante: f.comprobante, moneda: String(f.moneda || "").toUpperCase() === "USD" ? "USD" : "ARS", total, saldo, estado, parcial,
       ocCliente: f.ocCliente || "", vendedor: f.vendedor || "", docs: input.docs?.get(f.id) || [], ...(cheque ? { cheque } : {}),
-      neto: f.neto === null || f.neto === undefined ? total : r2(num(f.neto)), enviada: f.enviada ? String(f.enviada).slice(0, 10) : null, envioEstado: f.envioEstado || null,
+      neto: f.neto === null || f.neto === undefined ? total : r2(num(f.neto)), enviada: f.enviada ? String(f.enviada).slice(0, 10) : null, envioEstado: f.envioEstado || null, porFuera: !!f.porFuera,
     };
   });
   return ordenarFacturas(out);
@@ -165,9 +168,15 @@ export function ordenarFacturas(filas: FilaFactura[]): FilaFactura[] {
   });
 }
 
-export function filtrarFacturas(filas: FilaFactura[], f: { filtro: FiltroFacturas; texto?: string }): FilaFactura[] {
+/** Enviada por mail = tiene fecha de envío y no rebotó (lo mismo que muestra la columna "Enviada"). */
+export const facturaEnviada = (x: FilaFactura) => !!x.enviada && x.envioEstado !== "bounced";
+
+/** `envio`: "si" = solo enviadas por mail, "no" = solo no enviadas (o rebotadas), "" = todas. */
+export function filtrarFacturas(filas: FilaFactura[], f: { filtro: FiltroFacturas; texto?: string; envio?: "" | "si" | "no" }): FilaFactura[] {
   const q = sinAcentos((f.texto || "").trim());
   return filas.filter((x) => {
+    if (f.envio === "si" && !facturaEnviada(x)) return false;
+    if (f.envio === "no" && facturaEnviada(x)) return false;
     if (f.filtro === "pendientes" && x.saldo <= 0.005) return false;
     if (f.filtro === "vencidas" && (x.saldo <= 0.005 || x.dias >= 0)) return false;
     if (f.filtro === "por_vencer" && (x.saldo <= 0.005 || x.dias < 0 || x.dias > DIAS_POR_VENCER)) return false;
