@@ -28,6 +28,9 @@ export const REGIMEN_RG830: Record<string, string> = {
   seguros: "094",
 };
 
+/** Código de régimen del concepto (sin concepto o desconocido → 078 bienes, como en la línea). */
+export const regimenSicore = (concepto?: string | null) => REGIMEN_RG830[concepto || "compraventa_bienes"] || "078";
+
 /** Texto a la izquierda, relleno con espacios a la derecha, cortado al largo. */
 const izq = (s: string, len: number) => s.slice(0, len).padEnd(len, " ");
 /** Número a la derecha, relleno con ceros a la izquierda. */
@@ -66,7 +69,7 @@ export function armarLineaSicore(l: LineaSicore): string {
     "   " + cer(String(l.numeroComprobante || "").replace(/\D/g, ""), 13),
     montoSicore(l.importeComprobante, 16),
     cod("217", 4),                                          // impuesto: Ganancias → " 217"
-    cod(REGIMEN_RG830[l.conceptoRetencion || "compraventa_bienes"] || "078", 3), // ej. " 78"
+    cod(regimenSicore(l.conceptoRetencion), 3),             // ej. " 78"
     "1",                                                    // operación: retención
     montoSicore(l.baseCalculo, 14),
     fecha,                                                  // fecha de emisión de la retención

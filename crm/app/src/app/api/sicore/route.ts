@@ -8,7 +8,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { createSupabaseServer } from "@/lib/supabase/server";
-import { armarLineaSicore } from "@/lib/sicore-linea";
+import { armarLineaSicore, regimenSicore } from "@/lib/sicore-linea";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -145,6 +145,9 @@ export async function GET(req: NextRequest) {
     })),
   ];
 
+  // Los mismos renglones del TXT, para el Excel de Finanzas Lazza (formato=json).
+  const filas: Array<{ fecha: string; comprobante: string; proveedor: string; cuit: string; regimen: string; importe: number; base: number; pct: number; retencion: number }> = [];
+
   for (const op of sources) {
     const prov = provMap.get(op.proveedor_id);
     if (!prov?.cuit) continue;
@@ -160,7 +163,20 @@ export async function GET(req: NextRequest) {
     });
 
     lines.push(line);
+    filas.push({
+      fecha: String(op.fecha).slice(0, 10),
+      comprobante: op.numero || op.descripcion || "Pago directo",
+      proveedor: prov.razon_social || "",
+      cuit: String(prov.cuit).replace(/\D/g, ""),
+      regimen: regimenSicore(prov.concepto_retencion_ganancias),
+      importe: Number(op.monto_bruto || 0),
+      base: Number(op.base_retencion_ganancias || 0),
+      pct: Number(op.retencion_ganancias_pct || 0),
+      retencion: Number(op.retencion_ganancias_monto || 0),
+    });
   }
+
+  if (searchParams.get("formato") === "json") return NextResponse.json({ filas });
 
   const content = lines.length ? lines.join("\r\n") + "\r\n" : ""; // cada línea termina en CRLF, como el archivo del contador
   const filename = `SICORE_${desde}_${hasta}.txt`;

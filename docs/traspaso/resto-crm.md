@@ -30,6 +30,7 @@ Que Augusto y los chicos trabajen sin trabas: arreglar lo que falla, simplificar
 - **Falta verlo en producción** (hoy va por V1.1.517) con el usuario de Augusto, sin guardar: que esos 4 no estén en el menú, que /importaciones diga "Próximamente" y la versión de abajo. El 17/10 se abrió el login en el navegador de la app pero no llegó a entrar (cambio de cuenta).
 
 ## Sin publicar
+- 20/10: Finanzas Lazza > Retenciones con botones TXT SICORE y Excel por rango de fechas (`listas.tsx`, `api/sicore/route.ts` con `formato=json`, `lib/sicore-linea.ts`). Ver ESTADO. Falta ver la pantalla, porque en local pide login.
 Nada. "Se sacan 3 IA" salió en V1.1.532; "Sin datos inventados" sale en la tanda V1.1.534 (19/10, junto con Remitos y Transportes).
 - El cambio local en `crm/app/tsconfig.json` NO es de este chat (no se publica).
 
@@ -39,7 +40,7 @@ Nada. "Se sacan 3 IA" salió en V1.1.532; "Sin datos inventados" sale en la tand
 3. ~~OP de Nexo~~ → HECHA por Augusto: OP-000066 (16/10), eCheq BBVA 90017386 $678.972 al 31/10 (ret. Ganancias 2 %), mail enviado; FC 0003-00005284 pagada. Ojo: OC-2026-1229 sigue "enviada" con 0/1 llegó (si la mesa ya llegó, marcar Llegó).
 4. Informe para el equipo ACTUALIZADO: `Claude outputs/informe-equipo-novedades-17-10-2026.md` (12 puntos, al día con V1.1.517). Falta que Augusto lo lea y lo mande él.
 4b. **Mayúsculas solo cuando hace falta** (A + B + C) PUBLICADO en V1.1.520 y visto en producción (Proveedores) (ver ESTADO, entrada "MAYÚSCULAS"). Falta publicar y mirarlo en producción; la corrección de datos viejos en la base (opción D) quedó descartada por ahora.
-5. Probar la foto del remito del proveedor con un remito REAL.
+5. Probar la foto del remito del proveedor con un remito REAL. Ojo (19/10): esa foto vive solo en Compras nueva (`compras-nueva/page.tsx`, tabla `oc_remitos`); Compras Lazza no la tiene. Preguntarle a Augusto si la prueba sigue valiendo o si la quiere en Compras Lazza (eso sería del chat de Compras).
 6. ~~Ver el menú en producción~~ → visto 17/10 en V1.1.520 con el usuario de Augusto: OK.
 
 ## Decisiones de Augusto
@@ -60,5 +61,5 @@ Nada. "Se sacan 3 IA" salió en V1.1.532; "Sin datos inventados" sale en la tand
 
 ## Prompt para seguir en un chat nuevo
 ```
-Sos el chat de Resto del CRM. Leé CLAUDE.md, docs/traspaso/resto-crm.md y las primeras entradas de docs/ESTADO.md. Seguimos con el asistente dentro del CRM: la Etapa 1 está hecha y sin publicar (ver ESTADO). Pasame los pasos para correr la migración ia_acciones y, cuando te diga, publicala y probala conmigo en producción.
+Sos el chat de Resto del CRM. Leé CLAUDE.md, docs/traspaso/resto-crm.md y las primeras entradas de docs/ESTADO.md. Todo está publicado hasta V1.1.534 (Sin datos inventados, Se sacan 3 IA, Asistente Etapa 1). Etapa 2 del asistente en pausa. Pendiente: que yo lea Claude outputs/informe-equipo-novedades-17-10-2026.md y probar la foto del remito del proveedor con uno real (ojo: hoy está solo en Compras nueva, no en Compras Lazza). Saludame corto y preguntame qué seguimos. No publiques ni toques la base sin mi OK.
 ```

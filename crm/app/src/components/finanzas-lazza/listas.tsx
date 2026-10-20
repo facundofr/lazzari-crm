@@ -420,6 +420,60 @@ export function FinanzasLazzaMovimientos({ sociedadId }: { sociedadId: string })
 
 // ── Retenciones ─────────────────────────────────────────────────────
 
+const REGIMEN_TEXTO: Record<string, string> = { "078": "Bienes", "094": "Servicios", "095": "Transporte", "116": "Honorarios", "031": "Alquiler inmuebles", "030": "Alquiler muebles", "019": "Intereses", "021": "Intereses", "025": "Comisiones" };
+
+/**
+ * Exportar las retenciones de Ganancias practicadas (lo que se presenta en SICORE) del rango de fechas:
+ * TXT con el formato de importación de SICORE (/api/sicore, el mismo de Finanzas) y Excel con esos mismos renglones.
+ */
+function ExportarSicore({ sociedadId, desde, hasta }: { sociedadId: string; desde: string; hasta: string }) {
+  const [bajando, setBajando] = useState<"" | "txt" | "excel">("");
+  const bajar = async (formato: "txt" | "excel") => {
+    if (!desde) { alert("Elegí la fecha desde."); return; }
+    const h = hasta || todayAR();
+    setBajando(formato);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const r = await fetch(`/api/sicore?desde=${desde}&hasta=${h}&sociedad_id=${sociedadId}${formato === "excel" ? "&formato=json" : ""}`,
+        { headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {} });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || "No se pudo armar el archivo."); return; }
+      const nombre = `Retenciones SICORE ${desde} a ${h}`;
+      if (formato === "txt") {
+        const url = URL.createObjectURL(await r.blob());
+        const a = document.createElement("a"); a.href = url; a.download = `${nombre}.txt`; a.click(); URL.revokeObjectURL(url);
+        return;
+      }
+      const { filas } = await r.json() as { filas: { fecha: string; comprobante: string; proveedor: string; cuit: string; regimen: string; importe: number; base: number; pct: number; retencion: number }[] };
+      const XLSX: any = await import("xlsx");
+      const datos = filas.map((f) => ({
+        Fecha: formatDate(f.fecha), Comprobante: f.comprobante, Proveedor: f.proveedor, CUIT: f.cuit,
+        "Régimen": `${Number(f.regimen)} ${REGIMEN_TEXTO[f.regimen] || ""}`.trim(), "Importe OP": f.importe, "Base": f.base, "%": f.pct, "Retención": f.retencion,
+      }));
+      datos.push({ Fecha: "", Comprobante: "", Proveedor: "TOTAL", CUIT: "", "Régimen": "", "Importe OP": filas.reduce((s, f) => s + f.importe, 0), "Base": filas.reduce((s, f) => s + f.base, 0), "%": "" as any, "Retención": Math.round(filas.reduce((s, f) => s + f.retencion, 0) * 100) / 100 });
+      const ws = XLSX.utils.json_to_sheet(datos);
+      ws["!cols"] = [{ wch: 11 }, { wch: 12 }, { wch: 40 }, { wch: 13 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 5 }, { wch: 12 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Retenciones");
+      XLSX.writeFile(wb, `${nombre}.xlsx`);
+    } catch (e) {
+      console.error("SICORE:", e); alert("No se pudo armar el archivo. Probá de nuevo.");
+    } finally { setBajando(""); }
+  };
+  const boton = "flex h-8 items-center gap-1 rounded-lg border px-2.5 text-xs font-medium disabled:opacity-50";
+  return (
+    <>
+      <button type="button" disabled={!!bajando} onClick={() => void bajar("txt")} title="Retenciones de Ganancias practicadas del rango, en el formato para importar en SICORE"
+        className={`${boton} border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100 dark:border-violet-700 dark:bg-violet-950 dark:text-violet-300`}>
+        {bajando === "txt" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />} TXT SICORE
+      </button>
+      <button type="button" disabled={!!bajando} onClick={() => void bajar("excel")} title="Los mismos renglones del TXT, en Excel"
+        className={`${boton} border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-300`}>
+        {bajando === "excel" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />} Excel
+      </button>
+    </>
+  );
+}
+
 export function FinanzasLazzaRetenciones({ sociedadId }: { sociedadId: string }) {
   const { datos, error } = useCarga<FilaRetencion[]>(async () => {
     const [ops, movs] = await Promise.all([
@@ -457,6 +511,7 @@ export function FinanzasLazzaRetenciones({ sociedadId }: { sociedadId: string })
       ))}
       <Buscador valor={texto} cambiar={setTexto} placeholder="Buscar nombre, CUIT u OP" />
       <Fechas desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} />
+      <ExportarSicore sociedadId={sociedadId} desde={desde} hasta={hasta} />
     </>} pie={<>
       <span>{visibles.length} retenciones</span>
       {lado !== "sufrida" && <span>Practicadas <b className="font-mono">{sumar(visibles.filter((r) => r.lado === "practicada"), (r) => r.monto, (r) => r.moneda)}</b></span>}
