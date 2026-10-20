@@ -7,18 +7,21 @@
 // Ventas suma OC del cliente y vendedor (Augusto: "oc nuestra no la sumes"). Cobrada/Pagada con: recibo u OP, con Ver / Descargar / Enviar.
 // Clic en la fila = la ficha de la factura (Ver, Descargar, Enviar). Lápiz en "Vence" = cambiar vencimiento (la ventana de Vencimientos).
 // "Todas" trae también cobradas/pagadas, anuladas y NC: se carga recién cuando se toca (es más pesado).
+// Ventas (Augusto 20/10): arriba "Facturado del mes" en $ (Neto + IVA, ◀ mes ▶), vencidas y por vencer (clic = filtra);
+// columnas Fecha · Vence · Cliente · N° · OC · Vend. (iniciales) · Mon. · Neto · Total · Saldo · Estado · Enviada · Ver/Descargar.
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Download, Eye, HandCoins, Loader2, Mail, Pencil, Search, Wallet } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, Download, Eye, HandCoins, Loader2, Mail, Pencil, Search, Wallet } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { useUser } from "@/lib/auth-context";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import {
-  diasEntre, estadoFactura, etiquetaEstado, filtrarFacturas, prepararSeleccion, sePuedeTildar, totalesFacturas,
+  diasEntre, estadoFactura, etiquetaEstado, facturadoDelMes, filtrarFacturas, iniciales, prepararSeleccion, resumenVencimientos, sePuedeTildar, totalesFacturas,
   type DocPago, type EstadoFactura, type FilaFactura, type FiltroFacturas, type LadoFactura,
 } from "@/lib/facturas-lazza";
 import type { Recibo } from "@/lib/recibos";
-import { FichaFacturaCompra, FichaFacturaVenta } from "@/components/facturas-consulta";
-import { traerFacturasFL } from "./datos";
+import { abrirFacturaVenta, FichaFacturaCompra, FichaFacturaVenta } from "@/components/facturas-consulta";
+import { sumarMeses } from "@/lib/reportes-comprobantes";
+import { traerComprobantesMes, traerFacturasFL } from "./datos";
 import { CobrarCliente } from "./cobrar";
 import { PagarProveedor } from "./pagar";
 import { descargarOP, EnviarOrdenPago, verOP } from "./orden-pago-doc";
@@ -32,12 +35,17 @@ const ESTILO_ESTADO: Record<EstadoFactura, string> = {
   pagada: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300",
   anulada: "bg-zinc-100 text-zinc-400 line-through dark:bg-zinc-800",
   nc: "bg-violet-50 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300",
+  cheque_cartera: "bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300",
+  cheque_depositado: "bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300",
+  cheque_endosado: "bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300",
 };
 
 const montos = (m: { ARS: number; USD: number }, cero = "$ 0") => {
   const partes = [m.ARS >= 0.01 ? formatCurrency(m.ARS) : null, m.USD >= 0.01 ? formatCurrency(m.USD, "USD") : null].filter(Boolean);
   return partes.length ? partes.join(" + ") : cero;
 };
+const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+const nombreMes = (periodo: string) => `${MESES[Number(periodo.slice(5, 7)) - 1] || ""} ${periodo.slice(0, 4)}`;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
 const boton = (activo: boolean) => `rounded-md px-3 py-1 text-sm font-medium ${activo ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"}`;
 
@@ -59,6 +67,8 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
   const [enviarRecibo, setEnviarRecibo] = useState<Recibo | null>(null);
   const hoy = todayAR();
   const necesitaTodas = filtro === "todas";
+  const [mes, setMes] = useState(hoy.slice(0, 7));
+  const [delMes, setDelMes] = useState<ReturnType<typeof facturadoDelMes> | null>(null);
 
   // Cambiar de lado limpia lo tildado y vuelve a cargar; "Todas" se trae solo cuando hace falta.
   useEffect(() => { setTildadas([]); setDatos(null); }, [lado, sociedadId]);
@@ -74,8 +84,20 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
 
   const recargar = () => { setTildadas([]); setDatos(null); setRecarga((n) => n + 1); };
 
+  // Facturado del mes (solo ventas): aparte de la lista, no depende del filtro.
+  useEffect(() => {
+    if (lado !== "venta") return;
+    let vivo = true;
+    setDelMes(null);
+    traerComprobantesMes(sociedadId, mes)
+      .then((c) => { if (vivo) setDelMes(facturadoDelMes(c)); })
+      .catch((e) => console.error("Finanzas Lazza · Facturado del mes:", e));
+    return () => { vivo = false; };
+  }, [sociedadId, lado, mes, recarga]);
+
   const visibles = useMemo(() => filtrarFacturas(datos?.filas || [], { filtro, texto }), [datos, filtro, texto]);
   const totales = useMemo(() => totalesFacturas(visibles), [visibles]);
+  const venc = useMemo(() => resumenVencimientos(datos?.filas || []), [datos]);
   const porId = useMemo(() => new Map((datos?.filas || []).map((f) => [f.id, f])), [datos]);
   const seleccion = useMemo(() => prepararSeleccion(tildadas.map((id) => porId.get(id)).filter(Boolean) as FilaFactura[], lado), [tildadas, porId, lado]);
   const recibosPorId = useMemo(() => new Map((datos?.recibos || []).map((r) => [r.id, r])), [datos]);
@@ -120,23 +142,50 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
     { key: "comprobante", label: "N° factura", sortable: true, sortValue: (f) => f.comprobante, render: (f) => <span className="whitespace-nowrap font-mono text-xs">{f.comprobante}</span> },
     ...(esVenta ? [
       { key: "oc", label: "OC cliente", sortable: true, sortValue: (f: FilaFactura) => f.ocCliente, render: (f: FilaFactura) => <span className="block max-w-[110px] truncate text-xs text-zinc-500" title={f.ocCliente}>{f.ocCliente || "—"}</span> },
-      { key: "vendedor", label: "Vendedor", sortable: true, sortValue: (f: FilaFactura) => f.vendedor, render: (f: FilaFactura) => <span className="whitespace-nowrap text-xs text-zinc-500">{f.vendedor || "—"}</span> },
+      { key: "vendedor", label: "Vend.", sortable: true, sortValue: (f: FilaFactura) => f.vendedor, render: (f: FilaFactura) => <span className="whitespace-nowrap text-xs text-zinc-500" title={f.vendedor}>{iniciales(f.vendedor) || "—"}</span> },
     ] : []),
     { key: "moneda", label: "Mon.", sortable: true, sortValue: (f) => f.moneda, render: (f) => (f.moneda === "USD" ? "US$" : "$") },
+    ...(esVenta ? [
+      { key: "neto", label: "Neto", sortable: true, sortValue: (f: FilaFactura) => f.neto, className: "text-right", render: (f: FilaFactura) => <span className="whitespace-nowrap font-mono text-zinc-500">{formatCurrency(f.neto, f.moneda)}</span> },
+    ] : []),
     { key: "total", label: "Total", sortable: true, sortValue: (f) => f.total, className: "text-right", render: (f) => <span className="whitespace-nowrap font-mono text-zinc-500">{formatCurrency(f.total, f.moneda)}</span> },
     { key: "saldo", label: "Saldo", sortable: true, sortValue: (f) => f.saldo, className: "text-right", render: (f) => <span className={`whitespace-nowrap font-mono ${f.saldo > 0.005 ? "font-semibold" : "text-zinc-400"}`}>{formatCurrency(f.saldo, f.moneda)}</span> },
     { key: "estado", label: "Estado", sortable: true, sortValue: (f) => f.estado, render: (f) => (
       <span className="whitespace-nowrap">
         <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${ESTILO_ESTADO[f.estado]}`}>{etiquetaEstado(f.estado, lado)}</span>
         {f.estado === "vencida" && f.parcial && <span className="block text-[10px] text-zinc-400">parcial</span>}
+        {f.cheque && f.estado.startsWith("cheque_") && (
+          <span className="block text-[10px] text-zinc-400">
+            N° {f.cheque.numero}{f.cheque.estado === "cartera" ? " · sin depositar" : f.cheque.fecha ? ` · ${f.cheque.estado === "endosado" ? "endosado" : "depositado"} ${formatDate(f.cheque.fecha)}` : ""}
+          </span>
+        )}
       </span>
     ) },
-    { key: "docs", label: esVenta ? "Cobrada con" : "Pagada con", sortable: true, sortValue: (f) => f.docs.map((d) => d.numero).join(" "), render: (f) => (
-      f.docs.length ? <span className="flex flex-col items-start gap-0.5">{f.docs.map((d) => <MenuDoc key={d.id} doc={d} accion={accionDoc} />)}</span> : <span className="text-xs text-zinc-300">—</span>
-    ) },
+    // Ventas: sin "Cobrada con" (Augusto 20/10: "si está cobrada está bien"); el recibo sigue en la ficha.
+    ...(esVenta ? [
+      { key: "enviada", label: "Enviada", sortable: true, sortValue: (f: FilaFactura) => f.enviada || "", render: (f: FilaFactura) => (
+        f.enviada && f.envioEstado !== "bounced" ? <span className="whitespace-nowrap text-xs text-emerald-600">✓ {formatDate(f.enviada)}</span> : (
+          <span className="flex items-center gap-1 whitespace-nowrap text-xs">
+            <span className="font-medium text-red-600">{f.envioEstado === "bounced" ? "Rebotó" : "No enviada"}</span>
+            <button type="button" onClick={(e) => { e.stopPropagation(); setFicha(f); }} title="Abre la factura para mandarla por mail"
+              className="inline-flex items-center gap-0.5 rounded border border-red-200 px-1.5 py-0.5 text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950/30"><Mail className="h-3 w-3" /> Enviar</button>
+          </span>
+        )
+      ) },
+    ] : [
+      { key: "docs", label: "Pagada con", sortable: true, sortValue: (f: FilaFactura) => f.docs.map((d) => d.numero).join(" "), render: (f: FilaFactura) => (
+        f.docs.length ? <span className="flex flex-col items-start gap-0.5">{f.docs.map((d) => <MenuDoc key={d.id} doc={d} accion={accionDoc} />)}</span> : <span className="text-xs text-zinc-300">—</span>
+      ) },
+    ]),
     { key: "ver", label: "", render: (f) => (
-      <button type="button" title="Ver la factura (descargar y enviar)" onClick={(e) => { e.stopPropagation(); setFicha(f); }}
-        className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-orange-600 dark:hover:bg-zinc-800"><Eye className="h-3.5 w-3.5" /></button>
+      <span className="flex items-center gap-0.5">
+        <button type="button" title="Ver la factura (descargar y enviar)" onClick={(e) => { e.stopPropagation(); setFicha(f); }}
+          className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-orange-600 dark:hover:bg-zinc-800"><Eye className="h-3.5 w-3.5" /></button>
+        {esVenta && (
+          <button type="button" title="Descargar el PDF" onClick={(e) => { e.stopPropagation(); if (sociedadActiva) void abrirFacturaVenta(f.id, sociedadActiva, false); }}
+            className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-orange-600 dark:hover:bg-zinc-800"><Download className="h-3.5 w-3.5" /></button>
+        )}
+      </span>
     ) },
   ];
 
@@ -148,7 +197,7 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
       const vence = nuevas[`${f.lado}-${f.id}`];
       if (!vence) return f;
       const dias = diasEntre(hoy, vence);
-      return { ...f, vence, sinVencimiento: false, dias, ...estadoFactura({ anulada: f.estado === "anulada", nc: f.estado === "nc", total: f.total, saldo: f.saldo, dias }) };
+      return { ...f, vence, sinVencimiento: false, dias, ...estadoFactura({ anulada: f.estado === "anulada", nc: f.estado === "nc", total: f.total, saldo: f.saldo, dias, cheque: f.cheque }) };
     }),
   } : d));
 
@@ -162,7 +211,7 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
           <button type="button" onClick={() => setLado("compra")} className={boton(!esVenta)}>Compras</button>
         </div>
         <div className="flex rounded-lg border border-zinc-200 p-0.5 dark:border-zinc-700">
-          {([["pendientes", "Pendientes"], ["vencidas", "Vencidas"], ["todas", "Todas"]] as const).map(([k, l]) => (
+          {([["pendientes", "Pendientes"], ["por_vencer", "Por vencer"], ["vencidas", "Vencidas"], ["todas", "Todas"]] as const).map(([k, l]) => (
             <button key={k} type="button" onClick={() => setFiltro(k)} className={boton(filtro === k)}>{l}</button>
           ))}
         </div>
@@ -182,6 +231,36 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
           </button>
         )}
       </div>
+
+      {esVenta && (
+        <div className="flex flex-wrap items-stretch gap-2">
+          <div className="flex items-center gap-3 rounded-xl border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900">
+            <span className="flex items-center gap-0.5">
+              <button type="button" onClick={() => setMes((m) => sumarMeses(m, -1))} title="Mes anterior" className="rounded p-1 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"><ChevronLeft className="h-4 w-4" /></button>
+              <span className="min-w-[110px] text-center text-xs font-semibold uppercase text-zinc-500">Facturado {nombreMes(mes)}</span>
+              <button type="button" disabled={mes >= hoy.slice(0, 7)} onClick={() => setMes((m) => sumarMeses(m, 1))} title="Mes siguiente" className="rounded p-1 text-zinc-500 hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-800"><ChevronRight className="h-4 w-4" /></button>
+            </span>
+            {!delMes ? <Loader2 className="h-4 w-4 animate-spin text-zinc-400" /> : (
+              <span className="flex flex-wrap items-baseline gap-x-3 text-xs text-zinc-500">
+                <span>Neto <b className="font-mono text-zinc-800 dark:text-zinc-100">{formatCurrency(delMes.neto)}</b></span>
+                <span>+ IVA <b className="font-mono text-zinc-800 dark:text-zinc-100">{formatCurrency(delMes.iva)}</b></span>
+                <span>= <b className="font-mono text-base text-zinc-900 dark:text-white">{formatCurrency(delMes.total)}</b></span>
+                <span className="text-zinc-400">{delMes.facturas} fact.{delMes.nc ? ` · ${delMes.nc} NC (restan)` : ""}{delMes.x.cantidad ? ` · ${delMes.x.cantidad} X por ${formatCurrency(delMes.x.total)} no suman` : ""}{delMes.sinTC ? ` · ⚠️ ${delMes.sinTC} en US$ sin cotización` : ""}</span>
+              </span>
+            )}
+          </div>
+          <button type="button" onClick={() => setFiltro("vencidas")} title="Ver solo las vencidas"
+            className={`rounded-xl border px-3 py-2 text-left text-xs ${filtro === "vencidas" ? "border-red-400 bg-red-50 dark:bg-red-950/30" : "border-zinc-200 bg-white hover:border-red-300 dark:border-zinc-800 dark:bg-zinc-900"}`}>
+            <span className="block font-semibold uppercase text-red-600">{venc.vencidas.cantidad} vencidas</span>
+            <b className="font-mono text-red-700 dark:text-red-400">{montos(venc.vencidas.monto)}</b>
+          </button>
+          <button type="button" onClick={() => setFiltro("por_vencer")} title="Ver las que vencen hoy o en los próximos 7 días"
+            className={`rounded-xl border px-3 py-2 text-left text-xs ${filtro === "por_vencer" ? "border-amber-400 bg-amber-50 dark:bg-amber-950/30" : "border-zinc-200 bg-white hover:border-amber-300 dark:border-zinc-800 dark:bg-zinc-900"}`}>
+            <span className="block font-semibold uppercase text-amber-600">{venc.porVencer.cantidad} vencen en 7 días</span>
+            <b className="font-mono text-amber-700 dark:text-amber-400">{montos(venc.porVencer.monto)}</b>
+          </button>
+        </div>
+      )}
 
       {error ? (
         <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30">{error}</p>
@@ -224,7 +303,7 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
       )}
 
       {ficha && (esVenta ? (
-        <FichaFacturaVenta facturaId={ficha.id} onClose={() => setFicha(null)} cobrable={sePuedeTildar(ficha)}
+        <FichaFacturaVenta facturaId={ficha.id} onClose={() => setFicha(null)} cobrable={sePuedeTildar(ficha)} onEnviada={recargar}
           onCobrar={() => { const f = ficha; setFicha(null); setPagando({ entidadId: f.entidadId, nombre: f.nombre, ids: [f.id] }); }}
           extra={ficha.docs.length > 0 && (
             <>

@@ -352,6 +352,32 @@ const filaFicha = (label: React.ReactNode, valor: React.ReactNode) => (
 const botonFicha = "inline-flex items-center gap-1 rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800";
 
 /** Trae la factura por id si no vino armada. */
+/** PDF de una factura de venta (el mismo de la ficha). */
+async function htmlFacturaVenta(f: FacturaVenta, sociedadActiva: any): Promise<string | null> {
+  if (!sociedadActiva) return null;
+  const { data } = await (supabase as any).from("factura_items")
+    .select("descripcion, cantidad, precio_unitario, iva_porcentaje, subtotal").eq("factura_id", f.id).order("orden");
+  const its: ItemVenta[] = data || [];
+  const cli = f.clientes;
+  return generateFacturaPDF({
+    tipo: f.tipo, punto_venta: f.punto_venta, numero: f.numero, fecha: f.fecha, fecha_vencimiento: f.fecha_vencimiento,
+    nota_interna: f.nota_interna, observaciones: f.observaciones, condicion_venta: f.condicion_venta,
+    moneda: f.moneda as Moneda, tipo_cambio: f.tipo_cambio,
+    cotizacion_modalidad: f.cotizacion_modalidad || f.presupuestos?.cotizacion_modalidad || null,
+    subtotal: Number(f.subtotal), iva: Number(f.iva), total: Number(f.total), cae: f.cae, cae_vencimiento: f.cae_vencimiento, oc_cliente: f.oc_cliente,
+    cliente: cli ? { razon_social: cli.razon_social, cuit: cli.cuit, condicion_iva: cli.condicion_iva, direccion: cli.direccion, localidad: cli.localidad, provincia: cli.provincia, email: cli.email, telefono: cli.telefono } : null,
+    items: its.map((it) => ({ descripcion: it.descripcion, cantidad: it.cantidad, precio_unitario: Number(it.precio_unitario), iva_porcentaje: it.iva_porcentaje, subtotal: Number(it.subtotal ?? 0) })),
+  } as any, emisorDeSociedad(sociedadActiva.nombre), getSociedadPDF(sociedadActiva));
+}
+
+/** Ver o descargar el PDF de una factura de venta sin abrir la ficha (Finanzas Lazza › Facturas). */
+export async function abrirFacturaVenta(facturaId: string, sociedadActiva: any, ver: boolean): Promise<void> {
+  const { data: f } = await (supabase as any).from("facturas").select(SELECT_VENTA).eq("id", facturaId).maybeSingle();
+  if (!f) return;
+  const html = await htmlFacturaVenta(f, sociedadActiva);
+  if (html) openPDFWindow(html, ver ? undefined : documentFilename(f.tipo, f.punto_venta, f.numero, f.clientes?.razon_social), ver);
+}
+
 function useFactura<T>(tabla: string, select: string, factura?: T | null, facturaId?: string | null): T | null {
   const [cargada, setCargada] = useState<T | null>(factura ?? null);
   useEffect(() => {
@@ -388,22 +414,7 @@ export function FichaFacturaVenta({ factura, facturaId, cobrable = false, onCobr
     return () => { vivo = false; };
   }, [venta?.id]);
 
-  async function htmlVenta(f: FacturaVenta): Promise<string | null> {
-    if (!sociedadActiva) return null;
-    const { data } = await (supabase as any).from("factura_items")
-      .select("descripcion, cantidad, precio_unitario, iva_porcentaje, subtotal").eq("factura_id", f.id).order("orden");
-    const its: ItemVenta[] = data || [];
-    const cli = f.clientes;
-    return generateFacturaPDF({
-      tipo: f.tipo, punto_venta: f.punto_venta, numero: f.numero, fecha: f.fecha, fecha_vencimiento: f.fecha_vencimiento,
-      nota_interna: f.nota_interna, observaciones: f.observaciones, condicion_venta: f.condicion_venta,
-      moneda: f.moneda as Moneda, tipo_cambio: f.tipo_cambio,
-      cotizacion_modalidad: f.cotizacion_modalidad || f.presupuestos?.cotizacion_modalidad || null,
-      subtotal: Number(f.subtotal), iva: Number(f.iva), total: Number(f.total), cae: f.cae, cae_vencimiento: f.cae_vencimiento, oc_cliente: f.oc_cliente,
-      cliente: cli ? { razon_social: cli.razon_social, cuit: cli.cuit, condicion_iva: cli.condicion_iva, direccion: cli.direccion, localidad: cli.localidad, provincia: cli.provincia, email: cli.email, telefono: cli.telefono } : null,
-      items: its.map((it) => ({ descripcion: it.descripcion, cantidad: it.cantidad, precio_unitario: Number(it.precio_unitario), iva_porcentaje: it.iva_porcentaje, subtotal: Number(it.subtotal ?? 0) })),
-    } as any, emisorDeSociedad(sociedadActiva.nombre), getSociedadPDF(sociedadActiva));
-  }
+  const htmlVenta = (f: FacturaVenta) => htmlFacturaVenta(f, sociedadActiva);
 
   async function pdf(f: FacturaVenta, ver: boolean) {
     const html = await htmlVenta(f);

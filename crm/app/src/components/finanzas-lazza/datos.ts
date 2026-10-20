@@ -7,7 +7,7 @@ import { calcularSaldosProveedores, traerCreditosProveedores, type SaldoProveedo
 import { sentidoAjuste } from "@/lib/tipos-movimiento";
 import { esNotaCredito, sumarMeses } from "@/lib/reportes-comprobantes";
 import { opsPorFactura, type OPResumen } from "@/lib/orden-pago-pdf";
-import { armarFilasFacturas, recibosPorFactura, type DocPago, type FilaFactura, type LadoFactura } from "@/lib/facturas-lazza";
+import { armarFilasFacturas, chequesSinAcreditarPorFactura, recibosPorFactura, type ComprobanteMes, type DocPago, type FilaFactura, type LadoFactura } from "@/lib/facturas-lazza";
 import { traerRecibos } from "./recibo-doc";
 import type { Recibo } from "@/lib/recibos";
 
@@ -138,7 +138,7 @@ export async function traerDeudas(sociedadId: string, hoy: string): Promise<Deud
 
 // ── Facturas (Augusto 19/10): una fila por factura, Ventas o Compras, con saldo y con qué se cobró/pagó ──
 
-const CAMPOS_FACTURAS_VENTA = "id, fecha, fecha_vencimiento, tipo, estado, moneda, total, punto_venta, numero, cliente_id, oc_cliente, clientes(razon_social)";
+const CAMPOS_FACTURAS_VENTA = "id, fecha, fecha_vencimiento, tipo, estado, moneda, subtotal, total, punto_venta, numero, cliente_id, oc_cliente, email_enviado_at, email_estado, clientes(razon_social)";
 const VENDEDOR_PR = ", presupuestos:presupuesto_id(vendedor_profile:vendedor_id(full_name))";
 
 /**
@@ -166,13 +166,19 @@ export async function traerFacturasFL(sociedadId: string, lado: LadoFactura, hoy
       })());
     // Si el vínculo con el vendedor del PR fallara, se trae igual sin vendedor.
     try { rows = await traer(CAMPOS_FACTURAS_VENTA + VENDEDOR_PR); } catch { rows = await traer(CAMPOS_FACTURAS_VENTA); }
-    const recibos = await traerRecibos(sociedadId).catch((): Recibo[] => []);
+    const [recibos, cheques] = await Promise.all([
+      traerRecibos(sociedadId).catch((): Recibo[] => []),
+      // Cheques recibidos sin acreditar: la factura no dice "Cobrada" hasta que el cheque se cobre (si falla, como antes).
+      traerTodo<any>(() => db.from("echeqs").select("id, movimiento_id, estado, numero, fecha_deposito, fecha_endoso").eq("sociedad_id", sociedadId)
+        .eq("direccion", "recibido").in("estado", ["en_cartera", "depositado", "endosado"]).not("movimiento_id", "is", null).order("id")).catch(() => []),
+    ]);
     const filas = armarFilasFacturas({
-      lado, hoy, docs: recibosPorFactura(recibos),
+      lado, hoy, docs: recibosPorFactura(recibos), cheques: chequesSinAcreditarPorFactura(cheques, cc.movimientos as any, cc.aplicaciones as any),
       facturas: rows.map((r) => ({
         id: r.id, entidadId: r.cliente_id ?? null, nombre: r.clientes?.razon_social || "", fecha: r.fecha, fecha_vencimiento: r.fecha_vencimiento,
         comprobante: comprobanteVenta(r), moneda: r.moneda, total: r.total, estado: r.estado, nc: esNotaCredito(r.tipo),
         saldo: saldos.get(r.id) ?? 0, ocCliente: r.oc_cliente, vendedor: r.presupuestos?.vendedor_profile?.full_name || "",
+        neto: r.subtotal, enviada: r.email_enviado_at, envioEstado: r.email_estado,
       })),
     });
     return { filas, recibos };
@@ -201,4 +207,11 @@ export async function traerFacturasFL(sociedadId: string, lado: LadoFactura, hoy
     })),
   });
   return { filas, recibos: [] };
+}
+
+/** Comprobantes de venta de un mes (para "Facturado del mes" en Finanzas Lazza › Facturas). Solo lectura. */
+export async function traerComprobantesMes(sociedadId: string, periodo: string): Promise<ComprobanteMes[]> {
+  const { desde, hasta } = rangoMes(periodo);
+  return traerTodo<ComprobanteMes>(() => db.from("facturas").select("id, tipo, subtotal, iva, total, moneda, tipo_cambio, cae")
+    .eq("sociedad_id", sociedadId).gte("fecha", desde).lt("fecha", hasta).order("id"));
 }

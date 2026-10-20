@@ -1,6 +1,6 @@
 // npx tsx scripts/test-facturas-lazza.ts
 import assert from "node:assert/strict";
-import { armarFilasFacturas, estadoFactura, filtrarFacturas, prepararSeleccion, recibosPorFactura, totalesFacturas, type FacturaBase } from "../src/lib/facturas-lazza";
+import { armarFilasFacturas, chequesSinAcreditarPorFactura, estadoFactura, etiquetaEstado, facturadoDelMes, iniciales, resumenVencimientos, filtrarFacturas, prepararSeleccion, recibosPorFactura, totalesFacturas, type FacturaBase } from "../src/lib/facturas-lazza";
 
 const hoy = "2026-10-19";
 const base = (x: Partial<FacturaBase> & { id: string }): FacturaBase => ({
@@ -67,5 +67,61 @@ const m = recibosPorFactura([
 ]);
 assert.deepEqual(m.get("x")!.map((d) => d.numero), ["Recibo 1005", "Recibo 1000"]);
 assert.deepEqual(m.get("y")!.map((d) => d.id), ["r1"]);
+
+// Cheque sin acreditar (Augusto 20/10): la factura cobrada con cheque no dice "Cobrada" hasta que el cheque se cobre.
+{
+  const cheques = [
+    { movimiento_id: "m131", estado: "depositado", numero: "00000131", fecha_deposito: "2026-10-16" },
+    { movimiento_id: "mC", estado: "en_cartera", numero: "500" },
+    { movimiento_id: "mD", estado: "depositado", numero: "501", fecha_deposito: "2026-10-18" },
+    { movimiento_id: "mOk", estado: "cobrado", numero: "502" },
+    { movimiento_id: "mAnu", estado: "en_cartera", numero: "503" },
+  ];
+  const movs = [{ id: "m131", factura_id: "f19" }, { id: "mOk", factura_id: "fok" }, { id: "mAnu", factura_id: "fanu", anulado: true }];
+  const aps = [{ movimiento_id: "mC", factura_id: "fx" }, { movimiento_id: "mD", factura_id: "fx" }];
+  const ch = chequesSinAcreditarPorFactura(cheques, movs, aps);
+  assert.deepEqual(ch.get("f19"), { estado: "depositado", fecha: "2026-10-16", numero: "131" });
+  assert.equal(ch.get("fx")!.estado, "cartera", "con dos cheques, el más atrasado");
+  assert.equal(ch.has("fok"), false, "cheque cobrado = Cobrada");
+  assert.equal(ch.has("fanu"), false, "cobro anulado no cuenta");
+  const filas = armarFilasFacturas({ lado: "venta", hoy, cheques: ch, facturas: [base({ id: "f19", saldo: 0 }), base({ id: "fok", saldo: 0 }), base({ id: "fx", saldo: 400 })] });
+  const e = (id: string) => filas.find((f) => f.id === id)!.estado;
+  assert.equal(e("f19"), "cheque_depositado");
+  assert.equal(etiquetaEstado(e("f19"), "venta"), "Cheque depositado");
+  assert.equal(e("fok"), "pagada");
+  assert.equal(e("fx"), "parcial", "con saldo sigue como siempre aunque tenga un cheque");
+  assert.equal(filtrarFacturas(filas, { filtro: "pendientes" }).some((f) => f.id === "f19"), false, "el saldo no cambia");
+}
+
+// Facturado del mes en $ (Augusto 20/10): facturas con CAE − NC; US$ × cotización; X aparte; sin cotización se avisa.
+{
+  const m = facturadoDelMes([
+    { tipo: "FA", subtotal: 1000, iva: 210, total: 1210, moneda: "ARS", cae: "1" },
+    { tipo: "FA", subtotal: 10, iva: 2.1, total: 12.1, moneda: "USD", tipo_cambio: 1500, cae: "2" },
+    { tipo: "NCA", subtotal: 100, iva: 21, total: 121, moneda: "ARS", cae: "3" },
+    { tipo: "X", subtotal: 500, iva: 0, total: 500, moneda: "ARS", cae: null },
+    { tipo: "FA", subtotal: 5, iva: 1.05, total: 6.05, moneda: "USD", tipo_cambio: null, cae: "4" },
+  ]);
+  assert.deepEqual(m, { neto: 15900, iva: 3339, total: 19239, facturas: 2, nc: 1, sinTC: 1, x: { cantidad: 1, total: 500 } });
+}
+// Vencidas y por vencer (7 días), con saldo.
+{
+  const filas = armarFilasFacturas({ lado: "venta", hoy, facturas: [
+    base({ id: "v1", fecha_vencimiento: "2026-10-10", saldo: 100 }),
+    base({ id: "v2", fecha_vencimiento: "2026-10-18", saldo: 50, moneda: "USD" }),
+    base({ id: "p1", fecha_vencimiento: "2026-10-19", saldo: 30 }),
+    base({ id: "p2", fecha_vencimiento: "2026-10-26", saldo: 20 }),
+    base({ id: "lejos", fecha_vencimiento: "2026-10-27", saldo: 10 }),
+    base({ id: "cob", fecha_vencimiento: "2026-10-10", saldo: 0 }),
+  ] });
+  const r = resumenVencimientos(filas);
+  assert.deepEqual(r.vencidas, { cantidad: 2, monto: { ARS: 100, USD: 50 } });
+  assert.deepEqual(r.porVencer, { cantidad: 2, monto: { ARS: 50, USD: 0 } });
+  assert.deepEqual(filtrarFacturas(filas, { filtro: "por_vencer" }).map((f) => f.id).sort(), ["p1", "p2"]);
+  assert.equal(filas.find((f) => f.id === "v1")!.neto, 1000, "sin neto cargado: el total");
+}
+assert.equal(iniciales("Augusto Lazzari"), "AL");
+assert.equal(iniciales("jeronimo"), "J");
+assert.equal(iniciales(""), "");
 
 console.log("test-facturas-lazza OK");

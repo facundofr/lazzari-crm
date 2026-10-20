@@ -1,7 +1,7 @@
 // npx tsx scripts/test-resumen-cuenta.ts
 // Resumen de cuenta corriente (Finanzas Lazza): todos los movimientos con saldo acumulado, mismas reglas que la ficha.
 import assert from "node:assert/strict";
-import { resumenCliente, resumenProveedor, diferenciaResumen } from "../src/lib/resumen-cuenta";
+import { resumenCliente, resumenProveedor, diferenciaResumen, detalleCortoCobro } from "../src/lib/resumen-cuenta";
 import { sentidoAjuste } from "../src/lib/tipos-movimiento";
 
 // ── Cliente tipo Del Sol: cobro aplicado, factura anulada pagada (sobrante sin aplicar), NC que la anula,
@@ -30,7 +30,10 @@ import { sentidoAjuste } from "../src/lib/tipos-movimiento";
   const cheque = r.renglones.find((x) => x.id === "m1")!;
   assert.equal(cheque.haber, 950);
   assert.match(cheque.nota!, /\$ 300,00 sin aplicar/);
-  assert.equal(r.renglones.find((x) => x.id === "nc")!.suma, false, "la NC que anula una factura anulada no suma");
+  // Factura anulada con NC (Augusto 20/10): la factura suma en Debe y la NC entera en Haber (se cancelan).
+  const f2 = r.renglones.find((x) => x.id === "f2")!, nc = r.renglones.find((x) => x.id === "nc")!;
+  assert.equal(f2.debe, 300); assert.equal(f2.suma, true); assert.match(f2.nota!, /anulada con NCA 0015-00000005/);
+  assert.equal(nc.haber, 300); assert.equal(nc.suma, true); assert.match(nc.nota!, /anula FA 0015-00000039/);
   assert.equal(r.renglones.find((x) => x.id === "m4")!.anulado, true);
   assert.deepEqual(r.renglones.map((x) => x.fecha), [...r.renglones.map((x) => x.fecha)].sort(), "de la más vieja a la más nueva");
   assert.equal(r.renglones.at(-1)!.saldo, 500);
@@ -97,6 +100,68 @@ import { sentidoAjuste } from "../src/lib/tipos-movimiento";
   assert.equal(r.renglones.find((x) => x.id === "o57")!.moneda, "USD");
   assert.equal(r.renglones.find((x) => x.id === "vieja")!.suma, false);
   assert.match(r.renglones.find((x) => x.id === "o53")!.nota!, /0,99 de más/);
+}
+
+// ── Cliente tipo Barraza: cheque rechazado = cobro en Haber + rechazo en Debe (se cancelan), y un cobro
+//    posterior bueno sobre la misma factura sigue sumando entero.
+{
+  const facturas = [{ id: "f10", tipo: "FA", punto_venta: 15, numero: 10, fecha: "2026-09-07", total: 7623000, total_acreditado: 0, moneda: "ARS", estado: "emitida" }];
+  const movimientos = [
+    { id: "ch74", tipo: "cheque_recibido", monto: 7623000, monto_original: 7623000, fecha: "2026-09-08", moneda: "ARS", anulado: true, anulado_at: "2026-10-06T13:00:00Z",
+      descripcion: "[ANULADO · cheque rechazado] BANCO GALICIA — N° 00000074" },
+    { id: "ok", tipo: "transferencia", monto: 1000, fecha: "2026-10-10", moneda: "ARS", factura_id: "f10" },
+  ];
+  const r = resumenCliente(facturas, movimientos as any, []);
+  const cobro = r.renglones.find((x) => x.id === "ch74")!;
+  const rechazo = r.renglones.find((x) => x.id === "ch74-rechazo")!;
+  assert.equal(cobro.detalle, "Cheque Galicia N° 74", "corto y sin la marca [ANULADO ...]");
+  assert.equal(cobro.completo, "BANCO GALICIA — N° 00000074");
+  assert.equal(cobro.anulado, false, "no se tacha");
+  assert.equal(cobro.haber, 7623000);
+  assert.equal(rechazo.debe, 7623000);
+  assert.equal(rechazo.detalle, "Cheque rechazado N° 74");
+  assert.equal(rechazo.fecha, "2026-10-06", "fecha del rechazo");
+  assert.equal(r.renglones.find((x) => x.id === "ok")!.haber, 1000);
+  assert.equal(r.saldo.ARS, 7622000);
+  assert.deepEqual(r.renglones.map((x) => x.id), ["f10", "ch74", "ch74-rechazo", "ok"]);
+}
+
+// ── Detalle corto (Augusto 20/10): recibo + cheque con banco, número y vencimiento; si falta el cheque, del texto.
+{
+  const mv = { id: "c131", tipo: "cheque_recibido", monto: 10110492.35, fecha: "2026-09-18", moneda: "ARS",
+    descripcion: "BANCO DE GALICIA Y BUENOS AIRES S.A.U. — N° 00000131 — JESICA PAOLA BARRAZA — BANCO DE GALICIA Y BUENOS AIRES S.A.U. · N° 00000131 · 2026-10-16 · ID: GYKNXL76P8QNMPR" };
+  const t = mv.descripcion;
+  assert.equal(detalleCortoCobro(mv, t, { recibo: 1022, cheque: { numero: "00000131", banco: "BANCO DE GALICIA Y BUENOS AIRES S.A.U.", estado: "depositado", fecha_deposito: "2026-10-17" } }),
+    "Recibo 1022 · Cheque Galicia N° 131 · depositado 17/10/2026", "fecha de depósito, no el vencimiento");
+  assert.equal(detalleCortoCobro(mv, t), "Cheque Galicia N° 131", "sin datos del cheque: número y banco del texto, sin vencimiento");
+  assert.equal(detalleCortoCobro(mv, t, { cheque: { numero: "131", banco: "Galicia", estado: "en_cartera" } }), "Cheque Galicia N° 131 · sin depositar");
+  assert.equal(detalleCortoCobro(mv, t, { cheque: { numero: "131", banco: "Galicia", estado: "endosado", fecha_endoso: "2026-10-02" } }), "Cheque Galicia N° 131 · endosado 02/10/2026");
+  assert.equal(detalleCortoCobro({ id: "e", tipo: "cheque_recibido", monto: 1, fecha: null }, "Cobro — DEL SOL — eCheq 3644 Banco Galicia (pago 30/10/2026) — FC A 9-405"),
+    "Cheque Galicia N° 3644");
+  assert.equal(detalleCortoCobro({ id: "t", tipo: "transferencia", monto: 1, fecha: null }, "Cobro — Pedro — Ref: 2037 | CBU: 0170 — Facturas: FA 15-32", { recibo: 1030 }), "Recibo 1030 · Transferencia");
+  assert.equal(detalleCortoCobro({ id: "r", tipo: "retencion_ganancias", monto: 1, fecha: null }, "Retención de Ganancias — OP: 0001-00018368 | Cert: 11426 | Régimen 078"), "Ret. Ganancias cert. 11426");
+  assert.equal(detalleCortoCobro({ id: "a", tipo: "ajuste", monto: 1, fecha: null }, "[Ajuste manual] Factura impaga"), "[Ajuste manual] Factura impaga", "los ajustes quedan con su texto");
+}
+
+// ── NC que anula 3 facturas (Barraza, NC A 0001-00000025): 2 impagas anuladas y 1 ya cobrada (queda a favor).
+{
+  const facturas = [
+    { id: "f10", tipo: "FA", punto_venta: 15, numero: 10, fecha: "2026-09-07", total: 7623000, total_acreditado: 7623000, moneda: "ARS", estado: "anulada" },
+    { id: "f19", tipo: "FA", punto_venta: 15, numero: 19, fecha: "2026-09-15", total: 10110492.35, total_acreditado: 0, moneda: "ARS", estado: "pagada" },
+    { id: "f30", tipo: "FA", punto_venta: 15, numero: 30, fecha: "2026-09-22", total: 9220848.56, total_acreditado: 9220848.56, moneda: "ARS", estado: "anulada" },
+    { id: "nc25", tipo: "NCA", punto_venta: 1, numero: 25, fecha: "2026-09-30", total: 26954340.91, saldo_a_favor_cliente: 10110492.35, factura_origen_id: "f10", moneda: "ARS", estado: "emitida" },
+  ];
+  const movimientos = [{ id: "c131", tipo: "cheque_recibido", monto: 10110492.35, fecha: "2026-09-18", moneda: "ARS", factura_id: "f19" }];
+  const ncAps = [{ nota_credito_id: "nc25", factura_id: "f10" }, { nota_credito_id: "nc25", factura_id: "f19" }, { nota_credito_id: "nc25", factura_id: "f30" }];
+  const r = resumenCliente(facturas, movimientos as any, [], new Map(), ncAps);
+  const nc = r.renglones.find((x) => x.id === "nc25")!;
+  assert.equal(nc.haber, 26954340.91, "la NC entera en Haber");
+  assert.equal(nc.nota, "anula FA 0015-00000010, FA 0015-00000019, FA 0015-00000030 · a favor $ 10.110.492,35");
+  assert.equal(r.renglones.find((x) => x.id === "f10")!.debe, 7623000);
+  assert.equal(r.renglones.find((x) => x.id === "c131")!.haber, 10110492.35, "el cheque de la FA 19 sigue sumando");
+  assert.equal(r.saldo.ARS, -10110492.35, "a favor del cliente");
+  // Sin las aplicaciones (como antes), la NC queda solo con su factura de origen.
+  assert.equal(resumenCliente(facturas, movimientos as any, []).renglones.find((x) => x.id === "nc25")!.nota, "anula FA 0015-00000010 · a favor $ 10.110.492,35");
 }
 
 console.log("test-resumen-cuenta OK");

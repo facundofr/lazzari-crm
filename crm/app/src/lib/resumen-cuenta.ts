@@ -4,8 +4,8 @@
  *
  * Suma con las MISMAS reglas que el saldo de la ficha (lib/saldo-clientes y lib/saldo-proveedores), así el
  * último saldo da igual al de arriba. Lo que esas reglas no cuentan se muestra igual, en gris y sin sumar:
- * anulados, cobros sin factura del CRM (sistema anterior), lo pagado de más sobre una factura, la NC que anula
- * una factura anulada, la factura de compra "pagada" sin pago cargado, etc.
+ * anulados, cobros sin factura del CRM (sistema anterior), lo pagado de más sobre una factura, la factura de compra
+ * "pagada" sin pago cargado, etc. Una factura anulada CON nota de crédito sí suma (Debe) y la NC entera va al Haber.
  *
  * Clientes: Debe = facturas (y ajustes débito); Haber = NC, cobros y retenciones aplicados (y ajustes crédito).
  * Proveedores: Debe = facturas (y ajustes a favor del proveedor); Haber = NC, OP (bruto) y pagos directos.
@@ -22,6 +22,8 @@ export interface RenglonResumen {
   /** factura | nc | cobro | retencion | ajuste | op | pago | otro */
   clase: string;
   detalle: string;
+  /** Texto completo del movimiento cuando el detalle se acortó (se ve al pasar el mouse y en el Excel). */
+  completo?: string;
   nota?: string;
   moneda: MonedaRC;
   /** Importe del comprobante o movimiento (aunque no sume). */
@@ -46,7 +48,7 @@ const mon = (m: string | null | undefined): MonedaRC => (m === "USD" ? "USD" : "
 const dia = (f: string | null | undefined) => String(f || "").slice(0, 10);
 const esNCTipo = (t: string | null | undefined) => String(t || "").toUpperCase().startsWith("NC");
 const pesos = (v: number, m: MonedaRC) => `${m === "USD" ? "US$" : "$"} ${v.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const ORDEN: Record<string, number> = { factura: 0, ajuste: 1, nc: 2, op: 3, pago: 3, cobro: 3, retencion: 4, otro: 5 };
+const ORDEN: Record<string, number> = { factura: 0, ajuste: 1, nc: 2, op: 3, pago: 3, cobro: 3, retencion: 4, rechazo: 5, otro: 6 };
 
 type Base = Omit<RenglonResumen, "saldo"> & { creado?: string };
 
@@ -86,6 +88,7 @@ export interface MovimientoRC {
   fecha: string | null;
   descripcion?: string | null;
   anulado?: boolean | null;
+  anulado_at?: string | null;
   created_at?: string | null;
   factura_id?: string | null;
   ajuste_sentido?: string | null;
@@ -97,24 +100,94 @@ export interface MovimientoRC {
 }
 
 export interface AplicacionRC { movimiento_id: string | null; factura_id: string | null; monto: number | string | null }
+export interface NcAplicacionRC { nota_credito_id: string; factura_id: string | null }
 
 export const comprobanteVentaRC = (f: Pick<FacturaVentaRC, "tipo" | "punto_venta" | "numero">) =>
   `${f.tipo || "FC"} ${String(f.punto_venta ?? 0).padStart(4, "0")}-${String(f.numero ?? 0).padStart(8, "0")}`;
 
 const esRetencion = (t: string | null | undefined) => String(t || "").startsWith("retencion");
+/** Marca que deja rechazar_cheque_recibido en la descripción del cobro que anula. */
+const CHEQUE_RECHAZADO = /^\s*\[ANULADO · cheque rechazado\]\s*/i;
 const textoMov = (m: MovimientoRC) => String(m.descripcion || m.tipo || "Movimiento").replace(/\s*\[[a-z]+-\d+\/\d+\]\s*$/i, "");
 
-export function resumenCliente(facturas: FacturaVentaRC[], movimientos: MovimientoRC[], aplicaciones: AplicacionRC[]): ResumenCuenta {
+/** Recibo y cheque de un cobro (recibo_movimientos y echeqs), para el detalle corto. */
+export interface InfoCobroRC { recibo?: number | null; cheque?: { numero?: string | null; banco?: string | null; estado?: string | null; fecha_deposito?: string | null; fecha_endoso?: string | null } | null }
+
+const MEDIO_RC: Record<string, string> = {
+  cobro: "Cobro", transferencia: "Transferencia", efectivo: "Efectivo", tarjeta: "Tarjeta", link_pago: "Link de pago", cheque_recibido: "Cheque",
+  echeq: "Cheque", deposito: "Depósito", retencion_iva: "Ret. IVA", retencion_ganancias: "Ret. Ganancias", retencion_iibb: "Ret. IIBB", retencion_suss: "Ret. SUSS",
+};
+const BANCOS: [RegExp, string][] = [
+  [/galicia/i, "Galicia"], [/naci[oó]n/i, "Nación"], [/provincia/i, "Provincia"], [/santander/i, "Santander"], [/bbva|franc[eé]s/i, "BBVA"],
+  [/macro/i, "Macro"], [/credicoop/i, "Credicoop"], [/icbc/i, "ICBC"], [/patagonia/i, "Patagonia"], [/supervielle/i, "Supervielle"],
+  [/ciudad/i, "Ciudad"], [/hipotecario/i, "Hipotecario"], [/comafi/i, "Comafi"], [/ita[uú]/i, "Itaú"], [/hsbc/i, "HSBC"], [/mercado\s*pago/i, "Mercado Pago"],
+];
+const bancoCorto = (t: string | null | undefined) => BANCOS.find(([re]) => re.test(String(t || "")))?.[1] || "";
+const ddmmaaaa = (iso: string) => iso.slice(0, 10).split("-").reverse().join("/");
+
+/**
+ * Detalle corto de un cobro (Augusto 20/10: "tiene que ser más simple"): `Recibo 1022 · Cheque Galicia N° 131 · depositado 17/10/2026`.
+ * Del cheque va la fecha de DEPÓSITO, no el vencimiento (Augusto 20/10); en cartera "sin depositar", endosado con su fecha.
+ * Con los datos del cheque si están; si no, número y banco del texto. Los ajustes quedan con su texto.
+ */
+export function detalleCortoCobro(mv: MovimientoRC, texto: string, info?: InfoCobroRC): string {
+  const tipo = String(mv.tipo || "");
+  if (tipo === "ajuste" || mv.ajuste_sentido) return texto;
+  const partes: string[] = [];
+  if (info?.recibo) partes.push(`Recibo ${info.recibo}`);
+  const ch = info?.cheque;
+  if (ch || tipo === "cheque_recibido" || tipo === "echeq") {
+    const nro = String(ch?.numero || texto.match(/(?:N°|eCheq)\s*(\d+)/i)?.[1] || "").replace(/^0+(?=\d)/, "");
+    const banco = bancoCorto(ch?.banco) || bancoCorto(texto);
+    partes.push(["Cheque", banco, nro && `N° ${nro}`].filter(Boolean).join(" "));
+    if (ch?.fecha_deposito) partes.push(`depositado ${ddmmaaaa(String(ch.fecha_deposito))}`);
+    else if (ch?.estado === "endosado") partes.push(ch.fecha_endoso ? `endosado ${ddmmaaaa(String(ch.fecha_endoso))}` : "endosado");
+    else if (ch?.estado === "en_cartera") partes.push("sin depositar");
+  } else if (esRetencion(tipo)) {
+    const cert = texto.match(/cert(?:ificado)?\.?:?\s*([\d-]{3,})/i)?.[1];
+    partes.push(`${MEDIO_RC[tipo] || "Retención"}${cert ? ` cert. ${cert}` : ""}`);
+  } else {
+    partes.push(MEDIO_RC[tipo] || "Cobro");
+  }
+  return partes.join(" · ");
+}
+
+export function resumenCliente(
+  facturas: FacturaVentaRC[],
+  movimientos: MovimientoRC[],
+  aplicaciones: AplicacionRC[],
+  infoCobros: Map<string, InfoCobroRC> = new Map(),
+  /** nota_credito_venta_aplicaciones: NC que cancela varias facturas (la NC solo guarda la primera en factura_origen_id). */
+  ncAplicaciones: NcAplicacionRC[] = [],
+): ResumenCuenta {
   const base: Base[] = [];
   const facPorId = new Map(facturas.map((f) => [f.id, f]));
+  // Qué facturas toca cada NC (vigente) y con qué NC quedó cada factura.
+  const facturasDeNC = new Map<string, string[]>();
+  const agregar = (ncId: string, facId: string | null | undefined) => {
+    if (!facId || !facPorId.has(facId)) return;
+    const l = facturasDeNC.get(ncId) || [];
+    if (!l.includes(facId)) facturasDeNC.set(ncId, [...l, facId]);
+  };
+  for (const f of facturas) if (esNCTipo(f.tipo) && f.estado !== "anulada") agregar(f.id, f.factura_origen_id);
+  for (const a of ncAplicaciones) if (facPorId.get(a.nota_credito_id)?.estado !== "anulada") agregar(a.nota_credito_id, a.factura_id);
+  const ncsDeFactura = new Map<string, string[]>();
+  for (const [ncId, ids] of facturasDeNC) for (const id of ids) ncsDeFactura.set(id, [...(ncsDeFactura.get(id) || []), comprobanteVentaRC(facPorId.get(ncId)!)]);
+  // Factura anulada CON nota de crédito (Augusto 20/10): suma en Debe y la NC entera en Haber, así se lee la cuenta.
+  // Sin NC (anulada antes de emitirse, etc.) sigue en gris.
+  const anuladaConNC = (f: FacturaVentaRC) => f.estado === "anulada" && !esNCTipo(f.tipo) && ncsDeFactura.has(f.id);
   // Lo que todavía puede cobrarse de cada factura (total − NC aplicadas): lo cobrado de más no suma.
   const resto = new Map<string, number>();
-  for (const f of facturas) if (!esNCTipo(f.tipo) && f.estado !== "anulada") resto.set(f.id, Math.max(0, n(f.total) - n(f.total_acreditado)));
+  for (const f of facturas) if (!esNCTipo(f.tipo) && (f.estado !== "anulada" || anuladaConNC(f))) resto.set(f.id, Math.max(0, n(f.total) - n(f.total_acreditado)));
 
   for (const f of facturas) {
     const comp = comprobanteVentaRC(f);
     const m = mon(f.moneda);
     const total = n(f.total);
+    if (anuladaConNC(f)) {
+      base.push({ id: f.id, fecha: dia(f.fecha), clase: "factura", detalle: comp, nota: `anulada con ${ncsDeFactura.get(f.id)!.join(", ")}`, moneda: m, importe: total, debe: total, haber: 0, suma: true, anulado: false });
+      continue;
+    }
     if (f.estado === "anulada") {
       base.push({ id: f.id, fecha: dia(f.fecha), clase: esNCTipo(f.tipo) ? "nc" : "factura", detalle: comp, nota: "anulada", moneda: m, importe: total, debe: 0, haber: 0, suma: false, anulado: true });
       continue;
@@ -124,15 +197,14 @@ export function resumenCliente(facturas: FacturaVentaRC[], movimientos: Movimien
       continue;
     }
     // NC: la parte aplicada baja la factura (total_acreditado) y lo que no se pudo aplicar queda a favor.
-    const origen = f.factura_origen_id ? facPorId.get(f.factura_origen_id) : undefined;
+    const objetivo = (facturasDeNC.get(f.id) || []).map((id) => facPorId.get(id)!);
     const aFavor = n(f.saldo_a_favor_cliente);
-    if (f.factura_origen_id === null || f.factura_origen_id === undefined) {
+    if (!objetivo.length) {
       base.push({ id: f.id, fecha: dia(f.fecha), clase: "nc", detalle: comp, nota: "sin factura asociada: queda a favor", moneda: m, importe: total, debe: 0, haber: total, suma: true, anulado: false });
-    } else if (origen?.estado === "anulada") {
-      // Anula una factura que ya no suma: solo cuenta lo que haya quedado a favor.
-      base.push({ id: f.id, fecha: dia(f.fecha), clase: "nc", detalle: comp, nota: `anula la ${comprobanteVentaRC(origen)}${aFavor > 0.005 ? ` · a favor ${pesos(aFavor, m)}` : ""}`, moneda: m, importe: total, debe: 0, haber: aFavor, suma: aFavor > 0.005, anulado: false });
     } else {
-      base.push({ id: f.id, fecha: dia(f.fecha), clase: "nc", detalle: comp, nota: origen ? `aplicada a ${comprobanteVentaRC(origen)}` : undefined, moneda: m, importe: total, debe: 0, haber: total, suma: true, anulado: false });
+      const lista = objetivo.sort((a, b) => dia(a.fecha).localeCompare(dia(b.fecha)) || n(a.numero) - n(b.numero)).map(comprobanteVentaRC).join(", ");
+      const verbo = objetivo.some((o) => o.estado === "anulada") ? "anula" : "aplicada a";
+      base.push({ id: f.id, fecha: dia(f.fecha), clase: "nc", detalle: comp, nota: `${verbo} ${lista}${aFavor > 0.005 ? ` · a favor ${pesos(aFavor, m)}` : ""}`, moneda: m, importe: total, debe: 0, haber: total, suma: true, anulado: false });
     }
   }
 
@@ -145,16 +217,28 @@ export function resumenCliente(facturas: FacturaVentaRC[], movimientos: Movimien
     const fecha = dia(mv.fecha);
     const mm = mon(mv.moneda);
     const clase = mv.tipo === "ajuste" || mv.ajuste_sentido ? "ajuste" : esRetencion(mv.tipo) ? "retencion" : "cobro";
-    const detalle = textoMov(mv);
+    const texto = textoMov(mv).replace(CHEQUE_RECHAZADO, "").trim();
+    const info = infoCobros.get(mv.id);
+    const detalle = detalleCortoCobro(mv, texto, info);
+    const completo = detalle !== texto ? texto : undefined;
     const creado = mv.created_at || undefined;
+    // Cheque rechazado (Augusto 20/10): dos renglones que se cancelan, el cobro en Haber y el rechazo en Debe
+    // (fecha del rechazo). No tocan lo que queda por cobrar de la factura: la deuda vuelve entera.
+    if (mv.anulado && CHEQUE_RECHAZADO.test(String(mv.descripcion || ""))) {
+      const importe = n(mv.monto_original ?? mv.monto);
+      const nro = String(info?.cheque?.numero || texto.match(/(?:N°|eCheq)\s*(\d+)/i)?.[1] || "").replace(/^0+(?=\d)/, "");
+      base.push({ completo, id: mv.id, fecha, clase, detalle, moneda: mm, importe, debe: 0, haber: importe, suma: true, anulado: false, creado });
+      base.push({ completo, id: `${mv.id}-rechazo`, fecha: dia(mv.anulado_at) || fecha, clase: "rechazo", detalle: `Cheque rechazado${nro ? ` N° ${nro}` : ""}`, nota: "vuelve a deber lo que había cobrado", moneda: mm, importe, debe: importe, haber: 0, suma: true, anulado: false, creado });
+      continue;
+    }
     if (mv.anulado) {
-      base.push({ id: mv.id, fecha, clase, detalle, nota: "anulado", moneda: mm, importe: n(mv.monto_original ?? mv.monto), debe: 0, haber: 0, suma: false, anulado: true, creado });
+      base.push({ completo, id: mv.id, fecha, clase, detalle, nota: "anulado", moneda: mm, importe: n(mv.monto_original ?? mv.monto), debe: 0, haber: 0, suma: false, anulado: true, creado });
       continue;
     }
     if (clase === "ajuste" && !(apsPorMov.get(mv.id)?.length) && !mv.factura_id) {
       const s = mv.ajuste_sentido;
-      if (s === "debito" || s === "credito") base.push({ id: mv.id, fecha, clase, detalle, moneda: mm, importe: n(mv.monto), debe: s === "debito" ? n(mv.monto) : 0, haber: s === "credito" ? n(mv.monto) : 0, suma: true, anulado: false, creado });
-      else base.push({ id: mv.id, fecha, clase, detalle, nota: "ajuste sin sentido: no suma", moneda: mm, importe: n(mv.monto), debe: 0, haber: 0, suma: false, anulado: false, creado });
+      if (s === "debito" || s === "credito") base.push({ completo, id: mv.id, fecha, clase, detalle, moneda: mm, importe: n(mv.monto), debe: s === "debito" ? n(mv.monto) : 0, haber: s === "credito" ? n(mv.monto) : 0, suma: true, anulado: false, creado });
+      else base.push({ completo, id: mv.id, fecha, clase, detalle, nota: "ajuste sin sentido: no suma", moneda: mm, importe: n(mv.monto), debe: 0, haber: 0, suma: false, anulado: false, creado });
       continue;
     }
     // Lo aplicado a cada factura, en la moneda de la factura.
@@ -163,7 +247,7 @@ export function resumenCliente(facturas: FacturaVentaRC[], movimientos: Movimien
       : mv.factura_id ? [{ factura_id: mv.factura_id, monto: n(mv.monto) }] : [];
     if (!aps.length) {
       const anterior = /sistema anterior/i.test(String(mv.descripcion || ""));
-      base.push({ id: mv.id, fecha, clase, detalle, nota: anterior ? "sist. anterior: no suma" : "sin factura aplicada: no suma", moneda: mm, importe: n(mv.monto), debe: 0, haber: 0, suma: false, anulado: false, creado });
+      base.push({ completo, id: mv.id, fecha, clase, detalle, nota: anterior ? "sist. anterior: no suma" : "sin factura aplicada: no suma", moneda: mm, importe: n(mv.monto), debe: 0, haber: 0, suma: false, anulado: false, creado });
       continue;
     }
     const porMoneda: Record<MonedaRC, { suma: number; aplicado: number; facturas: string[] }> = { ARS: { suma: 0, aplicado: 0, facturas: [] }, USD: { suma: 0, aplicado: 0, facturas: [] } };
@@ -185,7 +269,7 @@ export function resumenCliente(facturas: FacturaVentaRC[], movimientos: Movimien
     }
     const monedas = (["ARS", "USD"] as MonedaRC[]).filter((k) => porMoneda[k].aplicado > 0.005);
     if (!monedas.length) {
-      base.push({ id: mv.id, fecha, clase, detalle, nota: notas.join(" · ") || "no suma", moneda: mm, importe: n(mv.monto), debe: 0, haber: 0, suma: false, anulado: false, creado });
+      base.push({ completo, id: mv.id, fecha, clase, detalle, nota: notas.join(" · ") || "no suma", moneda: mm, importe: n(mv.monto), debe: 0, haber: 0, suma: false, anulado: false, creado });
       continue;
     }
     for (const k of monedas) {
@@ -195,7 +279,7 @@ export function resumenCliente(facturas: FacturaVentaRC[], movimientos: Movimien
       const sinAplicar = k === mm ? r2(n(mv.monto) - pm.aplicado) : 0;
       if (sinAplicar > 0.005) extra.push(`${pesos(sinAplicar, mm)} sin aplicar: no suma`);
       if (pm.facturas.length) extra.unshift(`aplicado a ${[...new Set(pm.facturas)].join(", ")}`);
-      base.push({ id: `${mv.id}${monedas.length > 1 ? `-${k}` : ""}`, fecha, clase, detalle, nota: extra.join(" · ") || undefined, moneda: k, importe: k === mm ? n(mv.monto) : pm.aplicado, debe: 0, haber: pm.suma, suma: pm.suma > 0.005, anulado: false, creado });
+      base.push({ completo, id: `${mv.id}${monedas.length > 1 ? `-${k}` : ""}`, fecha, clase, detalle, nota: extra.join(" · ") || undefined, moneda: k, importe: k === mm ? n(mv.monto) : pm.aplicado, debe: 0, haber: pm.suma, suma: pm.suma > 0.005, anulado: false, creado });
     }
   }
   return cerrar(base);

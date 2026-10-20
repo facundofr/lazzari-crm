@@ -27,6 +27,7 @@ const r2 = (x: number) => Math.round(x * 100) / 100;
     const facturas = await q("select id, cliente_id, tipo::text, punto_venta, numero, fecha::text, total, total_acreditado, saldo_a_favor_cliente, factura_origen_id, moneda, estado::text from facturas where sociedad_id=$1", [s.id]);
     const movs = await q("select id, cliente_id, tipo::text, monto, monto_original, moneda, fecha::text, descripcion, anulado, created_at::text, factura_id, ajuste_sentido from movimientos where sociedad_id=$1 and cliente_id is not null", [s.id]);
     const aps = await q("select a.movimiento_id, a.factura_id, a.monto, m.anulado from cobro_aplicaciones a join movimientos m on m.id=a.movimiento_id where m.sociedad_id=$1", [s.id]);
+    const ncAps = await q("select nota_credito_id, factura_id from nota_credito_venta_aplicaciones where sociedad_id=$1", [s.id]);
     const oficial = calcularSaldosClientes(
       facturas.filter((f) => f.estado !== "anulada"),
       movs.filter((m) => m.factura_id),
@@ -37,7 +38,7 @@ const r2 = (x: number) => Math.round(x * 100) / 100;
     for (const c of clientes) {
       const movsC = movs.filter((m) => m.cliente_id === c);
       const ids = new Set(movsC.map((m) => m.id));
-      const r = resumenCliente(facturas.filter((f) => f.cliente_id === c), movsC, aps.filter((a) => ids.has(a.movimiento_id) && !a.anulado));
+      const r = resumenCliente(facturas.filter((f) => f.cliente_id === c), movsC, aps.filter((a) => ids.has(a.movimiento_id) && !a.anulado), new Map(), ncAps);
       const o = oficial[c as string] || { ARS: { saldo: 0 }, USD: { saldo: 0 } };
       total++;
       for (const m of ["ARS", "USD"] as const) {

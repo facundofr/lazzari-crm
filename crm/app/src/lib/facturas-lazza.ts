@@ -3,12 +3,19 @@
 // Funciones puras (prueba: scripts/test-facturas-lazza.ts). Los saldos vienen de las mismas reglas de las cuentas corrientes.
 
 export type LadoFactura = "venta" | "compra";
-export type EstadoFactura = "pendiente" | "parcial" | "vencida" | "pagada" | "anulada" | "nc";
-export type FiltroFacturas = "pendientes" | "vencidas" | "todas";
+export type EstadoFactura = "pendiente" | "parcial" | "vencida" | "pagada" | "anulada" | "nc" | "cheque_cartera" | "cheque_depositado" | "cheque_endosado";
+export type FiltroFacturas = "pendientes" | "por_vencer" | "vencidas" | "todas";
 export type Moneda = "ARS" | "USD";
 
 /** OP (compras) o recibo (ventas) con que se pagó/cobró la factura. */
 export interface DocPago { tipo: "op" | "recibo"; id: string; numero: string }
+
+/**
+ * Cheque con que se cobró la factura y que todavía no se acreditó (Augusto 20/10: "no las des por cobradas hasta que
+ * no lo verifiques"). La factura no dice "Cobrada" hasta que el cheque pase a cobrado (al cruzar el extracto del banco).
+ * Fecha: la del depósito (o la del endoso). El saldo no cambia: si el cheque vuelve, el rechazo reabre la factura.
+ */
+export interface ChequeFactura { estado: "cartera" | "depositado" | "endosado"; fecha: string | null; numero: string }
 
 export interface FilaFactura {
   lado: LadoFactura;
@@ -34,6 +41,13 @@ export interface FilaFactura {
   ocCliente: string;
   vendedor: string;
   docs: DocPago[];
+  /** Solo ventas: cheque sin acreditar con que se cobró. */
+  cheque?: ChequeFactura;
+  /** Neto (sin IVA), en la moneda de la factura. */
+  neto: number;
+  /** Solo ventas: cuándo se mandó por mail (null = no figura enviada) y estado del mail ("bounced" = rebotó). */
+  enviada: string | null;
+  envioEstado: string | null;
 }
 
 export interface FacturaBase {
@@ -51,6 +65,9 @@ export interface FacturaBase {
   saldo: number;
   ocCliente?: string | null;
   vendedor?: string | null;
+  neto?: number | string | null;
+  enviada?: string | null;
+  envioEstado?: string | null;
 }
 
 const num = (v: unknown) => Number(v || 0) || 0;
@@ -59,10 +76,10 @@ const sinAcentos = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toL
 export const diasEntre = (desde: string, hasta: string) => Math.round((Date.parse(`${hasta}T12:00:00Z`) - Date.parse(`${desde}T12:00:00Z`)) / 86_400_000);
 
 /** Vencida gana sobre parcial (lo urgente primero); el "parcial" se muestra aparte. */
-export function estadoFactura(f: { anulada: boolean; nc: boolean; total: number; saldo: number; dias: number }): { estado: EstadoFactura; parcial: boolean } {
+export function estadoFactura(f: { anulada: boolean; nc: boolean; total: number; saldo: number; dias: number; cheque?: ChequeFactura }): { estado: EstadoFactura; parcial: boolean } {
   if (f.anulada) return { estado: "anulada", parcial: false };
   if (f.nc) return { estado: "nc", parcial: false };
-  if (f.saldo <= 0.005) return { estado: "pagada", parcial: false };
+  if (f.saldo <= 0.005) return { estado: f.cheque ? `cheque_${f.cheque.estado}` : "pagada", parcial: false };
   const parcial = f.saldo < num(f.total) - 0.005;
   if (f.dias < 0) return { estado: "vencida", parcial };
   return { estado: parcial ? "parcial" : "pendiente", parcial };
@@ -76,10 +93,49 @@ export function etiquetaEstado(e: EstadoFactura, lado: LadoFactura): string {
     case "pagada": return lado === "venta" ? "Cobrada" : "Pagada";
     case "anulada": return "Anulada";
     case "nc": return "Nota de crédito";
+    case "cheque_cartera": return "Cheque en cartera";
+    case "cheque_depositado": return "Cheque depositado";
+    case "cheque_endosado": return "Cheque endosado";
   }
 }
 
-export function armarFilasFacturas(input: { lado: LadoFactura; hoy: string; facturas: FacturaBase[]; docs?: Map<string, DocPago[]> }): FilaFactura[] {
+const PRIORIDAD_CHEQUE: Record<ChequeFactura["estado"], number> = { cartera: 0, depositado: 1, endosado: 2 };
+
+/**
+ * factura_id → el cheque sin acreditar con que se cobró (en cartera, depositado o endosado). Si hay varios, el más
+ * atrasado (en cartera antes que depositado). Cheques de cobros anulados no cuentan.
+ */
+export function chequesSinAcreditarPorFactura(
+  cheques: { movimiento_id: string | null; estado: string | null; numero?: string | null; fecha_deposito?: string | null; fecha_endoso?: string | null }[],
+  movimientos: { id: string; factura_id?: string | null; anulado?: boolean | null }[],
+  aplicaciones: { movimiento_id?: string | null; factura_id: string | null; movimientos?: { anulado?: boolean | null } | { anulado?: boolean | null }[] | null }[],
+): Map<string, ChequeFactura> {
+  const ESTADO: Record<string, ChequeFactura["estado"]> = { en_cartera: "cartera", depositado: "depositado", endosado: "endosado" };
+  const porMov = new Map<string, ChequeFactura>();
+  for (const c of cheques) {
+    const estado = ESTADO[String(c.estado || "")];
+    if (!estado || !c.movimiento_id) continue;
+    const fecha = (estado === "endosado" ? c.fecha_endoso : estado === "depositado" ? c.fecha_deposito : null) || null;
+    porMov.set(c.movimiento_id, { estado, fecha: fecha ? String(fecha).slice(0, 10) : null, numero: String(c.numero || "").replace(/^0+(?=\d)/, "") });
+  }
+  const out = new Map<string, ChequeFactura>();
+  const poner = (facturaId: string | null | undefined, ch: ChequeFactura | undefined) => {
+    if (!facturaId || !ch) return;
+    const ya = out.get(facturaId);
+    if (!ya || PRIORIDAD_CHEQUE[ch.estado] < PRIORIDAD_CHEQUE[ya.estado]) out.set(facturaId, ch);
+  };
+  const anulado = (a: (typeof aplicaciones)[number]) => [a.movimientos].flat().some((m) => m?.anulado);
+  const conAplicacion = new Set<string>();
+  for (const a of aplicaciones) {
+    if (!a.movimiento_id) continue;
+    conAplicacion.add(a.movimiento_id);
+    if (!anulado(a)) poner(a.factura_id, porMov.get(a.movimiento_id));
+  }
+  for (const m of movimientos) if (!m.anulado && !conAplicacion.has(m.id)) poner(m.factura_id, porMov.get(m.id));
+  return out;
+}
+
+export function armarFilasFacturas(input: { lado: LadoFactura; hoy: string; facturas: FacturaBase[]; docs?: Map<string, DocPago[]>; cheques?: Map<string, ChequeFactura> }): FilaFactura[] {
   const out = input.facturas.map((f): FilaFactura => {
     const fecha = String(f.fecha).slice(0, 10);
     const vence = String(f.fecha_vencimiento || f.fecha).slice(0, 10);
@@ -87,11 +143,13 @@ export function armarFilasFacturas(input: { lado: LadoFactura; hoy: string; fact
     const total = r2(num(f.total));
     const anulada = f.estado === "anulada";
     const saldo = anulada || f.nc ? 0 : r2(f.saldo);
-    const { estado, parcial } = estadoFactura({ anulada, nc: f.nc, total, saldo, dias });
+    const cheque = input.cheques?.get(f.id);
+    const { estado, parcial } = estadoFactura({ anulada, nc: f.nc, total, saldo, dias, cheque });
     return {
       lado: input.lado, id: f.id, entidadId: f.entidadId, nombre: f.nombre || "", fecha, vence, sinVencimiento: !f.fecha_vencimiento, dias,
       comprobante: f.comprobante, moneda: String(f.moneda || "").toUpperCase() === "USD" ? "USD" : "ARS", total, saldo, estado, parcial,
-      ocCliente: f.ocCliente || "", vendedor: f.vendedor || "", docs: input.docs?.get(f.id) || [],
+      ocCliente: f.ocCliente || "", vendedor: f.vendedor || "", docs: input.docs?.get(f.id) || [], ...(cheque ? { cheque } : {}),
+      neto: f.neto === null || f.neto === undefined ? total : r2(num(f.neto)), enviada: f.enviada ? String(f.enviada).slice(0, 10) : null, envioEstado: f.envioEstado || null,
     };
   });
   return ordenarFacturas(out);
@@ -112,6 +170,7 @@ export function filtrarFacturas(filas: FilaFactura[], f: { filtro: FiltroFactura
   return filas.filter((x) => {
     if (f.filtro === "pendientes" && x.saldo <= 0.005) return false;
     if (f.filtro === "vencidas" && (x.saldo <= 0.005 || x.dias >= 0)) return false;
+    if (f.filtro === "por_vencer" && (x.saldo <= 0.005 || x.dias < 0 || x.dias > DIAS_POR_VENCER)) return false;
     if (q && !sinAcentos(`${x.comprobante} ${x.nombre} ${x.ocCliente} ${x.vendedor} ${x.docs.map((d) => d.numero).join(" ")}`).includes(q)) return false;
     return true;
   });
@@ -166,3 +225,47 @@ export function recibosPorFactura(recibos: { id: string; numero: number; anulado
   }
   return out;
 }
+
+/** "Por vencer" = vence hoy o en los próximos 7 días (Augusto 20/10). */
+export const DIAS_POR_VENCER = 7;
+
+/** Cantidad y monto de las vencidas y de las que vencen en los próximos 7 días (con saldo). */
+export function resumenVencimientos(filas: FilaFactura[]): Record<"vencidas" | "porVencer", { cantidad: number; monto: Record<Moneda, number> }> {
+  const out = { vencidas: { cantidad: 0, monto: { ARS: 0, USD: 0 } }, porVencer: { cantidad: 0, monto: { ARS: 0, USD: 0 } } };
+  for (const f of filas) {
+    if (f.saldo <= 0.005) continue;
+    const g = f.dias < 0 ? out.vencidas : f.dias <= DIAS_POR_VENCER ? out.porVencer : null;
+    if (!g) continue;
+    g.cantidad += 1;
+    g.monto[f.moneda] = r2(g.monto[f.moneda] + f.saldo);
+  }
+  return out;
+}
+
+export interface ComprobanteMes { tipo: string | null; subtotal: number | string | null; iva: number | string | null; total: number | string | null; moneda: string | null; tipo_cambio?: number | string | null; cae?: string | null }
+
+/**
+ * Facturado del mes en $ (Augusto 20/10: "lo que va facturado x mes, pasalo a $ARG. Neto + iva"): facturas con CAE
+ * del mes menos las NC del mes; lo que está en US$ pasa a $ con la cotización de cada factura. Las anuladas cuentan
+ * (su NC las resta). Los comprobantes X (sin CAE) no suman: van aparte. Sin cotización: no suma y se avisa.
+ */
+export function facturadoDelMes(comprobantes: ComprobanteMes[]): { neto: number; iva: number; total: number; facturas: number; nc: number; sinTC: number; x: { cantidad: number; total: number } } {
+  const out = { neto: 0, iva: 0, total: 0, facturas: 0, nc: 0, sinTC: 0, x: { cantidad: 0, total: 0 } };
+  for (const c of comprobantes) {
+    const tipo = String(c.tipo || "").toUpperCase();
+    const usd = String(c.moneda || "").toUpperCase() === "USD";
+    const tc = usd ? num(c.tipo_cambio) : 1;
+    if (usd && tc <= 0) { out.sinTC += 1; continue; }
+    if (tipo === "X" || !c.cae) { out.x.cantidad += 1; out.x.total = r2(out.x.total + num(c.total) * tc); continue; }
+    const signo = tipo.startsWith("NC") ? -1 : 1;
+    if (signo < 0) out.nc += 1; else out.facturas += 1;
+    out.neto = r2(out.neto + signo * num(c.subtotal) * tc);
+    out.iva = r2(out.iva + signo * num(c.iva) * tc);
+    out.total = r2(out.total + signo * num(c.total) * tc);
+  }
+  return out;
+}
+
+/** "Augusto Lazzari" → "AL". */
+export const iniciales = (nombre: string | null | undefined) =>
+  String(nombre || "").trim().split(/\s+/).filter(Boolean).slice(0, 3).map((p) => p[0]!.toUpperCase()).join("");

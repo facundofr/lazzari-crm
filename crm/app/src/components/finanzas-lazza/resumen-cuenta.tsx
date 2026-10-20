@@ -10,13 +10,13 @@ import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { useUser } from "@/lib/auth-context";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
-import { diferenciaResumen, resumenCliente, resumenProveedor, type ResumenCuenta } from "@/lib/resumen-cuenta";
+import { diferenciaResumen, resumenCliente, resumenProveedor, type InfoCobroRC, type ResumenCuenta } from "@/lib/resumen-cuenta";
 import { sentidoAjuste } from "@/lib/tipos-movimiento";
 import { generateResumenCuentaPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
 
 const db = supabase as any;
 
-const CAMPOS_MOV = "id, tipo, monto, monto_original, moneda, fecha, descripcion, anulado, created_at, factura_id, ajuste_sentido, factura_compra_id, orden_pago_id, nota_credito_compra_id, retencion_ganancias_monto";
+const CAMPOS_MOV = "id, tipo, monto, monto_original, moneda, fecha, descripcion, anulado, anulado_at, created_at, factura_id, ajuste_sentido, factura_compra_id, orden_pago_id, nota_credito_compra_id, retencion_ganancias_monto";
 
 async function traerResumen(sociedadId: string, lado: "cliente" | "proveedor", id: string): Promise<ResumenCuenta> {
   if (lado === "cliente") {
@@ -32,8 +32,26 @@ async function traerResumen(sociedadId: string, lado: "cliente" | "proveedor", i
       if (error) throw error;
       aplicaciones.push(...(data || []));
     }
+    // Recibo y cheque de cada cobro, para el detalle corto (si falla, queda el texto del cobro).
+    const info = new Map<string, InfoCobroRC>();
+    for (let i = 0; i < ids.length; i += 200) {
+      const trozo = ids.slice(i, i + 200);
+      const [rm, ch] = await Promise.all([
+        db.from("recibo_movimientos").select("movimiento_id, recibos(numero)").in("movimiento_id", trozo),
+        db.from("echeqs").select("movimiento_id, numero, banco_emisor, estado, fecha_deposito, fecha_endoso").in("movimiento_id", trozo),
+      ]);
+      for (const r of rm.data || []) if (r.recibos?.numero) info.set(r.movimiento_id, { ...info.get(r.movimiento_id), recibo: r.recibos.numero });
+      for (const c of ch.data || []) info.set(c.movimiento_id, { ...info.get(c.movimiento_id), cheque: { numero: c.numero, banco: c.banco_emisor, estado: c.estado, fecha_deposito: c.fecha_deposito, fecha_endoso: c.fecha_endoso } });
+    }
+    // NC que cancelan varias facturas (si falla, cada NC queda con su factura de origen).
+    const ncIds = facturas.filter((f) => String(f.tipo || "").toUpperCase().startsWith("NC")).map((f) => f.id);
+    const ncAplicaciones: any[] = [];
+    for (let i = 0; i < ncIds.length; i += 200) {
+      const { data } = await db.from("nota_credito_venta_aplicaciones").select("nota_credito_id, factura_id").in("nota_credito_id", ncIds.slice(i, i + 200));
+      ncAplicaciones.push(...(data || []));
+    }
     const anulados = new Set(movimientos.filter((m) => m.anulado).map((m) => m.id));
-    return resumenCliente(facturas, movimientos, aplicaciones.filter((a) => !anulados.has(a.movimiento_id)));
+    return resumenCliente(facturas, movimientos, aplicaciones.filter((a) => !anulados.has(a.movimiento_id)), info, ncAplicaciones);
   }
   const [facturas, ordenes, movimientos, saldosFavor] = await Promise.all([
     traerTodo<any>(() => db.from("facturas_compra").select("id, numero_factura, tipo_comprobante, fecha, total, total_acreditado, moneda, estado, op_facturas_compra(monto, ordenes_pago(estado, numero))")
@@ -80,10 +98,10 @@ export function ResumenCuentaFicha({ sociedadId, lado, entidadId, nombre, cuit, 
   const descargarExcel = async () => {
     if (!res) return;
     const XLSX: any = await import("xlsx");
-    const filas = [["Fecha", "Comprobante / detalle", "Nota", "Moneda", "Importe", "Debe", "Haber", "Saldo", "Suma"],
-      ...res.renglones.map((r) => [formatDate(r.fecha), r.detalle, r.nota || "", r.moneda, r.importe, r.suma ? r.debe : "", r.suma ? r.haber : "", r.suma ? r.saldo : "", r.anulado ? "Anulado" : r.suma ? "Sí" : "No"])];
+    const filas = [["Fecha", "Comprobante / detalle", "Nota", "Moneda", "Importe", "Debe", "Haber", "Saldo", "Suma", "Detalle completo"],
+      ...res.renglones.map((r) => [formatDate(r.fecha), r.detalle, r.nota || "", r.moneda, r.importe, r.suma ? r.debe : "", r.suma ? r.haber : "", r.suma ? r.saldo : "", r.anulado ? "Anulado" : r.suma ? "Sí" : "No", r.completo || ""])];
     const ws = XLSX.utils.aoa_to_sheet(filas);
-    ws["!cols"] = [{ wch: 11 }, { wch: 60 }, { wch: 45 }, { wch: 7 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 8 }];
+    ws["!cols"] = [{ wch: 11 }, { wch: 45 }, { wch: 45 }, { wch: 7 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 8 }, { wch: 80 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Resumen");
     XLSX.writeFile(wb, `Resumen de cuenta - ${nombre.replace(/[\\/:*?"<>|]+/g, "-")}.xlsx`);
@@ -134,7 +152,7 @@ export function ResumenCuentaFicha({ sociedadId, lado, entidadId, nombre, cuit, 
                       <tr key={r.id} className={`border-t border-zinc-100 align-top dark:border-zinc-800 ${gris ? "text-zinc-400" : ""}`}>
                         <td className="whitespace-nowrap py-1 pl-1 pr-2">{formatDate(r.fecha)}</td>
                         <td className="pr-2">
-                          <span className={r.anulado ? "line-through" : ""}>{r.detalle}</span>
+                          <span title={r.completo} className={r.anulado ? "line-through" : r.clase === "rechazo" ? "font-semibold text-red-600" : ""}>{r.detalle}</span>
                           {r.nota && <span className="block text-[10px] text-zinc-400">{r.nota}</span>}
                         </td>
                         <td className="whitespace-nowrap text-right font-mono">{gris ? <span className={r.anulado ? "line-through" : ""}>{formatCurrency(r.importe, r.moneda)}</span> : monto(r.debe, r.moneda)}</td>
