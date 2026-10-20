@@ -14,6 +14,8 @@ Todo publicado; producción en V1.1.539. Finanzas vieja sigue en el menú (no se
 - Servidor local propio: `.claude/launch.json` → "crm-finanzas" (puerto 3005).
 
 ### Próximo
+- **Gastos (Tanda 4, 20/10, migración corrida; publicado V1.1.544):** `components/finanzas-lazza/gastos.tsx` + `lib/gastos-lazza.ts`; migración `20261020150000_gastos_grupos_debito_automatico.sql` CORRIDA. Detalle en ESTADO ("FINANZAS LAZZA › GASTOS (TANDA 4)").
+- **V1.1.540 (20/10):** Anular OP (y "Anular y pagar de nuevo"), N° de OP en un renglón, "Marcar pagada con tarjeta" en la ficha de compra. Publicado y probado.
 - **Facturas (19/10, PUBLICADO V1.1.539 y probado en producción):** `components/finanzas-lazza/facturas.tsx` reemplaza Pagar, Cobrar y Vencimientos (una fila por factura, Ventas | Compras, Pendientes/Vencidas/Todas, tildar → Pagar/Cobrar (n), Cobrada/Pagada con con Ver/Descargar/Enviar, Enviar recibo por mail). Detalle en ESTADO ("FINANZAS LAZZA › FACTURAS").
 - **Sacar Finanzas vieja (19/10):** lista de lo que falta en Lazza entregada a Augusto (Gastos, Para confirmar/Extracto, movimientos y cheques a mano, caja proyectada, BCRA, líneas de crédito, exportar, acceso para admin/administrativo). Ocultar = `oculto: true` en `components/layout/sidebar.tsx` línea ~77; los links a /finanzas siguen andando. Orden propuesto: Facturas → Gastos → Banco → cheques/movimientos → acceso → ocultar.
 - **Saldos iniciales (recomendación, sin OK):** fecha de corte sugerida 31/07/2026, Excel del sistema anterior (cliente/proveedor, CUIT, moneda, saldo); cuidado con no duplicar los cobros del sistema anterior ya cargados (Del Sol).

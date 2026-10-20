@@ -23,6 +23,7 @@ import { FinanzasLazzaIva } from "@/components/finanzas-lazza/iva";
 import { FinanzasLazzaVencimientos } from "@/components/finanzas-lazza/vencimientos";
 import { FinanzasLazzaCuentasCorrientes } from "@/components/finanzas-lazza/cuentas-corrientes";
 import { FinanzasLazzaFacturas } from "@/components/finanzas-lazza/facturas";
+import { FinanzasLazzaGastos } from "@/components/finanzas-lazza/gastos";
 import { FinanzasLazzaCheques } from "@/components/finanzas-lazza/cheques";
 import { FinanzasLazzaBancos } from "@/components/finanzas-lazza/bancos";
 import { FinanzasLazzaMovimientos, FinanzasLazzaOrdenesPago, FinanzasLazzaRecibos, FinanzasLazzaRetenciones } from "@/components/finanzas-lazza/listas";
@@ -30,7 +31,6 @@ import { FinanzasLazzaMovimientos, FinanzasLazzaOrdenesPago, FinanzasLazzaRecibo
 /** Pantallas nuevas que todavía no están (se diseñan con Augusto en las próximas tandas). */
 const EN_ARMADO: Partial<Record<SeccionFL, string>> = {
   facturar: "La pantalla nueva de Facturar se diseña con vos en la Tanda 5.",
-  gastos: "Gastos con todas las variantes (grupos, fijos/eventuales, débito automático, editable) se arma en la Tanda 4.",
 };
 
 const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
@@ -54,7 +54,7 @@ export default function FinanzasLazzaPage() {
 
   const sociedadId = sociedadActiva?.id;
   const tarjeta = vista ? TARJETAS.find((t) => t.id === vista) : null;
-  const conMes = vista === "reportes" || vista === "iva" || vista === "objetivos";
+  const conMes = vista === "reportes" || vista === "iva" || vista === "objetivos" || vista === "gastos";
 
   const contenido = () => {
     if (!sociedadId) return <p className="py-6 text-sm text-zinc-500">Elegí una sociedad.</p>;
@@ -82,6 +82,7 @@ export default function FinanzasLazzaPage() {
       case "movimientos": return <FinanzasLazzaMovimientos sociedadId={sociedadId} />;
       case "objetivos": return <FinanzasLazzaObjetivos sociedadId={sociedadId} periodo={periodo} />;
       case "reportes": return <FinanzasLazzaReportes sociedadId={sociedadId} periodo={periodo} />;
+      case "gastos": return <FinanzasLazzaGastos sociedadId={sociedadId} periodo={periodo} />;
       default: return null;
     }
   };
