@@ -4,10 +4,10 @@
 // Recibos numerados (19/10, "recibos B"): 1 recibo = 1 cobro con su N° (lib/recibos.ts, migración 20261019210000),
 // con Ver, Descargar y Enviar por mail (recibo-doc.tsx; el mismo PDF de recibo de Finanzas, con N°, medios, retenciones y facturas).
 // Recibos (19/10): "Nuevo cobro" → elegir cliente y facturas → la misma liquidación de Finanzas (cobrar.tsx).
-// Órdenes de pago (19/10): "Nueva OP" → la misma ventana de OP de Finanzas (pagar.tsx).
+// Órdenes de pago (19/10): "Nueva OP" → la misma ventana de OP de Finanzas (pagar.tsx). 20/10: Anular (y "Anular y pagar de nuevo").
 // Mismos datos y reglas que las pestañas de Finanzas; acá solo se miran, con filtros y orden por columna.
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Download, Eye, HandCoins, Loader2, Mail, MailCheck, Search, Wallet } from "lucide-react";
+import { Ban, Download, Eye, HandCoins, Loader2, Mail, MailCheck, Search, Wallet } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
@@ -90,7 +90,67 @@ const sumar = <T,>(filas: T[], monto: (f: T) => number, moneda: (f: T) => "ARS" 
 
 // ── Órdenes de pago (Augusto 19/10: descargarlas y mandarlas desde acá) ──
 
-interface OP { id: string; numero: string; fecha: string; proveedor: string; cuit: string; bruto: number; retGan: number; retPct: number | null; neto: number; moneda: "ARS" | "USD"; medios: string[]; estado: string; enviada: string | null; sobreVerde: boolean }
+/**
+ * Anular una OP (20/10): la MISMA función de la base que Finanzas (anular_orden_pago_segura; si es una liquidación en US$,
+ * anular_liquidacion_fx). No se borra nada: la OP queda tachada, sus movimientos (pago y retenciones) anulados, los cheques
+ * vuelven a cartera / pendientes, las NC usadas se liberan y las facturas vuelven a quedar a pagar. "Anular y pagar de nuevo"
+ * abre la ventana de OP con el mismo proveedor y las mismas facturas tildadas, así no queda nada duplicado.
+ */
+function AnularOP({ op, sociedadId, onClose, onAnulada }: {
+  op: OP; sociedadId: string; onClose: () => void; onAnulada: (otraVez: { proveedorId: string; facturaIds: string[] } | null) => void;
+}) {
+  const [facturas, setFacturas] = useState<{ id: string; numero: string }[] | null>(null);
+  const [trabajando, setTrabajando] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let vivo = true;
+    db.from("op_facturas_compra").select("factura_compra_id, facturas_compra(numero_factura)").eq("orden_pago_id", op.id)
+      .then(({ data }: any) => { if (vivo) setFacturas((data || []).map((x: any) => ({ id: x.factura_compra_id, numero: x.facturas_compra?.numero_factura || "" }))); });
+    return () => { vivo = false; };
+  }, [op.id]);
+
+  const anular = async (otraVez: boolean) => {
+    setTrabajando(true); setError("");
+    try {
+      const { data: fx } = await db.from("liquidaciones_fx").select("id").eq("orden_pago_id", op.id).eq("sociedad_id", sociedadId).maybeSingle();
+      const { error: e } = fx?.id
+        ? await db.rpc("anular_liquidacion_fx", { p_id: fx.id, p_sociedad_id: sociedadId })
+        : await db.rpc("anular_orden_pago_segura", { p_orden_pago_id: op.id, p_sociedad_id: sociedadId });
+      if (e) throw new Error(e.message);
+      onAnulada(otraVez && op.proveedorId ? { proveedorId: op.proveedorId, facturaIds: (facturas || []).map((f) => f.id) } : null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setTrabajando(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div className="w-full max-w-md space-y-3 rounded-xl bg-white p-4 shadow-2xl dark:bg-zinc-900" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-base font-bold text-zinc-900 dark:text-white">Anular {op.numero}</h2>
+        <p className="text-sm text-zinc-600 dark:text-zinc-300">{op.proveedor} · {formatDate(op.fecha)} · entregado <b className="font-mono">{formatCurrency(op.neto, op.moneda)}</b>{op.retGan > 0 ? <> · ret. {formatCurrency(op.retGan, op.moneda)}</> : null}</p>
+        <ul className="list-disc space-y-0.5 pl-5 text-xs text-zinc-600 dark:text-zinc-300">
+          <li>No se borra: la OP queda anulada (tachada) y se sigue viendo.</li>
+          <li>El pago y la retención quedan anulados; si había cheques, vuelven a cartera o a pendientes.</li>
+          <li>{facturas === null ? "Buscando facturas…" : facturas.length ? `Vuelve${facturas.length === 1 ? "" : "n"} a quedar a pagar: ${facturas.map((f) => f.numero).join(", ")}.` : "No paga facturas (era un pago a cuenta): el saldo a favor desaparece."}</li>
+          {op.enviada && <li className="text-amber-700 dark:text-amber-300">⚠️ Esta OP se mandó por mail el {formatDate(op.enviada)}: avisale al proveedor.</li>}
+        </ul>
+        {error && <p className="rounded-lg bg-red-50 p-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300">No se pudo anular: {error}</p>}
+        <div className="flex flex-wrap justify-end gap-2 pt-1">
+          <button type="button" onClick={onClose} className="rounded-lg border border-zinc-200 px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300">Cancelar</button>
+          <button type="button" disabled={trabajando || facturas === null} onClick={() => anular(false)} className="rounded-lg border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-800">Anular</button>
+          {op.proveedorId && (
+            <button type="button" disabled={trabajando || facturas === null} onClick={() => anular(true)} className="inline-flex items-center gap-1 rounded-lg bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50">
+              {trabajando && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Anular y pagar de nuevo
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface OP { id: string; proveedorId: string | null; numero: string; fecha: string; proveedor: string; cuit: string; bruto: number; retGan: number; retPct: number | null; neto: number; moneda: "ARS" | "USD"; medios: string[]; estado: string; enviada: string | null; sobreVerde: boolean }
 
 export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string }) {
   const [recarga, setRecarga] = useState(0);
@@ -101,7 +161,7 @@ export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string })
       let medios: any[] = [];
       try { medios = Array.isArray(r.medios_pago) ? r.medios_pago : r.medios_pago ? JSON.parse(r.medios_pago) : []; } catch { medios = []; }
       return {
-        id: r.id, numero: String(r.numero ?? ""), fecha: String(r.fecha).slice(0, 10), proveedor: r.proveedores?.razon_social || "", cuit: r.proveedores?.cuit || "",
+        id: r.id, proveedorId: r.proveedor_id || null, numero: String(r.numero ?? ""), fecha: String(r.fecha).slice(0, 10), proveedor: r.proveedores?.razon_social || "", cuit: r.proveedores?.cuit || "",
         bruto: Number(r.monto_bruto || 0), retGan: Number(r.retencion_ganancias_monto || 0), retPct: r.retencion_ganancias_pct ?? null,
         neto: Number(r.neto_a_pagar ?? r.neto ?? 0), moneda: mon(r.moneda),
         medios: medios.length > 1 ? medios.map((m) => MEDIO_LABEL[m.tipo] || m.tipo) : [MEDIO_LABEL[r.medio_pago || "transferencia"] || r.medio_pago || "Transf."],
@@ -111,6 +171,8 @@ export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string })
   }, [sociedadId, recarga]);
   const { sociedadActiva } = useUser();
   const [enviando, setEnviando] = useState<string | null>(null);
+  const [anulando, setAnulando] = useState<OP | null>(null);
+  const [rehacer, setRehacer] = useState<{ proveedorId: string; facturaIds: string[] } | null>(null);
   const [enviadas, setEnviadas] = useState<Record<string, string>>({});
   const [texto, setTexto] = useState("");
   const [estado, setEstado] = useState("");
@@ -122,8 +184,8 @@ export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string })
     (!estado || o.estado === estado) && (!envio || (envio === "si") === !!o.enviada) && enRango(o.fecha, desde, hasta)
     && (!q || sinAcentos(`${o.numero} ${o.proveedor} ${o.cuit} ${o.medios.join(" ")}`).includes(q))), [datos, enviadas, estado, envio, desde, hasta, q]);
   const cols: Column<OP>[] = [
-    { key: "numero", label: "N°", sortable: true, sortValue: (o) => o.numero, render: (o) => <span className="font-mono text-xs">{o.numero}</span> },
-    { key: "fecha", label: "Fecha", sortable: true, sortValue: (o) => o.fecha, render: (o) => formatDate(o.fecha) },
+    { key: "numero", label: "N°", sortable: true, sortValue: (o) => o.numero, render: (o) => <span className={`whitespace-nowrap font-mono text-xs ${o.estado === "anulada" ? "text-zinc-400 line-through" : ""}`}>{o.numero}</span> },
+    { key: "fecha", label: "Fecha", sortable: true, sortValue: (o) => o.fecha, render: (o) => <span className="whitespace-nowrap">{formatDate(o.fecha)}</span> },
     { key: "proveedor", label: "Proveedor", sortable: true, sortValue: (o) => o.proveedor },
     { key: "bruto", label: "Bruto", sortable: true, sortValue: (o) => o.bruto, className: "text-right", render: (o) => <span className="whitespace-nowrap font-mono">{formatCurrency(o.bruto, o.moneda)}</span> },
     { key: "ret", label: "Ret. Gan.", sortable: true, sortValue: (o) => o.retGan, className: "text-right", render: (o) => o.retGan > 0 ? <span className="whitespace-nowrap font-mono">{formatCurrency(o.retGan, o.moneda)}{o.retPct !== null && <span className="block text-[10px] text-zinc-400">{o.retPct}%</span>}</span> : "—" },
@@ -140,6 +202,10 @@ export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string })
         {o.estado !== "anulada" && (
           <button type="button" title={o.enviada ? `Enviada el ${formatDate(o.enviada)}: mandarla otra vez` : "Mandar la OP por mail (con los comprobantes)"} onClick={(e) => { e.stopPropagation(); setEnviando(o.id); }}
             className={`rounded p-1.5 hover:bg-orange-50 dark:hover:bg-zinc-800 ${o.enviada ? "text-emerald-600" : "text-orange-500"}`}>{o.enviada ? <MailCheck className="h-3.5 w-3.5" /> : <Mail className="h-3.5 w-3.5" />}</button>
+        )}
+        {o.estado !== "anulada" && (
+          <button type="button" title="Anular la OP (no se borra: queda tachada y la factura vuelve a quedar a pagar)" onClick={(e) => { e.stopPropagation(); setAnulando(o); }}
+            className="rounded p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/30"><Ban className="h-3.5 w-3.5" /></button>
         )}
       </span>
     ) },
@@ -158,6 +224,11 @@ export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string })
       <DataTable columns={cols} data={visibles} emptyMessage="No hay órdenes de pago con ese filtro" />
       <EnviarOrdenPago opId={enviando} onClose={() => setEnviando(null)} onEnviada={(id, fecha) => setEnviadas((e) => ({ ...e, [id]: fecha }))} />
       {pagando && <PagarProveedor sociedadId={sociedadId} onClose={() => setPagando(false)} onPagado={() => setRecarga((n) => n + 1)} />}
+      {anulando && (
+        <AnularOP op={anulando} sociedadId={sociedadId} onClose={() => setAnulando(null)}
+          onAnulada={(otraVez) => { setAnulando(null); setRecarga((n) => n + 1); if (otraVez) setRehacer(otraVez); }} />
+      )}
+      {rehacer && <PagarProveedor sociedadId={sociedadId} proveedorId={rehacer.proveedorId} facturaIds={rehacer.facturaIds} onClose={() => setRehacer(null)} onPagado={() => setRecarga((n) => n + 1)} />}
     </Marco>
   );
 }
