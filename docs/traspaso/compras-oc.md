@@ -103,13 +103,13 @@ Al final: prueba en `scripts/test-compras-lazza.ts` (texto copiado, OC destino d
 - `components/compras-lista-oc.tsx` (solo con `lazza`): el cartel del Estado es un botón cuando está en "Por enviar" o "Enviada". Clic en Por enviar → Enviada con la fecha de hoy (`pedido`, `pedido_at`, `pedido_via: "manual"` y `pedido_por`, los mismos campos de "Enviar al proveedor"). Clic en Enviada → vuelve a Por enviar y borra la fecha. "Enviada" muestra la fecha (ej. "Enviada 19/10/2026"). Parcial y Completo no cambian. Compras nueva queda igual.
 - tsc 0, hooks OK. NO probado en pantalla (local y producción piden iniciar sesión): la primera vez, que Augusto mire que el clic cambia el estado y aparece la fecha.
 
-## 19/10: "Por pedir" / "Pedido", fecha editable y sin Observar (SIN PUBLICAR, sin migración)
+## 19/10: "Por pedir" / "Pedido", fecha editable y sin Observar (PUBLICADO en V1.1.542)
 - Augusto: "En la columna enviado cambialo por pedido y dejame editar la fecha en que se pidió" (y "Por enviar" → "Por pedir"). Después: "Hay que sacar el observar".
 - `components/compras-lista-oc.tsx` (solo con `lazza`): `ESTADO_LAZZA_LABEL` → "Por pedir" / "Pedido" (estado, filtro y avisos). Lápiz ✏️ al lado de "Pedido dd/mm/aaaa": calendario (hasta hoy); al elegir el día guarda `pedido_at` = ese día 12:00 de Argentina. Esc o salir sin elegir no cambia nada.
 - Observar fuera de Compras Lazza: sin cartel 👁, sin filtro "Observar" y sin la ventana "Ya está bien" (`app/(crm)/compras-lazza/page.tsx`). Las columnas `observar`/`observar_nota` quedan en la base (no se borra nada).
 - tsc 0, hooks OK. NO probado en pantalla (el local pide iniciar sesión): la primera vez, mirar con Augusto que el lápiz cambie la fecha.
 
-## 19/10: Todo en Compras Lazza, "Compras" fuera del menú (SIN PUBLICAR, sin migración)
+## 19-20/10: Todo en Compras Lazza, "Compras" fuera del menú (PUBLICADO en V1.1.542, commit b6b285b, verificado en producción; sin migración)
 - Augusto: quedarse solo con Compras Lazza. Se relevó qué había solo en las pantallas viejas; eligió (19/10): sacar los accesos directos, NO avisar al vendedor cuando llega, NO juntar pedidos ni "sin stock", Mariana tiene que ver Compras Lazza, poder cambiar el operador; "el resto lo que vos digas".
 - **Nueva OC a mano** (`components/compras-lazza-nueva-oc.tsx`, botón en `compras-lazza/page.tsx`): sin PR; proveedor opcional, entrega, observaciones, artículos con moneda. Queda "Por pedir", operador = quien la crea. La moneda de la OC = la que más se repite (`monedaNuevaOc` en `lib/compras-lazza.ts`, con prueba). Si fallan los artículos, la OC se cancela (no queda vacía).
 - **Anular / Reactivar** (abriendo la OC, `compras-lazza-oc.tsx`): cancelada con nota "Anulada el … por …"; avisa si llegó algo o tiene factura; el PR no se toca. Pestaña **Anuladas** en la lista (`compras-lista-oc.tsx`, solo con `lazza`); Reactivar vuelve al estado por lo llegado.
@@ -120,6 +120,9 @@ Al final: prueba en `scripts/test-compras-lazza.ts` (texto copiado, OC destino d
 - `sidebar.tsx`: "Compras" (/ordenes-compra) con `oculto: true` (sigue por link).
 - **Falta (Augusto)**: tildarle la casilla "Compras Lazza" a Mariana en Configuración → Usuarios (si no, se queda sin compras en el menú).
 - tsc 0, hooks OK, `test-compras-lazza.ts` OK. NO probado en pantalla (el local pide iniciar sesión): al publicar, mirar Nueva OC, Anular/Reactivar y Operador.
+- 20/10 (pedido en este chat, va en la misma V1.1.542): ficha de factura de compra (`facturas-consulta.tsx` → `FichaFacturaCompra`, usada en Finanzas Lazza → Facturas): botón **Pagar** arriba (props `pagable`/`onPagar`: abre la misma ventana de pago, `finanzas-lazza/facturas.tsx`) y "¿Ya se pagó con tarjeta?" abajo, con "¿Estás seguro?".
+- Verificado en producción (solo abrir, sin guardar): Nueva OC, pestaña Anuladas (1), lápiz de la fecha, menú solo con "Compras Lazza", ficha con Pagar arriba y tarjeta abajo.
+- **Pendiente: mediados de noviembre 2026**: si nadie usó "Compras" (/ordenes-compra) ni "Compras nueva" por link, proponer borrar su programa (no los datos). Augusto/Seba 20/10: dejarla oculta un mes.
 - Quedó sin pasar a propósito: facturas atadas a OC (diferencias, cerrar saldo, conciliar), stock al recibir (en pausa), mail/WhatsApp con PDF (se usa Copiar), aviso al vendedor, juntar pedidos / sin stock, PDF de la OC, totales y KPIs.
 
 ## Próximos pasos
