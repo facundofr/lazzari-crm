@@ -63,6 +63,12 @@ export function filaVigente(filas: FilaTransporte[]): FilaTransporte | null {
   return vivas[0] || null;
 }
 
+/** Al ANULAR un remito: los viajes vivos que no están liquidados se cancelan (no se borran); los liquidados no se tocan y se avisa. */
+export function viajesAlAnular(filas: FilaTransporte[]): { cancelar: string[]; liquidados: number } {
+  const vivas = filas.filter((f) => f.estado !== "cancelado");
+  return { cancelar: vivas.filter((f) => !f.factura_compra_id).map((f) => f.id), liquidados: vivas.filter((f) => !!f.factura_compra_id).length };
+}
+
 /** Entrega para un remito nuevo: domicilio de la sucursal (o del cliente). El transporte arranca SIEMPRE en "Todavía no sé":
  *  nunca se asigna solo, lo elige una persona (los parámetros de transportista se ignoran). */
 export function entregaInicial(suc: SucursalEntrega | null, cliente: { direccion: string | null; localidad: string | null } | null, _ultimoTransportista?: string | null): Entrega {

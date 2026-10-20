@@ -1,6 +1,6 @@
 // Prueba rápida de lib/remito-entrega (sin base). Uso (desde crm/app): npx tsx scripts/test-remito-entrega.ts
 import assert from "node:assert/strict";
-import { costoNumero, entregaInicial, entregaGuardada, difiereDeSucursal, datosRemito, planViaje, filaVigente, textoTransporte, entregaPDF, RETIRA_TEXTO, PROPIO_TEXTO, FILA_ACTUAL, AVISO_LIQUIDADO, type FilaTransporte } from "../src/lib/remito-entrega";
+import { viajesAlAnular, costoNumero, entregaInicial, entregaGuardada, difiereDeSucursal, datosRemito, planViaje, filaVigente, textoTransporte, entregaPDF, RETIRA_TEXTO, PROPIO_TEXTO, FILA_ACTUAL, AVISO_LIQUIDADO, type FilaTransporte } from "../src/lib/remito-entrega";
 
 const ctx = { sociedad_id: "soc", cliente_id: "cli", remito_id: "rem", fecha: "2026-10-16", created_by: "yo" };
 const nombre = (id: string) => ({ t1: "Cruz del Sur", t2: "Andreani" } as Record<string, string>)[id] || null;
@@ -85,5 +85,10 @@ assert.deepEqual(entregaPDF({ localidad_entrega_snapshot: "Rufino" }, null), { n
 assert.deepEqual(entregaPDF({ direccion_entrega_snapshot: "retira el cliente " }, sucPDF), { nombre: RETIRA_TEXTO, direccion: "Planta Norte" });
 assert.deepEqual(entregaPDF({ direccion_entrega_snapshot: RETIRA_TEXTO }, null), { nombre: RETIRA_TEXTO, direccion: null });
 assert.deepEqual(entregaPDF({}, null), { nombre: null, direccion: null }, "sin nada: el PDF usa el domicilio del cliente");
+
+// Anular el remito: cancela los viajes vivos no liquidados; el liquidado no se toca
+const vv = (id: string, estado: string, fc?: string): FilaTransporte => ({ ...viaje, id, estado, factura_compra_id: fc ?? null });
+assert.deepEqual(viajesAlAnular([vv("a", "solicitado"), vv("b", "entregado"), vv("c", "cancelado"), vv("d", "en_transito", "f1")]), { cancelar: ["a", "b"], liquidados: 1 });
+assert.deepEqual(viajesAlAnular([]), { cancelar: [], liquidados: 0 });
 
 console.log("remito-entrega OK");

@@ -1129,6 +1129,7 @@ export default function PresupuestosPage() {
         let rq = (supabase as any)
           .from("remitos")
           .select("id, presupuesto_id")
+          .eq("anulado", false)
           .not("presupuesto_id", "is", null);
         if (sociedadActiva?.id) rq = rq.eq("sociedad_id", sociedadActiva.id);
         const { data: remitos } = await rq;

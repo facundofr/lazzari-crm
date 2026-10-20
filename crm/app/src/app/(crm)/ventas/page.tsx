@@ -186,7 +186,7 @@ export default function VentasPage() {
       const pIds = presupuestos.map((p: any) => p.id);
       const [facturasRes, remitosRes, ocRes] = pIds.length > 0 ? await Promise.all([
         (supabase as any).from("facturas").select("id, tipo, punto_venta, numero, fecha, cae, total, total_acreditado, moneda, estado, presupuesto_id, fecha_vencimiento, email_enviado_at, email_enviado_a").in("presupuesto_id", pIds).eq("sociedad_id", sociedadActiva.id),
-        (supabase as any).from("remitos").select("id, numero, fecha, estado, presupuesto_id, foto_url, recibio").in("presupuesto_id", pIds).eq("sociedad_id", sociedadActiva.id),
+        (supabase as any).from("remitos").select("id, numero, fecha, estado, presupuesto_id, foto_url, recibio").eq("anulado", false).in("presupuesto_id", pIds).eq("sociedad_id", sociedadActiva.id),
         (supabase as any).from("ordenes_compra").select("id, numero, fecha, estado, total, moneda, medio_pago, estado_pago, presupuesto_origen_id").in("presupuesto_origen_id", pIds).eq("sociedad_id", sociedadActiva.id),
       ]) : [{ data: [] }, { data: [] }, { data: [] }];
       if (request !== ventasRequest.current) return;

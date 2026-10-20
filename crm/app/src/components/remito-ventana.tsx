@@ -204,14 +204,14 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
     // Una sola consulta: PR con sus renglones y lo ya remitido (antes eran muchas en fila).
     const [prs, { data: cls }] = await Promise.all([
       traerTodo<any>(() => db.from("presupuestos")
-        .select("id, numero, fecha, created_at, estado, oc_cliente, subtotal, moneda, clientes(razon_social), sucursal:sucursal_id(nombre), vendedor_profile:vendedor_id(full_name), created_by_profile:created_by(full_name), presupuesto_items(id, descripcion, cantidad, orden), remitos(remito_items(presupuesto_item_id, descripcion, orden, cantidad))")
+        .select("id, numero, fecha, created_at, estado, oc_cliente, subtotal, moneda, clientes(razon_social), sucursal:sucursal_id(nombre), vendedor_profile:vendedor_id(full_name), created_by_profile:created_by(full_name), presupuesto_items(id, descripcion, cantidad, orden), remitos(anulado, remito_items(presupuesto_item_id, descripcion, orden, cantidad))")
         .eq("sociedad_id", sociedadId).in("estado", ESTADOS_PR_REMITO).order("created_at", { ascending: false }), 200),
       db.from("clientes").select("id, razon_social, cuit, activo").eq("sociedad_id", sociedadId).order("razon_social"),
     ]);
     const listaClientes = (cls || []).filter((c: any) => c.activo !== false).map((c: any) => ({ id: c.id, razon_social: c.razon_social, cuit: c.cuit }));
     const filas: PRFila[] = prs.map((p: any) => {
       const its = [...(p.presupuesto_items || [])].sort((x: any, y: any) => (x.orden ?? 0) - (y.orden ?? 0));
-      const remitidos = (p.remitos || []).flatMap((r: any) => r.remito_items || []);
+      const remitidos = (p.remitos || []).filter((r: any) => !r.anulado).flatMap((r: any) => r.remito_items || []);
       const ent = renglonesParaEntregar(its, remitidos, [], []);
       const d = descripcionCorta(its);
       const vend = p.vendedor_profile?.full_name || p.created_by_profile?.full_name || "";
@@ -263,7 +263,7 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
     const [{ data: p, error: e1 }, { data: items }, { data: rems }, { data: ocs }] = await Promise.all([
       db.from("presupuestos").select("id, numero, cliente_id, sucursal_id, modalidad_emision, oc_cliente, moneda, estado, clientes(razon_social)").eq("id", id).eq("sociedad_id", sociedadId).single(),
       db.from("presupuesto_items").select("id, descripcion, cantidad, unidad, orden, precio_venta").eq("presupuesto_id", id).order("orden"),
-      db.from("remitos").select("id, fecha, created_at, oc_cliente").eq("presupuesto_id", id),
+      db.from("remitos").select("id, fecha, created_at, oc_cliente").eq("anulado", false).eq("presupuesto_id", id),
       db.from("ordenes_compra").select("id, estado").eq("presupuesto_origen_id", id).eq("sociedad_id", sociedadId),
     ]);
     if (e1 || !p) throw e1 || new Error("No se encontró el PR");

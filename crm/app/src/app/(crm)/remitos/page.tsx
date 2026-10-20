@@ -10,7 +10,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { RemitoVentana } from "@/components/remito-ventana";
 import { useToast } from "@/components/ui/toast";
 import { abrirRemitoPDF, remitoPDFBase64, htmlRemito } from "@/lib/remito-pdf";
-import { filaVigente, entregaGuardada, guardarEntrega, textoTransporte, type Entrega, type ModoEntrega, type FilaTransporte } from "@/lib/remito-entrega";
+import { viajesAlAnular, AVISO_LIQUIDADO, filaVigente, entregaGuardada, guardarEntrega, textoTransporte, type Entrega, type ModoEntrega, type FilaTransporte } from "@/lib/remito-entrega";
 import { Select } from "@/components/ui/input";
 import { numeroCAI, descripcionCorta, numeroRemito, nombrePDFRemito } from "@/lib/remitos-crear";
 import { prepararArchivo } from "@/lib/preparar-foto";
@@ -75,6 +75,8 @@ interface RemitoRow {
   nro_remito_afip: string | null;
   tipo_remito?: "interno" | "muestra" | "electronico" | null;
   estado: string;
+  /** Anulado: sigue en la lista (tachado) pero no cuenta como remitido ni entregado. */
+  anulado?: boolean | null;
   observaciones: string;
   valor_declarado: number | null;
   clientes: { razon_social: string; email?: string; cuit?: string; direccion?: string } | null;
@@ -383,26 +385,34 @@ export default function RemitosPage() {
     }
   }
 
-  async function handleDeleteRemito(id: string) {
-    if (!confirm("¿Seguro que querés eliminar este remito? Esta acción no se puede deshacer.")) return;
-    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de eliminar el remito"); return; }
-    const selectedRemito = remitos.find((remito) => remito.id === id);
-    if (selectedRemito && selectedRemito.sociedad_id && selectedRemito.sociedad_id !== sociedadActiva.id) {
-      alert("El remito no pertenece a la sociedad activa"); return;
-    }
+  /** Anular = el remito NO se borra: queda en la lista tachado, con su número, PDF y foto, y deja de contar como remitido/entregado. */
+  async function handleAnularRemito(id: string) {
+    const r = remitos.find((x) => x.id === id) || (detailRemito?.id === id ? detailRemito : null);
+    if (r?.anulado) return;
+    const conCAI = !!(r?.cai_numero || r?.cae);
+    if (!confirm(`¿Anular el remito ${r ? numeroRemito(r) : ""}?\n\nQueda en la lista como anulado (no se borra) y deja de contar como remitido. Si tenía un viaje en Transportes sin liquidar, se cancela.${conCAI ? "\n\nOjo: tiene CAI/CAE, el número de ARCA ya quedó usado." : ""}`)) return;
+    if (!sociedadActiva?.id) { toast.error("Seleccioná una sociedad antes de anular el remito"); return; }
+    if (r?.sociedad_id && r.sociedad_id !== sociedadActiva.id) { toast.error("El remito no pertenece a la sociedad activa"); return; }
     try {
-      const { error: itemsErr } = await (supabase as any).from("remito_items").delete().eq("remito_id", id);
-      if (itemsErr) throw itemsErr;
-      let remitoDelete = supabase.from("remitos").delete().eq("id", id);
-      remitoDelete = remitoDelete.eq("sociedad_id" as any, sociedadActiva.id);
-      const { error: remErr } = await remitoDelete;
+      const { error: remErr } = await (supabase as any).from("remitos")
+        .update({ anulado: true, anulado_at: new Date().toISOString(), anulado_por: profile?.id || null })
+        .eq("id", id).eq("sociedad_id", sociedadActiva.id);
       if (remErr) throw remErr;
+      // Viajes del remito: los no liquidados se cancelan (no se borran); si hay liquidados, aviso.
+      const avisos: string[] = [];
+      const { data: filas } = await (supabase as any).from("transportes").select("id, transportista, transportista_id, tipo, estado, destino, costo, factura_compra_id").eq("remito_id", id).eq("sociedad_id", sociedadActiva.id);
+      const { cancelar, liquidados } = viajesAlAnular(filas || []);
+      if (cancelar.length) {
+        const { error: tErr } = await (supabase as any).from("transportes").update({ estado: "cancelado", updated_at: new Date().toISOString() }).in("id", cancelar).eq("sociedad_id", sociedadActiva.id);
+        if (tErr) avisos.push(`No se pudo cancelar el viaje (${tErr.message}).`);
+      }
+      if (liquidados) avisos.push(AVISO_LIQUIDADO);
       setDetailRemito(null);
       setPanelFullscreen(false);
-      alert("Remito eliminado");
+      if (avisos.length) toast.warning(`Remito anulado. ${avisos.join(" ")}`); else toast.success("Remito anulado");
       await fetchData();
     } catch (err) {
-      alert("Error al eliminar remito: " + (err instanceof Error ? err.message : "Error desconocido"));
+      toast.error("No se pudo anular el remito: " + (err instanceof Error ? err.message : (err as any)?.message || "error desconocido"));
     }
   }
 
@@ -639,7 +649,7 @@ export default function RemitosPage() {
         try {
           const [{ data: pis }, { data: rems }] = await Promise.all([
             (supabase as any).from("presupuesto_items").select("id, cantidad").eq("presupuesto_id", row.presupuesto_id),
-            (supabase as any).from("remitos").select("id").eq("presupuesto_id", row.presupuesto_id),
+            (supabase as any).from("remitos").select("id").eq("presupuesto_id", row.presupuesto_id).eq("anulado", false),
           ]);
           const remitidos: Record<string, number> = {};
           if (rems?.length) {
@@ -806,12 +816,14 @@ export default function RemitosPage() {
           <DataTable<RemitoRow>
             columns={[
               { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="whitespace-nowrap text-zinc-500">{formatDate(row.fecha)}</span> },
-              { key: "numero", label: "N° remito", sortable: true, sortValue: (row) => numeroRemito(row), render: (row) => <span className="whitespace-nowrap font-mono text-xs font-bold" title={row.numero}>{numeroRemito(row)}</span> },
+              { key: "numero", label: "N° remito", sortable: true, sortValue: (row) => numeroRemito(row), render: (row) => row.anulado
+                ? <span className="whitespace-nowrap font-mono text-xs font-bold text-zinc-400 line-through" title={`${row.numero} (anulado)`}>{numeroRemito(row)} <span className="no-underline"><Badge variant="danger">Anulado</Badge></span></span>
+                : <span className="whitespace-nowrap font-mono text-xs font-bold" title={row.numero}>{numeroRemito(row)}</span> },
               { key: "presupuesto_id", label: "N° PR", sortable: true, sortValue: (row) => row.presupuesto_numero || "", render: (row) => row.presupuesto_id ? <span className="whitespace-nowrap font-mono text-xs text-blue-700 dark:text-blue-300">{row.presupuesto_numero || "Vinculado"}</span> : <span className="text-zinc-400">{"—"}</span> },
               { key: "oc_cliente", label: "N° OC", sortable: true, sortValue: (row) => row.oc_cliente || "", render: (row) => row.oc_cliente ? <span className="font-mono text-xs">{row.oc_cliente}</span> : <span className="text-zinc-400">{"—"}</span> },
               { key: "clientes", label: "Cliente", sortable: true, sortKey: "clienteNombre", render: (row) => (
                 <div className="leading-tight">
-                  <span className="font-medium">{row.clientes?.razon_social}</span>
+                  <span className={`font-medium ${row.anulado ? "text-zinc-400 line-through" : ""}`}>{row.clientes?.razon_social}</span>
                   {row.sucursal_nombre && <span className="block text-[11px] text-zinc-400">{row.sucursal_nombre}</span>}
                 </div>
               ) },
@@ -827,7 +839,7 @@ export default function RemitosPage() {
               } },
               { key: "transportistas", label: "Transporte", sortable: true, sortValue: (row) => (row.transportistas || []).join(" "), render: (row) => (
                 <div onClick={(e) => e.stopPropagation()}>
-                  {editTransp === row.id ? (
+                  {row.anulado ? <span className="text-zinc-300">{"—"}</span> : editTransp === row.id ? (
                     <Select autoFocus className="w-[170px] !py-1 !text-xs" value={row.transporte_valor || "nose"} onChange={(e) => cambiarTransporte(row, e.target.value)} onBlur={() => setEditTransp(null)} options={opcionesTransp} />
                   ) : (
                     <button onClick={() => setEditTransp(row.id)} title="Cambiar quién lo lleva" className="rounded px-1 py-0.5 text-left text-xs hover:bg-orange-50 hover:text-orange-700 dark:hover:bg-orange-950/30">
@@ -849,7 +861,7 @@ export default function RemitosPage() {
                 key: "actions", label: "", sortable: false,
                 render: (row) => (
                   <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
-                    <button onClick={() => setVentana({ remitoId: row.id })} className="rounded p-1.5 text-zinc-400 hover:bg-orange-50 hover:text-orange-600" title="Editar remito"><Pencil className="h-3.5 w-3.5" /></button>
+                    {!row.anulado && <button onClick={() => setVentana({ remitoId: row.id })} className="rounded p-1.5 text-zinc-400 hover:bg-orange-50 hover:text-orange-600" title="Editar remito"><Pencil className="h-3.5 w-3.5" /></button>}
                     <button onClick={() => pdfDeFila(row)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700" title="Descargar PDF"><Download className="h-3.5 w-3.5" /></button>
                     <button onClick={() => handleEmailRemito(row)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700" title="Enviar por mail"><Mail className="h-3.5 w-3.5" /></button>
                   </div>
@@ -898,7 +910,8 @@ export default function RemitosPage() {
             <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700 sticky top-0 bg-white dark:bg-zinc-900 z-10">
               <div>
                 <div className="flex items-center gap-3">
-                  <h2 className="text-lg font-semibold font-mono dark:text-white">{numeroRemito(detailRemito)}</h2>
+                  <h2 className={`text-lg font-semibold font-mono dark:text-white ${detailRemito.anulado ? "text-zinc-400 line-through" : ""}`}>{numeroRemito(detailRemito)}</h2>
+                  {detailRemito.anulado && <Badge variant="danger">Anulado</Badge>}
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -912,9 +925,9 @@ export default function RemitosPage() {
                 <button onClick={openPdfModal} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors" title="Descargar PDF">
                   <Download className="h-3.5 w-3.5" /> PDF
                 </button>
-                <button onClick={() => handleDeleteRemito(detailRemito.id)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40" title="Eliminar remito">
+                {!detailRemito.anulado && <button onClick={() => handleAnularRemito(detailRemito.id)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40" title="Anular remito">
                   <Trash2 className="h-4 w-4" />
-                </button>
+                </button>}
                 <button onClick={() => setPanelFullscreen(!panelFullscreen)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={panelFullscreen ? "Reducir" : "Ampliar"}>
                   <Maximize2 className="h-4 w-4" />
                 </button>

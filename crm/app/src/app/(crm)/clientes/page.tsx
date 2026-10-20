@@ -725,6 +725,7 @@ export default function ClientesPage() {
           .from("remitos")
           .select("id, numero, fecha, estado, foto_url, recibio")
           .eq("cliente_id", clienteId)
+          .eq("anulado", false)
           .order("fecha", { ascending: false })
           .limit(20);
         if (sociedadActiva?.id) remsQ = remsQ.eq("sociedad_id" as any, sociedadActiva.id);

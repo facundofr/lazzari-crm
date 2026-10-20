@@ -578,7 +578,7 @@ export async function POST(req: NextRequest) {
           if (fechaFacturaInput > "2026-10-31") throw new Error("Debe actualizarse el plazo normativo de FCE posterior al 31/10/2026 antes de emitir.");
           fceData = {...validateFceFields(body.fce_cbu,body.fce_transmision,fecha_vencimiento,fechaFacturaInput,todayArgentina()),cuitReceptor,fecha:fechaFacturaInput,montoDesde:Number(check.montoDesde),totalArs,plazoAceptacion:21};
           if (presupuesto_id) {
-            const {data:remitos,error:remitoError}=await supabase.from("remitos").select("numero").eq("presupuesto_id",presupuesto_id).eq("sociedad_id",sociedad_id);
+            const {data:remitos,error:remitoError}=await supabase.from("remitos").select("numero").eq("anulado",false).eq("presupuesto_id",presupuesto_id).eq("sociedad_id",sociedad_id);
             if (remitoError) throw new Error(`No se pudieron verificar los remitos: ${remitoError.message}`);
             fceData.remitos=(remitos || []).map((r:any)=>String(r.numero));
           }
