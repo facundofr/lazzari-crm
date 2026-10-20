@@ -80,29 +80,34 @@ Si en el remito se cambia o se saca el transportista, el viaje se actualiza solo
 11. Lógica pura en `lib/` con prueba.
 Descartado: resumen por WhatsApp al transportista y carga por IA.
 
+## Decisiones de Augusto (20/10/2026) — pisan las del 12/10
+- "¿Quién lo lleva?" es **solo información para el remito**: no va a ningún lado (no suma a margen, fletes ni Transportes).
+- El "Envío interno" del PR es **un ítem más del PR**, como cualquier otro: no hace nada diferente.
+- Los transportes se llevan **solo desde el contador nuevo** de Transportes.
+- Margen antes/después del flete (por venta, por cliente o total del mes): **DESCARTADO** por Augusto (20/10). Se hizo la franja del total del mes y él pidió sacarla: no quedó nada en el código.
+- Hero y Victor Masson (Cruz del Sur): Augusto les tildó "Transporte" en Proveedores (20/10).
+- **Migración `20261020160000_transportes_recuperar_viajes_remito.sql` (+ rollback) — CORRIDA 20/10 por Augusto y verificada (5 copias, Julio renombrado, originales de remito intactos); falta commitear en la próxima tanda:** renombra JULIO CERNUDA → "JULIO CERNUDA (Ingrid Martin)" (y sus 12 viajes) y copia al contador 5 viajes de remito (los originales no se tocan): R-1038 Cáceres $14.000 con fecha 29/9 y liquidado; R-1079 y R-1080 Cáceres $4.500 c/u; R-1070 y R-1086 Hero sin monto. R-1078 NO va (decisión de Augusto). Resuelve las correcciones a y b.
+
 ## Decisiones de Augusto (12/10/2026)
 - **A — OK:** el viaje se arma desde el remito ("¿Quién lo lleva?").
 - **E — OK:** liquidación del mes de cada transportista armada sola.
 - **B — DESCARTADA:** salida con varias paradas. C y D no elegidas.
 - Cada viaje atado a su venta (por remito o eligiéndola). Renglón "Envío/flete/traslado/entrega" del PR = flete cobrado explícito.
-- En la venta: margen antes y después del flete real; reporte **"Fletes del mes" por cliente**.
+- ~~En la venta: margen antes y después del flete real; reporte "Fletes del mes" por cliente.~~ (DESCARTADO 20/10)
 - Sin campo "flete incluido" por ahora (no hay monto fijo; el flete es proporcional y a veces va metido en los precios; algunos clientes no quieren ver "Envío").
 
-## Pendiente / próximo paso
-- **a** y **b** de "Correcciones pendientes": NO ejecutar hasta que Augusto diga "ejecutá". Para b, preguntarle quién llevó R-1078/1079/1080 o si se cancelan.
-- **c** (que "¿Quién lo lleva?" arranque en "Todavía no sé") es del chat Remitos: no relayarlo desde acá salvo que Augusto lo pida.
-- Pregunta abierta: "poneme el otro desplegable" en "¿Quién lo lleva?" (no se entendió).
-- **TRANSPORTE HERO** aparece en el resumen pero no está en el catálogo (nombre viejo). Preguntarle a Augusto qué hacer; no inventar.
-- Después (con plan y OK antes de codear): margen antes/después del flete real por venta + reporte **"Fletes del mes" por cliente**.
+## Pendiente / próximo paso (actualizado 20/10/2026)
+Resuelto: a y b (migración 20261020160000), c (V1.1.543), Hero y Victor Masson (revisado 20/10, solo lectura: un solo transportista cada uno, con CUIT, activo, en Lazzari; Hero tiene sus 2 viajes; las fichas de Grupo LA no tienen el tilde y no hace falta).
+- Commitear `20261020160000_transportes_recuperar_viajes_remito` (+ rollback) en la próxima tanda (ya corrida). Próxima versión: 1.1.545.
+- Hero R-1070 y R-1086 sin monto: cargarlo cuando Augusto lo pase.
+- Pregunta abierta: "poneme el otro desplegable" en "¿Quién lo lleva?" (¿lo resolvió el buscador de V1.1.543?).
+- José Rodríguez (Rosario): en la lista sin ficha de proveedor ni datos. Mateo Perrone: confirmar Monotributo con su factura.
 - Leer `docs/ARQUITECTURA.md` antes de tocar código.
 
 ## Migraciones pendientes / errores conocidos
-Las 6 migraciones de datos de transportistas, más `20261019230000_alvarez_precio_fijo`, están **CORRIDAS en la base pero SIN COMMITEAR** (van en la próxima tanda, con su rollback):
-`20261018120000_comisionista_ingrid_martin`, `20261018123000_transportista_credifin_speed`, `20261018124500_transportista_conte_datos`,
-`20261018130000_proveedor_mateo_perrone`, `20261019150000_transportistas_desde_proveedores`, `20261019160000_rapido_plus_ultra`.
-Ningún error conocido propio.
+Las 7 migraciones viejas de transportistas ya se subieron en V1.1.543. Solo falta commitear `20261020160000` (corrida). Ningún error conocido propio.
 
 ## Prompt para seguir en un chat nuevo
 ```
-Sos el chat de Transportes del CRM Lazzari. Leé CLAUDE.md, la memoria (MEMORY.md y sus archivos), docs/traspaso/transportes.md y las primeras entradas de docs/ESTADO.md. La pantalla Transportes SIMPLE (contador por transportista, $ a todos, Liquidar) está en código SIN PUBLICAR; falta verla en el navegador. Los viajes de remitos ya no aparecen en Transportes. Pendientes que NO ejecutás hasta que diga "ejecutá": (a) Cáceres R-2026-1038 al 29/9; (b) Cáceres R-1078/1079/1080: preguntame quién los llevó o si se cancelan (fijate antes si ahora quedan solo en Remitos). Después: margen antes/después del flete y reporte "Fletes del mes" por cliente (plan y OK antes de codear). TRANSPORTE HERO no está en el catálogo: preguntame. Las 7 migraciones de datos de transportistas están corridas pero sin commitear: van en la próxima tanda. Nunca asignes nada solo. No toques la base ni publiques sin mi OK.
+Sos el chat de Transportes del CRM Lazzari. Leé CLAUDE.md, la memoria (MEMORY.md y sus archivos), docs/traspaso/transportes.md (sección "Pendiente") y las primeras entradas de docs/ESTADO.md. La pantalla Transportes es el contador simple (V1.1.543); "¿Quién lo lleva?" es solo dato del remito. El margen antes/después del flete está DESCARTADO: no lo propongas. Nunca asignes nada solo. No toques la base ni publiques sin mi OK.
 ```
