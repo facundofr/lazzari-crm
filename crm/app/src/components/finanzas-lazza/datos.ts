@@ -197,7 +197,7 @@ export async function traerFacturasFL(sociedadId: string, lado: LadoFactura, hoy
     .filter((x) => todas || x.saldo > 0.005);
   const ops = await opsPorFactura(db, conSaldo.map((x) => x.r.id)).catch(() => new Map<string, OPResumen[]>());
   const docs = new Map<string, DocPago[]>();
-  for (const [fid, lista] of ops) docs.set(fid, lista.map((o) => ({ tipo: "op" as const, id: o.id, numero: o.numero })));
+  for (const [fid, lista] of ops) docs.set(fid, lista.map((o) => ({ tipo: "op" as const, id: o.id, numero: o.numero, archivos: o.archivos })));
   const filas = armarFilasFacturas({
     lado, hoy, docs,
     facturas: conSaldo.map(({ r, saldo }) => ({

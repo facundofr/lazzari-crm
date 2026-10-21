@@ -10,7 +10,7 @@
 // Ventas (Augusto 20/10): arriba "Facturado del mes" en $ (Neto + IVA, ◀ mes ▶), vencidas y por vencer (clic = filtra);
 // columnas Fecha · Vence · Cliente · N° · OC · Vend. (iniciales) · Mon. · Neto · Total · Saldo · Estado · Enviada · Ver/Descargar.
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ChevronLeft, ChevronRight, Download, Eye, HandCoins, Loader2, Mail, Pencil, Receipt, Search, Wallet } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, Download, Eye, HandCoins, Loader2, Mail, Paperclip, Pencil, Receipt, Search, Wallet } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { useUser } from "@/lib/auth-context";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
@@ -54,10 +54,14 @@ const boton = (activo: boolean) => `rounded-md px-3 py-1 text-sm font-medium ${a
 
 type Datos = { filas: FilaFactura[]; recibos: Recibo[]; todas: boolean };
 
-export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { sociedadId: string; ladoInicial?: LadoFactura | "facturar" }) {
+export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta", soloLectura = false }: {
+  sociedadId: string; ladoInicial?: LadoFactura | "facturar";
+  /** Vendedores (Facturas del menú, Augusto 20/10): ven Ventas y Compras, descargan y envían; no facturan, no cobran/pagan ni cambian vencimientos. */
+  soloLectura?: boolean;
+}) {
   const { sociedadActiva } = useUser();
   // "Facturar" (Augusto 20/10): primera pestaña, los PR que faltan facturar (facturar.tsx).
-  const [verFacturar, setVerFacturar] = useState(ladoInicial === "facturar");
+  const [verFacturar, setVerFacturar] = useState(!soloLectura && ladoInicial === "facturar");
   const [lado, setLado] = useState<LadoFactura>(ladoInicial === "facturar" ? "venta" : ladoInicial);
   const [filtro, setFiltro] = useState<FiltroFacturas>("pendientes");
   const [texto, setTexto] = useState("");
@@ -133,18 +137,19 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
 
   const esVenta = lado === "venta";
   const cols: Column<FilaFactura>[] = [
-    { key: "tilde", label: "", render: (f) => (sePuedeTildar(f) ? (
+    { key: "tilde", label: "", render: (f) => (!soloLectura && sePuedeTildar(f) ? (
       <input type="checkbox" aria-label={`Tildar ${f.comprobante}`} className="h-4 w-4 accent-orange-500" checked={tildadas.includes(f.id)}
         onClick={(e) => e.stopPropagation()} onChange={(e) => tildar(f.id, e.target.checked)} />
     ) : null) },
     { key: "fecha", label: "Fecha", sortable: true, sortValue: (f) => f.fecha, render: (f) => <span className="whitespace-nowrap">{formatDate(f.fecha)}</span> },
     { key: "vence", label: "Vence", sortable: true, sortValue: (f) => f.vence, render: (f) => {
       const conSaldo = f.saldo > 0.005;
+      const editable = conSaldo && !soloLectura;
       const color = !conSaldo ? "text-zinc-400" : f.dias < 0 ? "font-semibold text-red-600" : f.dias <= 7 ? "text-amber-600" : "";
       return (
-        <button type="button" disabled={!conSaldo} onClick={(e) => { e.stopPropagation(); setEditando(f); }} title={conSaldo ? "Cambiar el vencimiento o los días de pago" : undefined}
+        <button type="button" disabled={!editable} onClick={(e) => { e.stopPropagation(); setEditando(f); }} title={editable ? "Cambiar el vencimiento o los días de pago" : undefined}
           className={`group whitespace-nowrap rounded px-1 text-left enabled:hover:bg-orange-50 dark:enabled:hover:bg-zinc-800 ${color}`}>
-          {formatDate(f.vence)} {conSaldo && <Pencil className="inline h-3 w-3 text-zinc-300 group-hover:text-orange-500" />}
+          {formatDate(f.vence)} {editable && <Pencil className="inline h-3 w-3 text-zinc-300 group-hover:text-orange-500" />}
           {conSaldo && <span className="block text-[10px] font-normal text-zinc-400">{f.sinVencimiento ? "sin vto · fecha factura" : f.dias < 0 ? `vencida hace ${-f.dias} d` : f.dias === 0 ? "vence hoy" : `vence en ${f.dias} d`}</span>}
         </button>
       );
@@ -216,7 +221,7 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
 
   const pestanas = (
     <div className="flex rounded-lg border border-zinc-200 p-0.5 dark:border-zinc-700">
-      <button type="button" onClick={() => setVerFacturar(true)} className={boton(verFacturar)}>Facturar</button>
+      {!soloLectura && <button type="button" onClick={() => setVerFacturar(true)} className={boton(verFacturar)}>Facturar</button>}
       <button type="button" onClick={() => { setVerFacturar(false); setLado("venta"); }} className={boton(!verFacturar && esVenta)}>Ventas</button>
       <button type="button" onClick={() => { setVerFacturar(false); setLado("compra"); }} className={boton(!verFacturar && !esVenta)}>Compras</button>
     </div>
@@ -247,13 +252,13 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
             <option value="">Enviadas y no</option><option value="si">Enviadas</option><option value="no">No enviadas</option>
           </select>
         )}
-        {esVenta && (
+        {esVenta && !soloLectura && (
           <button type="button" onClick={() => setNuevaFactura(true)} title="Emitir una factura sin PR, eligiendo el cliente"
             className="inline-flex h-8 items-center gap-1 rounded-lg border border-orange-300 px-3 text-sm font-medium text-orange-700 hover:bg-orange-50 dark:border-orange-800 dark:text-orange-300 dark:hover:bg-orange-950/30">
             <Receipt className="h-4 w-4" /> Nueva factura
           </button>
         )}
-        {esVenta ? (
+        {!soloLectura && (esVenta ? (
           <button type="button" onClick={() => setPagando({ entidadId: null, nombre: "", ids: [] })} title="Cobro sin factura o eligiendo el cliente"
             className="inline-flex h-8 items-center gap-1 rounded-lg border border-emerald-300 px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-950/30">
             <HandCoins className="h-4 w-4" /> Nuevo cobro
@@ -263,7 +268,7 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
             className="inline-flex h-8 items-center gap-1 rounded-lg border border-orange-300 px-3 text-sm font-medium text-orange-700 hover:bg-orange-50 dark:border-orange-800 dark:text-orange-300 dark:hover:bg-orange-950/30">
             <Wallet className="h-4 w-4" /> Nueva OP
           </button>
-        )}
+        ))}
       </div>
 
       {esVenta && (
@@ -338,7 +343,7 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
 
       {enviarDe && <FichaFacturaVenta facturaId={enviarDe.id} soloMail onClose={() => setEnviarDe(null)} onEnviada={recargar} />}
       {ficha && (esVenta ? (
-        <FichaFacturaVenta facturaId={ficha.id} onClose={() => setFicha(null)} cobrable={sePuedeTildar(ficha)} onEnviada={recargar}
+        <FichaFacturaVenta facturaId={ficha.id} onClose={() => setFicha(null)} cobrable={!soloLectura && sePuedeTildar(ficha)} soloLectura={soloLectura} onEnviada={recargar}
           onCobrar={() => { const f = ficha; setFicha(null); setPagando({ entidadId: f.entidadId, nombre: f.nombre, ids: [f.id] }); }}
           extra={ficha.docs.length > 0 && (
             <>
@@ -357,7 +362,7 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
             </>
           )} />
       ) : (
-        <FichaFacturaCompra facturaId={ficha.id} onClose={() => setFicha(null)} conAcciones onCambio={recargar} pagable={sePuedeTildar(ficha)}
+        <FichaFacturaCompra facturaId={ficha.id} onClose={() => setFicha(null)} conAcciones soloLectura={soloLectura} onCambio={recargar} pagable={!soloLectura && sePuedeTildar(ficha)}
           onPagar={() => { const f = ficha; setFicha(null); setPagando({ entidadId: f.entidadId, nombre: f.nombre, ids: [f.id] }); }} />
       ))}
 
@@ -401,16 +406,31 @@ function AccionesDoc({ doc, accion }: { doc: DocPago; accion: (d: DocPago, que: 
   );
 }
 
-/** N° de OP/recibo en la tabla: al tocarlo muestra Ver / Descargar / Enviar. */
+/** N° de OP/recibo en la tabla: al tocarlo muestra Ver / Descargar / Enviar. Clip = adjuntos de la OP (Augusto 20/10: "para que los vendedores lo puedan utilizar"). */
 function MenuDoc({ doc, accion }: { doc: DocPago; accion: (d: DocPago, que: "ver" | "bajar" | "enviar") => void }) {
-  const [abierto, setAbierto] = useState(false);
+  const [abierto, setAbierto] = useState<"" | "doc" | "adjuntos">("");
+  const adjuntos = doc.archivos || [];
   return (
-    <span className="relative" onMouseLeave={() => setAbierto(false)}>
-      <button type="button" onClick={(e) => { e.stopPropagation(); setAbierto((a) => !a); }}
+    <span className="relative flex items-center" onMouseLeave={() => setAbierto("")}>
+      <button type="button" onClick={(e) => { e.stopPropagation(); setAbierto((a) => (a === "doc" ? "" : "doc")); }}
         className="whitespace-nowrap rounded px-1 font-mono text-xs text-orange-600 hover:bg-orange-50 dark:hover:bg-zinc-800">{doc.numero}</button>
-      {abierto && (
+      {adjuntos.length > 0 && (
+        <button type="button" title={`Adjuntos de la OP (${adjuntos.length})`} onClick={(e) => { e.stopPropagation(); setAbierto((a) => (a === "adjuntos" ? "" : "adjuntos")); }}
+          className="rounded p-0.5 text-zinc-400 hover:bg-orange-50 hover:text-orange-600 dark:hover:bg-zinc-800"><Paperclip className="h-3.5 w-3.5" /></button>
+      )}
+      {abierto === "doc" && (
         <span className="absolute left-0 top-full z-20 rounded-lg border border-zinc-200 bg-white p-0.5 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
-          <AccionesDoc doc={doc} accion={(d, q) => { setAbierto(false); accion(d, q); }} />
+          <AccionesDoc doc={doc} accion={(d, q) => { setAbierto(""); accion(d, q); }} />
+        </span>
+      )}
+      {abierto === "adjuntos" && (
+        <span className="absolute left-0 top-full z-20 flex min-w-[180px] flex-col rounded-lg border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+          {adjuntos.map((a, i) => (
+            <a key={`${a.url}-${i}`} href={a.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} title="Ver / descargar (se abre en otra pestaña)"
+              className="flex items-center gap-1 truncate rounded px-1.5 py-1 text-xs text-zinc-700 hover:bg-orange-50 hover:text-orange-600 dark:text-zinc-200 dark:hover:bg-zinc-800">
+              <Paperclip className="h-3 w-3 shrink-0" /> <span className="truncate">{a.nombre}</span>
+            </a>
+          ))}
         </span>
       )}
     </span>

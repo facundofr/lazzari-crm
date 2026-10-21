@@ -12,6 +12,8 @@ export interface OPResumen {
   moneda: "ARS" | "USD";
   neto: number;
   certificado_retencion_url: string | null;
+  /** Comprobantes que se adjuntaron al hacer la OP (transferencia, etc.). */
+  archivos: { nombre: string; url: string }[];
 }
 
 /** OP (sin anuladas) que pagaron alguna de estas facturas de compra, de la más nueva a la más vieja. */
@@ -27,7 +29,7 @@ export async function opsPorFactura(supabase: any, facturaIds: string[]): Promis
   for (let i = 0; i < facturaIds.length; i += 200) {
     const { data, error } = await supabase
       .from("op_facturas_compra")
-      .select("factura_compra_id, orden_pago_id, ordenes_pago!inner(id, numero, fecha, estado, moneda, neto_a_pagar, certificado_retencion_url)")
+      .select("factura_compra_id, orden_pago_id, ordenes_pago!inner(id, numero, fecha, estado, moneda, neto_a_pagar, certificado_retencion_url, archivos)")
       .in("factura_compra_id", facturaIds.slice(i, i + 200));
     if (error) throw error;
     for (const link of data || []) {
@@ -43,6 +45,7 @@ export async function opsPorFactura(supabase: any, facturaIds: string[]): Promis
         moneda: op.moneda === "USD" ? "USD" : "ARS",
         neto: Number(op.neto_a_pagar ?? 0),
         certificado_retencion_url: op.certificado_retencion_url || null,
+        archivos: parsear(op.archivos).filter((a: any) => a?.url).map((a: any) => ({ nombre: a.nombre || "comprobante", url: a.url })),
       });
       out.set(link.factura_compra_id, lista.sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "")));
     }

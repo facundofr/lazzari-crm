@@ -52,6 +52,14 @@ const GRUPOS: { id: Grupo; nombre: string; icono: string; borde: string }[] = [
   { id: "informes", nombre: "Informes", icono: "bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300", borde: "hover:border-amber-300" },
 ];
 
+/** Filas del inicio: Cobrar y pagar + Ventas comparten la primera (4 tarjetas cada fila). */
+const FILAS: { nombre: string; grupos: Grupo[] }[] = [
+  { nombre: "Cobrar, pagar y ventas", grupos: ["acciones", "ventas"] },
+  { nombre: "Pagos, cobros e impuestos", grupos: ["pagos"] },
+  { nombre: "Tesorería", grupos: ["tesoreria"] },
+  { nombre: "Informes", grupos: ["informes"] },
+];
+
 /** Dato clave de una tarjeta. `tono`: rojo = atención, naranja = esta semana. */
 interface Dato { valor: string; sub: string; tono?: "rojo" | "naranja" | "verde" }
 
@@ -173,14 +181,14 @@ export function FinanzasLazzaInicio({ sociedadId, onAbrir }: { sociedadId: strin
     return () => { vivo = false; };
   }, [sociedadId, periodo, hoy]);
 
-  const tarjeta = (t: TarjetaDef, g: (typeof GRUPOS)[number], ancha = false) => {
+  const tarjeta = (t: TarjetaDef, g: (typeof GRUPOS)[number]) => {
     const d = datos[t.id];
     const Icono = t.icono;
     const objetivo = d && typeof d === "object" && "objetivo" in d ? d.objetivo : null;
     const dato = d && typeof d === "object" && "valor" in d ? d : null;
     return (
       <button key={t.id} type="button" onClick={() => onAbrir(t.id)}
-        className={`flex min-h-[112px] flex-col justify-between rounded-xl border border-zinc-200 bg-white p-3.5 text-left transition-colors dark:border-zinc-800 dark:bg-zinc-900 ${g.borde} ${ancha ? "" : ""}`}>
+        className={`flex min-h-[88px] flex-col justify-between rounded-xl border border-zinc-200 bg-white p-3 text-left transition-colors dark:border-zinc-800 dark:bg-zinc-900 ${g.borde}`}>
         <span className="flex items-center gap-2.5">
           <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${g.icono}`}><Icono className="h-4 w-4" /></span>
           <span>
@@ -189,7 +197,7 @@ export function FinanzasLazzaInicio({ sociedadId, onAbrir }: { sociedadId: strin
           </span>
         </span>
         {objetivo ? (
-          <span className="mt-3 block">
+          <span className="mt-2 block">
             <span className="block text-lg font-semibold text-zinc-900 dark:text-white">
               {{ debajo: "Debajo del mínimo", minimo: "Mínimo", bueno: "Bueno", muy_bueno: "Muy bueno" }[objetivo.nivel]}
               <span className="ml-2 text-xs font-normal text-zinc-500">{objetivo.proximo ? `faltan ${millones(objetivo.proximo.falta)} para ${objetivo.proximo.nombre}` : "¡superado!"}</span>
@@ -199,7 +207,7 @@ export function FinanzasLazzaInicio({ sociedadId, onAbrir }: { sociedadId: strin
             </span>
           </span>
         ) : (
-          <span className="mt-3 block">
+          <span className="mt-2 block">
             <span className={`block text-lg font-semibold ${dato?.tono === "rojo" ? "text-red-600" : dato?.tono === "naranja" ? "text-orange-600" : dato?.tono === "verde" ? "text-emerald-700 dark:text-emerald-400" : "text-zinc-900 dark:text-white"}`}>
               {dato ? dato.valor : <span className="inline-block h-5 w-20 animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />}
             </span>
@@ -210,15 +218,19 @@ export function FinanzasLazzaInicio({ sociedadId, onAbrir }: { sociedadId: strin
     );
   };
 
+  // 4 filas completas de 4 (Augusto 20/10: "reorganizá eso así queda el espacio optimizado"); cada tarjeta mantiene el color de su grupo.
   return (
-    <div className="space-y-4">
-      {GRUPOS.map((g) => {
-        const lista = TARJETAS.filter((t) => t.grupo === g.id);
+    <div className="space-y-3">
+      {FILAS.map((fila) => {
+        const lista = TARJETAS.filter((t) => fila.grupos.includes(t.grupo));
         return (
-          <section key={g.id}>
-            <p className="mb-1.5 text-xs font-semibold text-zinc-500">{g.nombre}</p>
-            <div className={`grid grid-cols-1 gap-2.5 sm:grid-cols-2 ${g.id === "informes" ? "" : "lg:grid-cols-4"}`}>
-              {lista.map((t) => tarjeta(t, g, g.id === "informes"))}
+          <section key={fila.nombre}>
+            <p className="mb-1 text-xs font-semibold text-zinc-500">{fila.nombre}</p>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              {lista.map((t) => {
+                const g = GRUPOS.find((x) => x.id === t.grupo)!;
+                return <div key={t.id} className={`grid ${t.grupo === "informes" ? "lg:col-span-2" : ""}`}>{tarjeta(t, g)}</div>;
+              })}
             </div>
           </section>
         );

@@ -8,7 +8,7 @@ export type FiltroFacturas = "pendientes" | "por_vencer" | "vencidas" | "todas";
 export type Moneda = "ARS" | "USD";
 
 /** OP (compras) o recibo (ventas) con que se pagó/cobró la factura. */
-export interface DocPago { tipo: "op" | "recibo"; id: string; numero: string }
+export interface DocPago { tipo: "op" | "recibo"; id: string; numero: string; /** Solo OP: comprobantes adjuntos. */ archivos?: { nombre: string; url: string }[] }
 
 /**
  * Cheque con que se cobró la factura y que todavía no se acreditó (Augusto 20/10: "no las des por cobradas hasta que

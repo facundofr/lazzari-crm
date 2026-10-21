@@ -406,9 +406,11 @@ function useFactura<T>(tabla: string, select: string, factura?: T | null, factur
  * `extra`: lo que se muestra abajo (en Finanzas Lazza: "Cobrada con", los recibos con Ver / Descargar / Enviar).
  * `soloMail`: abre directo la ventana de mail, sin la ficha (botón "Enviar" de la lista; al cerrarla se cierra todo).
  */
-export function FichaFacturaVenta({ factura, facturaId, cobrable = false, onCobrar, onClose, onEnviada, extra, soloMail = false }: {
+export function FichaFacturaVenta({ factura, facturaId, cobrable = false, onCobrar, onClose, onEnviada, extra, soloMail = false, soloLectura = false }: {
   factura?: FacturaVenta | null; facturaId?: string | null; cobrable?: boolean; onCobrar?: () => void;
   onClose: () => void; onEnviada?: () => void; extra?: React.ReactNode; soloMail?: boolean;
+  /** Vendedores (Facturas del menú): ver, descargar y enviar; sin Hacer NC. */
+  soloLectura?: boolean;
 }) {
   const { sociedadActiva, profile } = useUser();
   const { toast } = useToast();
@@ -518,7 +520,7 @@ export function FichaFacturaVenta({ factura, facturaId, cobrable = false, onCobr
                 <button type="button" onClick={() => pdf(venta, false)} className={botonFicha}><Download className="h-4 w-4" /> Descargar</button>
                 <button type="button" onClick={() => prepararMail(venta)} className="inline-flex items-center gap-1 rounded-lg bg-orange-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-600"><Mail className="h-4 w-4" /> Enviar al cliente</button>
                 {/* Hacer NC: lleva a la NC de siempre (Facturación, con ARCA) con esta factura ya elegida. */}
-                {venta.estado !== "anulada" && !/^NC/i.test(venta.tipo) && <Link href={`/facturacion?factura=${venta.id}&accion=nc`} title="Hacer una nota de crédito de esta factura" className="inline-flex items-center gap-1 rounded-lg border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/30"><Ban className="h-4 w-4" /> Hacer NC</Link>}
+                {!soloLectura && venta.estado !== "anulada" && !/^NC/i.test(venta.tipo) && <Link href={`/facturacion?factura=${venta.id}&accion=nc`} title="Hacer una nota de crédito de esta factura" className="inline-flex items-center gap-1 rounded-lg border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/30"><Ban className="h-4 w-4" /> Hacer NC</Link>}
                 {cobrable && onCobrar && <button type="button" onClick={onCobrar} className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700"><HandCoins className="h-4 w-4" /> Cobrar</button>}
               </div>
               <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
@@ -605,12 +607,14 @@ export function FichaFacturaVenta({ factura, facturaId, cobrable = false, onCobr
  * Ficha de una factura de compra: datos, renglones, archivo del proveedor (Ver / Descargar) y las OP que la pagaron.
  * `conAcciones` (Finanzas Lazza): en cada OP, Ver, Descargar y Enviar por mail (la misma ventana de la OP).
  */
-export function FichaFacturaCompra({ factura, facturaId, onClose, conAcciones = false, onCambio, pagable = false, onPagar }: {
+export function FichaFacturaCompra({ factura, facturaId, onClose, conAcciones = false, onCambio, pagable = false, onPagar, soloLectura = false }: {
   factura?: FacturaCompra | null; facturaId?: string | null; onClose: () => void; conAcciones?: boolean;
   /** Después de marcarla pagada con tarjeta (para recargar la lista de atrás). */
   onCambio?: () => void;
   /** Botón "Pagar" arriba (20/10): abre la misma ventana de pago de Finanzas Lazza → Facturas. */
   pagable?: boolean; onPagar?: () => void;
+  /** Vendedores (Facturas del menú): ver, descargar y enviar las OP; sin "pagada con tarjeta". */
+  soloLectura?: boolean;
 }) {
   const { sociedadActiva } = useUser();
   const { toast } = useToast();
@@ -623,7 +627,7 @@ export function FichaFacturaCompra({ factura, facturaId, onClose, conAcciones = 
   const [tarjetas, setTarjetas] = useState<Tarjeta[] | null>(null);
   const [tarjetaId, setTarjetaId] = useState("");
   const [marcando, setMarcando] = useState(false);
-  const sePuedeConTarjeta = conAcciones && !!compra && !["pagada", "anulada"].includes(compra.estado) && !String(compra.tipo_comprobante || "").toUpperCase().startsWith("NC");
+  const sePuedeConTarjeta = conAcciones && !soloLectura && !!compra && !["pagada", "anulada"].includes(compra.estado) && !String(compra.tipo_comprobante || "").toUpperCase().startsWith("NC");
 
   useEffect(() => {
     if (!sePuedeConTarjeta || tarjetas || !sociedadActiva?.id) return;
