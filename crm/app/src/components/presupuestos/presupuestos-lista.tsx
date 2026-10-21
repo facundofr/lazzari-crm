@@ -737,6 +737,14 @@ export default function PresupuestosLista() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showNewPR, newPR.moneda, editingPRId]);
 
+  // Lo que carga el usuario: si cambió desde que se abrió, Escape / clic afuera / X preguntan antes de cerrar (Augusto 21/10).
+  const firmaPR = (p: typeof newPR) => JSON.stringify([p.cliente_id, p.observaciones, p.notas_internas,
+    p.items.map((i) => [i.codigo, i.descripcion, i.cantidad, i.precio_costo, i.precio_venta, i.proveedor_id])]);
+  const firmaAlAbrir = useRef("");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (showNewPR) firmaAlAbrir.current = firmaPR(newPR); }, [showNewPR]);
+  const hayCambiosPR = showNewPR && firmaPR(newPR) !== firmaAlAbrir.current;
+
   // Client search
   const [clientSearch, setClientSearch] = useState("");
   const [clientDropdownOpen, setClientDropdownOpen] = useState(false);
@@ -3556,6 +3564,7 @@ export default function PresupuestosLista() {
         description={editingPRId && esSolicitud ? "Completa la cotización. La solicitud se convertirá en PR sin crear un registro duplicado." : editingPRId ? "Modifica los datos del presupuesto existente" : esSolicitud ? "Registra un pedido de cliente para convertirlo luego en presupuesto" : "Completa los datos para crear un nuevo presupuesto"}
         size="2xl"
         allowFullscreen
+        confirmarCierre={hayCambiosPR ? "¿Estás seguro que deseas salir sin guardar? Se pierde lo que cargaste en este presupuesto." : undefined}
         footer={
           <>
             {/* Subtotal, IVA, total, margen y ganancia: van en el recuadro de totales, debajo del descuento general (Augusto 20/10). */}

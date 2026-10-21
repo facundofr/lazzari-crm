@@ -13,6 +13,8 @@ interface ModalProps {
   footer?: React.ReactNode;
   size?: "sm" | "md" | "lg" | "xl" | "2xl";
   allowFullscreen?: boolean;
+  /** Si viene, Escape, el clic afuera y la X preguntan esto antes de cerrar (ej. hay cambios sin guardar). */
+  confirmarCierre?: string;
 }
 
 const sizeClasses = {
@@ -26,11 +28,15 @@ const sizeClasses = {
 // Todos los modales pueden ampliarse: algunos formularios (contactos, facturas,
 // configuraciones) necesitan más espacio y antes quedaban encerrados en una
 // ventana pequeña sin alternativa para el usuario.
-export function Modal({ open, onClose, title, description, children, footer, size = "md", allowFullscreen = true }: ModalProps) {
+export function Modal({ open, onClose, title, description, children, footer, size = "md", allowFullscreen = true, confirmarCierre }: ModalProps) {
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const pedirCierre = useCallback(() => {
+    if (confirmarCierre && !window.confirm(confirmarCierre)) return;
+    onClose();
+  }, [onClose, confirmarCierre]);
   const handleEscape = useCallback((e: KeyboardEvent) => {
-    if (e.key === "Escape") onClose();
-  }, [onClose]);
+    if (e.key === "Escape") pedirCierre();
+  }, [pedirCierre]);
 
   useEffect(() => {
     if (!open) return;
@@ -51,7 +57,7 @@ export function Modal({ open, onClose, title, description, children, footer, siz
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/50 animate-fade-in" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/50 animate-fade-in" onClick={pedirCierre} />
 
       {/* Dialog */}
       <div className={cn(
@@ -75,7 +81,7 @@ export function Modal({ open, onClose, title, description, children, footer, siz
               </button>
             )}
             <button
-              onClick={onClose}
+              onClick={pedirCierre}
               className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 transition-colors dark:hover:bg-zinc-800"
             >
               <X className="h-4 w-4" />
