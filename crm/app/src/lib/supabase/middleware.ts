@@ -84,10 +84,10 @@ export async function updateSession(request: NextRequest) {
     }
   }
 
-  // Logged in and on login page -> redirect to dashboard
+  // Logged in and on login page -> redirect to Presupuestos (sin Dashboard desde 20/10)
   if (user && isLoginPage) {
     const url = request.nextUrl.clone();
-    url.pathname = "/dashboard";
+    url.pathname = "/presupuestos";
     return redirectWithSessionCookies(url);
   }
 

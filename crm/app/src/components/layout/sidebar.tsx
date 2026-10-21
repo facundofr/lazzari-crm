@@ -47,16 +47,16 @@ import { APP_VERSION_LABEL } from "@/lib/app-version";
 // `soloSuperAdmin`: en armado, por ahora la ve solo Augusto.
 const navigation: { grupo: string; items: { name: string; href: string; icon: typeof Users; module: string; oculto?: boolean; soloSuperAdmin?: boolean }[] }[] = [
   { grupo: "Inicio", items: [
-    { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, module: "dashboard" },
+    { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, module: "dashboard", oculto: true }, // Augusto 20/10: fuera del menú (sigue por link); el sistema abre en Presupuestos
     { name: "Pendientes", href: "/pendientes", icon: ListChecks, module: "dashboard" },
     { name: "Calendario", href: "/calendario", icon: Calendar, module: "calendario" },
   ] },
   { grupo: "Vender", items: [
     { name: "Clientes", href: "/clientes", icon: Users, module: "clientes" },
     { name: "Oportunidades", href: "/oportunidades", icon: Lightbulb, module: "clientes", oculto: true },
-    { name: "Presupuestos nuevo", href: "/presupuestos-nuevo", icon: Sparkles, module: "presupuestos_nuevo" },
+    { name: "Presupuestos nuevo", href: "/presupuestos-nuevo", icon: Sparkles, module: "presupuestos_nuevo", oculto: true }, // Augusto 20/10: ahora es Presupuestos (el link redirige)
     { name: "Presupuestos", href: "/presupuestos", icon: FileText, module: "presupuestos" },
-    { name: "Muestras", href: "/muestras", icon: Shirt, module: "muestras" },
+    { name: "Muestras", href: "/muestras", icon: Shirt, module: "muestras", oculto: true }, // Augusto 20/10: fuera del menú (sigue por link)
     { name: "Ventas", href: "/ventas", icon: ArrowRightLeft, module: "presupuestos", oculto: true }, // Augusto 20/10: fuera del menú (sigue por link)
     { name: "Facturas", href: "/consulta-facturas", icon: FileSearch, module: "consulta_facturas" },
   ] },
@@ -76,7 +76,7 @@ const navigation: { grupo: string; items: { name: string; href: string; icon: ty
   { grupo: "Plata", items: [
     { name: "Finanzas", href: "/finanzas", icon: Wallet, module: "finanzas" },
     { name: "Finanzas Lazza", href: "/finanzas-lazza", icon: Wallet, module: "finanzas", soloSuperAdmin: true },
-    { name: "Reportes", href: "/reportes", icon: BarChart3, module: "reportes" },
+    { name: "Reportes", href: "/reportes", icon: BarChart3, module: "reportes", oculto: true }, // Augusto 20/10: usa Reportes de Finanzas Lazza (sigue por link)
   ] },
 ];
 
@@ -140,7 +140,7 @@ export function Sidebar() {
       {/* Logo */}
       <div className="flex h-16 items-center justify-between border-b border-zinc-200 px-4 dark:border-zinc-800">
         {(!collapsed || mobileSidebarOpen) && (
-          <Link href="/dashboard" className="flex items-center gap-2" onClick={handleNavClick}>
+          <Link href="/presupuestos" className="flex items-center gap-2" onClick={handleNavClick}>
             <div
               className="flex h-8 w-8 items-center justify-center rounded-lg font-bold text-white text-sm"
               style={{ backgroundColor: accentColor }}
@@ -154,7 +154,7 @@ export function Sidebar() {
           </Link>
         )}
         {collapsed && !mobileSidebarOpen && (
-          <Link href="/dashboard" className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg font-bold text-white text-sm" style={{ backgroundColor: accentColor }}>
+          <Link href="/presupuestos" className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg font-bold text-white text-sm" style={{ backgroundColor: accentColor }}>
             {logoInitial}
           </Link>
         )}

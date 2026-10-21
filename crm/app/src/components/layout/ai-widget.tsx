@@ -309,7 +309,6 @@ export function AIWidget() {
                   {rolPuedeVer(role, "stock") && <button onClick={stockBajo} className={atajo}>Stock bajo</button>}
                   <Link href="/pendientes" onClick={cerrarYReset} className={atajo}>Mis pendientes</Link>
                   {rolPuedeVer(role, "clientes") && <Link href="/oportunidades" onClick={cerrarYReset} className={atajo}>Clientes dormidos</Link>}
-                  {rolPuedeVer(role, "reportes") && <Link href="/reportes" onClick={cerrarYReset} className={atajo}>Top facturado</Link>}
                 </div>
                 {cargandoDato && <Loader2 className="h-4 w-4 animate-spin text-violet-500" />}
                 {dato && !cargandoDato && (

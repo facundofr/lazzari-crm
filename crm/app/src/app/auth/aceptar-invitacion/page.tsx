@@ -32,7 +32,7 @@ export default function AceptarInvitacionPage() {
       return;
     }
 
-    router.replace("/dashboard");
+    router.replace("/presupuestos");
     router.refresh();
   }
 
