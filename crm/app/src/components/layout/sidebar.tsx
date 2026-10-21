@@ -57,7 +57,7 @@ const navigation: { grupo: string; items: { name: string; href: string; icon: ty
     { name: "Presupuestos nuevo", href: "/presupuestos-nuevo", icon: Sparkles, module: "presupuestos_nuevo" },
     { name: "Presupuestos", href: "/presupuestos", icon: FileText, module: "presupuestos" },
     { name: "Muestras", href: "/muestras", icon: Shirt, module: "muestras" },
-    { name: "Ventas", href: "/ventas", icon: ArrowRightLeft, module: "presupuestos" },
+    { name: "Ventas", href: "/ventas", icon: ArrowRightLeft, module: "presupuestos", oculto: true }, // Augusto 20/10: fuera del menú (sigue por link)
     { name: "Facturas", href: "/consulta-facturas", icon: FileSearch, module: "consulta_facturas" },
   ] },
   { grupo: "Comprar", items: [

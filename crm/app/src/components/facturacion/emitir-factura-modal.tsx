@@ -71,6 +71,11 @@ interface ClienteOption {
 
 const esA = (tipo: string) => tipo.endsWith("A"); // X se cobra como B: precio final
 
+/** CBU sugerida para la FCE por sociedad (Augusto la puede cambiar en el modal). */
+const CBU_FCE_SUGERIDA: Record<string, string> = {
+  "eee2a3c8-fe6c-494d-bd2f-7a5d8067d021": "0170091620000031248318", // Lazzari
+};
+
 const INPUT = "w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-2.5 py-1.5 text-sm dark:text-white";
 const LABEL = "block text-xs font-medium mb-0.5 text-zinc-600 dark:text-zinc-300";
 
@@ -143,8 +148,9 @@ export function EmitirFacturaModal({
       fecha: hoy,
       condicion_venta: condicion,
       fecha_vencimiento: calcFechaVencimiento(condicion, hoy, pr?.cliente?.dias_cuenta_corriente),
-      fce_cbu: "",
-      fce_transmision: "",
+      // Sugeridos (se pueden cambiar): CBU de Lazzari y Sistema de Circulación Abierta.
+      fce_cbu: CBU_FCE_SUGERIDA[sociedadActiva?.id || ""] || "",
+      fce_transmision: "SCA",
       // Las observaciones del PR (PO, SES, etc.) vienen precargadas y se pueden editar; los renglones automáticos de costo/margen nunca pasan.
       observaciones: pr ? observacionesParaCliente(pr.observaciones) : "",
       items: items.length > 0 ? items : [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }],

@@ -10,7 +10,7 @@
 // Ventas (Augusto 20/10): arriba "Facturado del mes" en $ (Neto + IVA, ◀ mes ▶), vencidas y por vencer (clic = filtra);
 // columnas Fecha · Vence · Cliente · N° · OC · Vend. (iniciales) · Mon. · Neto · Total · Saldo · Estado · Enviada · Ver/Descargar.
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ChevronLeft, ChevronRight, Download, Eye, HandCoins, Loader2, Mail, Pencil, Search, Wallet } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, Download, Eye, HandCoins, Loader2, Mail, Pencil, Receipt, Search, Wallet } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { useUser } from "@/lib/auth-context";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
@@ -20,6 +20,8 @@ import {
 } from "@/lib/facturas-lazza";
 import type { Recibo } from "@/lib/recibos";
 import { abrirFacturaVenta, FichaFacturaCompra, FichaFacturaVenta } from "@/components/facturas-consulta";
+import { EmitirFacturaModal } from "@/components/facturacion/emitir-factura-modal";
+import { useArcaStatus } from "@/lib/use-arca-status";
 import { sumarMeses } from "@/lib/reportes-comprobantes";
 import { traerComprobantesMes, traerFacturasFL } from "./datos";
 import { CobrarCliente } from "./cobrar";
@@ -71,6 +73,9 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
   const [pagando, setPagando] = useState<{ entidadId: string | null; nombre: string; ids: string[] } | null>(null);
   const [enviarOP, setEnviarOP] = useState<string | null>(null);
   const [enviarRecibo, setEnviarRecibo] = useState<Recibo | null>(null);
+  // "Nueva factura" (Augusto 20/10): la misma ventana de emitir, sin PR (se elige el cliente).
+  const [nuevaFactura, setNuevaFactura] = useState(false);
+  const arcaStatus = useArcaStatus(sociedadId);
   const hoy = todayAR();
   const necesitaTodas = filtro === "todas";
   const [mes, setMes] = useState(hoy.slice(0, 7));
@@ -242,6 +247,12 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
             <option value="">Enviadas y no</option><option value="si">Enviadas</option><option value="no">No enviadas</option>
           </select>
         )}
+        {esVenta && (
+          <button type="button" onClick={() => setNuevaFactura(true)} title="Emitir una factura sin PR, eligiendo el cliente"
+            className="inline-flex h-8 items-center gap-1 rounded-lg border border-orange-300 px-3 text-sm font-medium text-orange-700 hover:bg-orange-50 dark:border-orange-800 dark:text-orange-300 dark:hover:bg-orange-950/30">
+            <Receipt className="h-4 w-4" /> Nueva factura
+          </button>
+        )}
         {esVenta ? (
           <button type="button" onClick={() => setPagando({ entidadId: null, nombre: "", ids: [] })} title="Cobro sin factura o eligiendo el cliente"
             className="inline-flex h-8 items-center gap-1 rounded-lg border border-emerald-300 px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-950/30">
@@ -354,6 +365,14 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta" }: { s
         <EditarVencimiento fila={aVenc(editando)} sociedadId={sociedadId}
           pendientes={(datos?.filas || []).filter((f) => f.saldo > 0.005 && f.entidadId && f.entidadId === editando.entidadId).map(aVenc)}
           onClose={() => setEditando(null)} onCambio={cambiarVencimientos} />
+      )}
+
+      {nuevaFactura && (
+        <EmitirFacturaModal
+          arcaCertOk={arcaStatus?.certOk}
+          onClose={() => setNuevaFactura(false)}
+          onEmitted={recargar}
+        />
       )}
 
       {pagando && (esVenta ? (

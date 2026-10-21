@@ -69,8 +69,6 @@ export default function FinanzasLazzaPage() {
       case "cobrar": return <FinanzasLazzaFacturas key="cobrar" sociedadId={sociedadId} ladoInicial="venta" />;
       case "pagar": return <FinanzasLazzaFacturas key="pagar" sociedadId={sociedadId} ladoInicial="compra" />;
       case "facturas": return <FinanzasLazzaFacturas key="facturas" sociedadId={sociedadId} ladoInicial="venta" />;
-      // Facturar (20/10): la pestaña "Facturar" de Facturas (PR que faltan facturar).
-      case "facturar": return <FinanzasLazzaFacturas key="facturar" sociedadId={sociedadId} ladoInicial="facturar" />;
       case "cuentas": return <FinanzasLazzaCuentasCorrientes sociedadId={sociedadId} />;
       case "vencimientos": return <FinanzasLazzaVencimientos sociedadId={sociedadId} />;
       case "ordenes_pago": return <FinanzasLazzaOrdenesPago sociedadId={sociedadId} />;

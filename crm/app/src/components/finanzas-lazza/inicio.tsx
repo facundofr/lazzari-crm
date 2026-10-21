@@ -5,7 +5,7 @@
 // Cada dato se calcula aparte (si uno falla, esa tarjeta queda con "—" y el resto anda). Solo lectura.
 import { useEffect, useState } from "react";
 import {
-  BarChart3, Banknote, HandCoins, Wallet, Building2, FileSpreadsheet, FileText, Files, List, Percent, Receipt, ReceiptText, ShoppingBag, Target, Users,
+  BarChart3, Banknote, HandCoins, Wallet, Building2, FileSpreadsheet, Files, List, Percent, Receipt, ReceiptText, ShoppingBag, Target, Users,
   type LucideIcon,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
@@ -19,7 +19,7 @@ const db = supabase as any;
 
 export type SeccionFL =
   | "cobrar" | "pagar"
-  | "facturar" | "facturas" | "cuentas" | "vencimientos"
+  | "facturas" | "cuentas" | "vencimientos"
   | "ordenes_pago" | "recibos" | "retenciones" | "iva"
   | "bancos" | "cheques" | "gastos" | "movimientos"
   | "objetivos" | "reportes";
@@ -30,7 +30,6 @@ export interface TarjetaDef { id: SeccionFL; nombre: string; que: string; icono:
 export const TARJETAS: TarjetaDef[] = [
   { id: "cobrar", nombre: "Cobrar", que: "Facturas de venta a cobrar", icono: HandCoins, grupo: "acciones" },
   { id: "pagar", nombre: "Pagar", que: "Facturas de compra a pagar", icono: Wallet, grupo: "acciones" },
-  { id: "facturar", nombre: "Facturar", que: "PR listos para facturar", icono: FileText, grupo: "ventas" },
   { id: "facturas", nombre: "Facturas", que: "Venta y compra, una por una", icono: Files, grupo: "ventas" },
   { id: "cuentas", nombre: "Cuentas corrientes", que: "Clientes y proveedores", icono: Users, grupo: "ventas" },
   { id: "ordenes_pago", nombre: "Órdenes de pago", que: "Pagos a proveedores", icono: ReceiptText, grupo: "pagos" },
@@ -61,7 +60,7 @@ const mas = (ars: number, usd: number) => `${millones(ars)}${Math.abs(usd) >= 1 
 
 /** Tarjetas que llena cada loader (mismo orden que `loaders`): si uno falla, esas quedan con "—". */
 const TARJETAS_DE_LOADER: SeccionFL[][] = [
-  ["reportes", "gastos", "objetivos"], ["vencimientos", "cuentas", "cobrar", "pagar"], ["iva", "facturas"], ["facturar"],
+  ["reportes", "gastos", "objetivos"], ["vencimientos", "cuentas", "cobrar", "pagar"], ["iva", "facturas"],
   ["ordenes_pago", "retenciones"], ["recibos", "movimientos"], ["bancos"], ["cheques"],
 ];
 
@@ -106,21 +105,6 @@ function loaders(sociedadId: string, periodo: string, hoy: string): (() => Promi
         iva: { valor: millones(iva.diferencia), sub: "débito − crédito" },
         facturas: { valor: `${ventas.filter((f) => f.estado !== "anulada").length} · ${compras.filter((f) => f.estado !== "anulada").length}`, sub: "venta · compra del mes" },
       };
-    },
-    // Facturar: PR aprobados / para facturar sin factura vigente (misma regla que el Resumen de Finanzas).
-    async () => {
-      const prs = await traerTodo<{ id: string; total: number | null; moneda: string | null }>(() => db.from("presupuestos").select("id, total, moneda")
-        .eq("sociedad_id", sociedadId).in("estado", ["facturar", "aprobado"]).order("id"));
-      const facturados = new Set<string>();
-      const ids = prs.map((p) => p.id);
-      for (let i = 0; i < ids.length; i += 200) {
-        const { data } = await db.from("facturas").select("presupuesto_id").eq("sociedad_id", sociedadId).in("presupuesto_id", ids.slice(i, i + 200)).neq("estado", "anulada");
-        for (const f of data || []) if (f.presupuesto_id) facturados.add(f.presupuesto_id);
-      }
-      const pend = prs.filter((p) => !facturados.has(p.id));
-      const ars = pend.filter((p) => p.moneda !== "USD").reduce((s, p) => s + Number(p.total || 0), 0);
-      const usd = pend.filter((p) => p.moneda === "USD").reduce((s, p) => s + Number(p.total || 0), 0);
-      return { facturar: { valor: `${pend.length} PR`, sub: `${mas(ars, usd)} sin facturar` } };
     },
     // Órdenes de pago y retenciones del mes.
     async () => {

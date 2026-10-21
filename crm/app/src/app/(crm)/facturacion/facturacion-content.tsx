@@ -285,7 +285,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const [ncResult, setNcResult] = useState<string>("");
   const [ncSuccessWarning, setNcSuccessWarning] = useState("");
   // Después de una NC total que deja el PR en "facturar": ¿se vuelve a facturar? Es una pregunta, nunca frena nada.
-  const [ncPrPregunta, setNcPrPregunta] = useState<{ prId: string; prNumero: string; notas: string; ocs: { numero: string; estado: string }[]; resuelto: "" | "si" | "no" | "error" } | null>(null);
+  const [ncPrPregunta, setNcPrPregunta] = useState<{ prId: string; prNumero: string; notas: string; resuelto: "" | "si" | "no" | "error" } | null>(null);
   const ncRequestKeyRef = useRef("");
   const [detailNCs, setDetailNCs] = useState<FacturaRow[]>([]);
   const [detailSolicitante, setDetailSolicitante] = useState<string | null>(null);
@@ -434,8 +434,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
             db.from("presupuestos").select("numero, estado, notas_internas").eq("id", ncFactura.presupuesto_id).single(),
           ]);
           if (fAct?.estado === "anulada" && pAct?.estado === "facturar") {
-            const { data: ocsPR } = await db.from("ordenes_compra").select("numero, estado").eq("presupuesto_origen_id", ncFactura.presupuesto_id).neq("estado", "cancelada");
-            setNcPrPregunta({ prId: ncFactura.presupuesto_id, prNumero: pAct.numero, notas: pAct.notas_internas || "", ocs: (ocsPR || []) as { numero: string; estado: string }[], resuelto: "" });
+            setNcPrPregunta({ prId: ncFactura.presupuesto_id, prNumero: pAct.numero, notas: pAct.notas_internas || "", resuelto: "" });
           }
         }
       } catch { /* la pregunta es opcional: la NC ya está emitida */ }
@@ -2573,9 +2572,6 @@ ${nota}` : nota }).eq("id", p.prId).eq("sociedad_id", sociedadActiva?.id);
                     {ncPrPregunta.resuelto === "si" && <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-400">Listo: el PR queda en Ventas para re-facturar (corregí el precio antes si hace falta).</p>}
                     {ncPrPregunta.resuelto === "no" && <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-400">Listo: el PR quedó como rechazado, con una nota interna, y ya no cuenta como venta.</p>}
                     {ncPrPregunta.resuelto === "error" && <p className="mt-2 text-xs text-red-600">No se pudo cerrar el PR. Podés pasarlo a Rechazado a mano desde Presupuestos.</p>}
-                    {ncPrPregunta.ocs.length > 0 && ncPrPregunta.resuelto !== "si" && (
-                      <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">Ojo con las OC al proveedor: {ncPrPregunta.ocs.map((o) => `${o.numero} (${o.estado})`).join(", ")}. No se tocan solas: si no se recibió, cancelala; si ya se recibió, hay que ver la devolución o el stock.</p>
-                    )}
                   </div>
                 )}
                 <button onClick={() => setNcOpen(false)} className="mt-2 px-6 py-2 rounded-lg bg-orange-500 text-white text-sm font-medium hover:bg-orange-600">Cerrar</button>
