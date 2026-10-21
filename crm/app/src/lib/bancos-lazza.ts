@@ -1,7 +1,7 @@
 // Finanzas Lazza → Bancos (Tanda 3, 19/10/2026): cuentas con saldo según el banco, tarjetas por resumen y préstamos
 // en dos partes ("Lo que debo" / "Lo que me deben"). Prueba: npx tsx scripts/test-bancos-lazza.ts
 
-export interface CuotaPrestamo { numero: number; fecha_pago: string; total: number | string; estado: string; pagada_fecha?: string | null; notas?: string | null }
+export interface CuotaPrestamo { numero: number; fecha_pago: string; total: number | string; estado: string; pagada_fecha?: string | null; notas?: string | null; capital?: number | string | null; interes?: number | string | null; cargos?: number | string | null }
 
 export interface ResumenPrestamo {
   /** Con tabla de cuotas (BNA) o sin cuotas fijas (familia: cada pago se anota como cuota pagada). */
@@ -9,6 +9,8 @@ export interface ResumenPrestamo {
   capital: number;
   pagado: number;
   falta: number;
+  /** Capital de las cuotas que faltan (BNA: el total de la cuota trae intereses y cargos). 0 si las cuotas no lo dicen. */
+  capitalFalta: number;
   cuotasPagadas: number;
   cuotasTotal: number;
   vencidas: number;
@@ -26,10 +28,12 @@ export function resumenPrestamo(p: { capital_total?: number | string | null }, c
   const pagadas = cuotas.filter((c) => c.estado === "pagada");
   const pendientes = cuotas.filter((c) => c.estado !== "pagada").sort((a, b) => a.fecha_pago.localeCompare(b.fecha_pago));
   const pagado = r2(pagadas.reduce((s, c) => s + Number(c.total || 0), 0));
-  const conCuotas = pendientes.length > 0;
+  // Tabla del banco: alguna cuota pendiente o con capital cargado (así un BNA con todo pagado no pasa a "sin cuotas").
+  const conCuotas = pendientes.length > 0 || cuotas.some((c) => c.capital !== null && c.capital !== undefined);
   const falta = conCuotas ? r2(pendientes.reduce((s, c) => s + Number(c.total || 0), 0)) : r2(Math.max(0, capital - pagado));
   return {
     conCuotas, capital, pagado, falta,
+    capitalFalta: r2(pendientes.reduce((s, c) => s + Number(c.capital || 0), 0)),
     cuotasPagadas: pagadas.length, cuotasTotal: cuotas.length,
     vencidas: pendientes.filter((c) => c.fecha_pago.slice(0, 10) < hoy).length,
     proxima: pendientes[0] ? { fecha: pendientes[0].fecha_pago.slice(0, 10), monto: Number(pendientes[0].total || 0) } : null,

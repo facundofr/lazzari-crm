@@ -61,15 +61,31 @@ export function useInformeBCRA(clienteId: string | null | undefined) {
 }
 
 /** Aviso corto para presupuestos y facturación: solo aparece si el cliente está en rojo o amarillo. */
-export function AvisoBCRA({ clienteId }: { clienteId: string | null | undefined }) {
-  const { informe } = useInformeBCRA(clienteId);
-  if (!informe || (informe.semaforo !== "rojo" && informe.semaforo !== "amarillo")) return null;
-  const c = SEMAFORO_CLASES[informe.semaforo];
-  const motivos = [
+function motivosBCRA(informe: Pick<InformeBCRA, "peor_situacion" | "cheques_sin_pagar" | "cheques_rechazados" | "proceso_judicial">): string {
+  return [
     informe.peor_situacion && informe.peor_situacion >= 2 ? `situación ${informe.peor_situacion} (${SITUACION_LABEL[informe.peor_situacion] || ""})` : "",
     informe.cheques_sin_pagar ? `${informe.cheques_sin_pagar} cheque(s) rechazado(s) sin pagar` : informe.cheques_rechazados ? `${informe.cheques_rechazados} cheque(s) rechazado(s)` : "",
     informe.proceso_judicial ? "proceso judicial" : "",
   ].filter(Boolean).join(" · ");
+}
+
+/** Al aprobar un PR (Augusto 20/10): texto del aviso si el cliente está en ROJO; si no, null. Nunca frena. */
+export async function avisoBCRARojo(clienteId: string | null | undefined): Promise<string | null> {
+  if (!clienteId) return null;
+  try {
+    const { data } = await db.from("cliente_bcra_informes").select("peor_situacion, cheques_sin_pagar, cheques_rechazados, proceso_judicial, semaforo").eq("cliente_id", clienteId).order("mes", { ascending: false }).limit(1);
+    const inf = data?.[0];
+    if (!inf || inf.semaforo !== "rojo") return null;
+    return `BCRA: ${SEMAFORO_LABEL.rojo}. ${motivosBCRA(inf) || "Revisá la ficha del cliente."} Es solo un aviso.`;
+  } catch { return null; }
+}
+
+/** soloRojo: en remitos (Augusto 20/10) avisa solo en rojo; en presupuestos y facturación, rojo o amarillo. */
+export function AvisoBCRA({ clienteId, soloRojo = false }: { clienteId: string | null | undefined; soloRojo?: boolean }) {
+  const { informe } = useInformeBCRA(clienteId);
+  if (!informe || (informe.semaforo !== "rojo" && (soloRojo || informe.semaforo !== "amarillo"))) return null;
+  const c = SEMAFORO_CLASES[informe.semaforo];
+  const motivos = motivosBCRA(informe);
   return (
     <div className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${c.caja} ${c.texto}`}>
       <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />

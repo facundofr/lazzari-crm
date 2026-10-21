@@ -31,6 +31,7 @@ import { buscarCandidatos, type CatalogoCandidato } from "@/lib/catalogo-busqued
 import { abrirRemitoPDF, remitoPDFBase64 } from "@/lib/remito-pdf";
 import { leerDolaresGuardados, hoyAR } from "@/lib/dolar-presupuesto";
 import { entregaInicial, entregaGuardada, filaVigente, difiereDeSucursal, guardarEntrega, FILA_ACTUAL, type Entrega, type ModoEntrega } from "@/lib/remito-entrega";
+import { AvisoBCRA } from "@/components/clientes/bcra-card";
 import { AlertTriangle, Download, FileText, Loader2, Mail, Plus, Sparkles, Trash2, Truck, X } from "lucide-react";
 
 const db = supabase as any;
@@ -594,6 +595,7 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
 
               {(pr || (modo === "libre" && !cargando)) && (
                 <>
+                  {clienteId && !editando && <AvisoBCRA clienteId={clienteId} soloRojo />}
                   {/* Cabecera */}
                   <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-4">
                     <label className="col-span-2 flex flex-col gap-0.5 text-[11px] text-zinc-500">Cliente

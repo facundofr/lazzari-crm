@@ -2,7 +2,7 @@
 
 // Lista de presupuestos (la pantalla "de siempre"). Desde el 20/10/2026 se muestra como pestaña "Presupuestos" de /presupuestos (antes era la página /presupuestos sola).
 
-import { AvisoBCRA } from "@/components/clientes/bcra-card";
+import { AvisoBCRA, avisoBCRARojo } from "@/components/clientes/bcra-card";
 import { Header } from "@/components/layout/header";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -2179,6 +2179,8 @@ export default function PresupuestosLista() {
 
       // When approved, auto-generate purchase orders grouped by supplier
       if (estado === "aprobado") {
+        // Augusto 20/10: cliente en rojo en el BCRA → aviso al aprobar (nunca frena).
+        void avisoBCRARojo(presupuestos.find(p => p.id === id)?.clienteId).then(t => { if (t) toast.warning(t); });
         // Track if this PR has items without costs
         try {
           const { data: items } = await supabase

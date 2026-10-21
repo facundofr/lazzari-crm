@@ -653,6 +653,41 @@ export function FichaFacturaCompra({ factura, facturaId, onClose, conAcciones = 
     onClose();
   }
 
+  // Lo inverso (20/10): "se marcó pagada con tarjeta por error" → se anula ese pago (gestionar_cobro, como Finanzas) y vuelve a Pagos.
+  const [pagosTarjeta, setPagosTarjeta] = useState<{ id: string; monto: number; fecha: string; conciliado: boolean; tarjeta: string }[]>([]);
+  const [deshaciendo, setDeshaciendo] = useState(false);
+  const sePuedeDeshacer = conAcciones && !soloLectura && compra?.estado === "pagada";
+  useEffect(() => {
+    if (!sePuedeDeshacer || !compra?.id) { setPagosTarjeta([]); return; }
+    let vivo = true;
+    (supabase as any).from("movimientos").select("id, monto, fecha, conciliado, cuentas_financieras!movimientos_cuenta_id_fkey(nombre, tipo)")
+      .eq("factura_compra_id", compra.id).eq("tipo", "pago").or("anulado.is.null,anulado.eq.false")
+      .then(({ data }: any) => {
+        if (!vivo) return;
+        setPagosTarjeta((data || []).filter((m: any) => m.cuentas_financieras?.tipo === "tarjeta_credito")
+          .map((m: any) => ({ id: m.id, monto: Number(m.monto), fecha: String(m.fecha).slice(0, 10), conciliado: !!m.conciliado, tarjeta: m.cuentas_financieras?.nombre || "tarjeta" })));
+      });
+    return () => { vivo = false; };
+  }, [sePuedeDeshacer, compra?.id]);
+
+  async function deshacerTarjeta() {
+    if (!compra || !pagosTarjeta.length) return;
+    const total = pagosTarjeta.reduce((s, p) => s + p.monto, 0);
+    const cruzado = pagosTarjeta.some((p) => p.conciliado) ? "\n\n⚠️ El pago ya está cruzado con el resumen de la tarjeta: al anularlo se descruza." : "";
+    if (!confirm(`¿Estás seguro? Se anula el pago con ${pagosTarjeta[0].tarjeta} de ${formatCurrency(total, compra.moneda as Moneda)} y ${[compra.tipo_comprobante, compra.numero_factura].filter(Boolean).join(" ")} vuelve a quedar a pagar (vuelve a Pagos).\n\nEl pago queda anulado, no se borra.${cruzado}`)) return;
+    setDeshaciendo(true);
+    for (const p of pagosTarjeta) {
+      const { error } = await (supabase as any).rpc("gestionar_cobro", { p_movimiento_id: p.id, p_accion: "anular" });
+      if (error) { setDeshaciendo(false); toast.error(`No se pudo anular el pago con tarjeta: ${error.message}`); return; }
+    }
+    const { error } = await (supabase as any).from("facturas_compra").update({ estado: "pendiente" }).eq("id", compra.id);
+    setDeshaciendo(false);
+    if (error) { toast.error(`El pago se anuló pero la factura no volvió a "a pagar": ${error.message}`); onCambio?.(); return; }
+    toast.success("Listo: la factura vuelve a quedar a pagar");
+    onCambio?.();
+    onClose();
+  }
+
   useEffect(() => {
     if (!compra?.id) return;
     let vivo = true;
@@ -749,6 +784,16 @@ export function FichaFacturaCompra({ factura, facturaId, onClose, conAcciones = 
                         className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50">{marcando ? "Guardando…" : "Marcar pagada con tarjeta"}</button>
                     </>
                   )}
+                </div>
+              )}
+              {sePuedeDeshacer && pagosTarjeta.length > 0 && (
+                <div className="mt-4 flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1.5 text-sm dark:border-blue-900 dark:bg-blue-950/30">
+                  <CreditCard className="h-4 w-4 text-blue-600" />
+                  <span className="text-blue-800 dark:text-blue-200">
+                    Pagada con {pagosTarjeta[0].tarjeta} · {formatCurrency(pagosTarjeta.reduce((s, p) => s + p.monto, 0), compra.moneda as Moneda)} · {formatDate(pagosTarjeta[0].fecha)}
+                  </span>
+                  <button type="button" disabled={deshaciendo} onClick={deshacerTarjeta}
+                    className="rounded-lg border border-blue-300 bg-white px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50 dark:border-blue-800 dark:bg-zinc-900 dark:text-blue-300">{deshaciendo ? "Anulando…" : "No se pagó con tarjeta: volver a Pagos"}</button>
                 </div>
               )}
             </>
