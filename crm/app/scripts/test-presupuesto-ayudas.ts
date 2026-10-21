@@ -1,4 +1,4 @@
-import { claveArticulo, ultimosPrecios, buscarEnLista, filaPorCodigo, resumenPresupuesto } from "../src/lib/presupuesto-ayudas";
+import { claveArticulo, ultimosPrecios, buscarEnLista, filaPorCodigo, resumenPresupuesto, precioDesdeMarkup } from "../src/lib/presupuesto-ayudas";
 import { normalizarTexto } from "../src/lib/buscar-texto";
 const ok = (c: boolean, m: string) => { if (!c) { console.error("FALLA", m); process.exit(1); } console.log("ok", m); };
 
@@ -37,4 +37,11 @@ ok(r.costo === 260 && r.ganancia === 100, "costo y ganancia");
 ok(Math.abs((r.margen ?? 0) - (360 / 260 - 1) * 100) < 1e-9, "margen");
 ok(r.bajoMargen === 1, "uno bajo el 15 %");
 ok(resumenPresupuesto([]).margen === null, "sin renglones");
+
+// Precio escrito a mano: no se corre por el markup redondeado (PR-2026-1264: 18.000 quedaba 17.999,76).
+ok(precioDesdeMarkup(8593, 109.47, 18000) === 18000, "respeta el precio escrito (mismo costo)");
+ok(precioDesdeMarkup(9800, 61.84, 15860) === 15860, "respeta 15.860");
+ok(precioDesdeMarkup(8593, 109.47) === 17999.76, "sin precio escrito calcula");
+ok(precioDesdeMarkup(9000, 109.47, 18000) === 18852.3, "si cambia el costo, recalcula");
+ok(precioDesdeMarkup(8593, 120, 18000) === 18904.6, "si cambia el markup, recalcula");
 console.log("TODO OK");

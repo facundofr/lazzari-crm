@@ -4,6 +4,17 @@ import { normalizarTexto, palabrasBusqueda, coincideTodas } from "@/lib/buscar-t
 
 export const MARGEN_MINIMO_PR = 15;
 
+/**
+ * Precio de lista desde el costo (ya en la moneda del PR) y el markup. El markup se guarda con 2 decimales, así que
+ * rearmar el precio desde él lo corre unos centavos ($ 18.000 → $ 17.999,76). Si el precio actual ya corresponde a
+ * ese costo y markup (la diferencia es solo ese redondeo), se respeta el precio que escribió el vendedor (Augusto 21/10).
+ */
+export function precioDesdeMarkup(costoConv: number, markup: number, precioActual?: number): number {
+  const calculado = Number((costoConv * (1 + markup / 100)).toFixed(2));
+  if (precioActual && precioActual > 0 && costoConv > 0 && Math.abs(calculado - precioActual) <= costoConv * 0.00005 + 0.01) return precioActual;
+  return calculado;
+}
+
 /** Clave para comparar artículos: el código (sin mayúsculas ni espacios) o, si no tiene, la descripción. */
 export function claveArticulo(codigo: string | null | undefined, descripcion?: string | null): string {
   const c = normalizarTexto(codigo).replace(/\s+/g, "");

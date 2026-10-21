@@ -29,7 +29,7 @@ import { useUser } from "@/lib/auth-context";
 import CatalogoPicker, { filaListaAItem, traerListaCompleta, buscarProveedorCRM, type FilaLista } from "@/components/presupuestos/catalogo-picker";
 import DescripcionLista from "@/components/presupuestos/descripcion-lista";
 import { type FilaPrecioAnterior, type LineaCosto, type MejorCosto } from "@/components/presupuestos/precios-costos-ia";
-import { claveArticulo, ultimosPrecios, filaPorCodigo, resumenPresupuesto, type PRVendido } from "@/lib/presupuesto-ayudas";
+import { claveArticulo, ultimosPrecios, filaPorCodigo, resumenPresupuesto, precioDesdeMarkup, type PRVendido } from "@/lib/presupuesto-ayudas";
 import AsistentePR from "@/components/presupuestos/asistente-pr";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 import { useRefrescarAlVolver } from "@/lib/use-refrescar";
@@ -618,7 +618,7 @@ export default function PresupuestosLista() {
       const items = preservarPrecios ? p.items : p.items.map(it => {
         if (!esCostoUsd(it.costo_moneda)) return it;
         const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, tc, tcD);
-        return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
+        return { ...it, precio_venta: precioDesdeMarkup(costoConv, it.markup_porcentaje, it.precio_venta) };
       });
       return { ...p, tipo_cambio: tc, tipo_cambio_divisas: tcD, items };
     });
@@ -656,7 +656,7 @@ export default function PresupuestosLista() {
             // el precio desde un markup redondeado.
             const items = options.preserveItemPrices ? p.items : p.items.map(it => {
               const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, p.tipo_cambio, data.valor_venta);
-              return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
+              return { ...it, precio_venta: precioDesdeMarkup(costoConv, it.markup_porcentaje, it.precio_venta) };
             });
             return { ...p, tipo_cambio_divisas: data.valor_venta, ...(p.moneda === "USD" ? { tipo_cambio: 0 } : {}), cotizacion_modalidad: modalidad, items };
           });
@@ -664,7 +664,7 @@ export default function PresupuestosLista() {
           setNewPR((p) => {
             const items = options.preserveItemPrices ? p.items : p.items.map(it => {
               const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, data.valor_venta, p.tipo_cambio_divisas);
-              return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
+              return { ...it, precio_venta: precioDesdeMarkup(costoConv, it.markup_porcentaje, it.precio_venta) };
             });
             return { ...p, tipo_cambio: data.valor_venta, ...(p.moneda === "USD" ? { tipo_cambio_divisas: 0 } : {}), cotizacion_modalidad: modalidad, items };
           });
@@ -1278,28 +1278,29 @@ export default function PresupuestosLista() {
             item.lista_item_id = matchingTier.lista_item_id;
             item.price_rule_source = { precio: matchingTier.precio, precio_neto_base: matchingTier.precio_neto_base, descuento: matchingTier.descuento, categoria: matchingTier.categoria, variante: matchingTier.variante, reglas: matchingTier.reglas };
             const costoConv = convertCosto(item.precio_costo, item.costo_moneda, prev.moneda, prev.tipo_cambio, prev.tipo_cambio_divisas);
-            item.precio_venta = Number((costoConv * (1 + item.markup_porcentaje / 100)).toFixed(2));
+            item.precio_venta = precioDesdeMarkup(costoConv, item.markup_porcentaje, item.precio_venta);
             // Notificar el cambio de escalon (via setTimeout para salir del setState)
             setTimeout(() => toast.success(`Precio actualizado: ${matchingTier.variante}`), 0);
           }
         }
         if (item.price_rule_source) {
           const costoConv = convertCosto(item.precio_costo, item.costo_moneda, prev.moneda, prev.tipo_cambio, prev.tipo_cambio_divisas);
-          item.precio_venta = Number((costoConv * (1 + item.markup_porcentaje / 100)).toFixed(2));
+          item.precio_venta = precioDesdeMarkup(costoConv, item.markup_porcentaje, item.precio_venta);
         }
       }
 
       // Auto-calc precio_venta when costo, markup, or costo_moneda change
       if (field === "precio_costo" || field === "markup_porcentaje" || field === "costo_moneda") {
         const costoConv = convertCosto(item.precio_costo, item.costo_moneda, prev.moneda, prev.tipo_cambio, prev.tipo_cambio_divisas);
-        item.precio_venta = Number((costoConv * (1 + item.markup_porcentaje / 100)).toFixed(2));
+        item.precio_venta = precioDesdeMarkup(costoConv, item.markup_porcentaje, item.precio_venta);
       }
 
       // Auto-calc markup when precio_venta changes manually
       if (field === "precio_venta") {
         const costoConv = convertCosto(item.precio_costo, item.costo_moneda, prev.moneda, prev.tipo_cambio, prev.tipo_cambio_divisas);
         if (costoConv > 0) {
-          item.markup_porcentaje = Number((((Number(value) / costoConv) - 1) * 100).toFixed(2));
+          // Sin redondear: así rearmar el precio desde el markup da exacto el precio escrito (se ve con 2 decimales).
+          item.markup_porcentaje = ((Number(value) / costoConv) - 1) * 100;
         }
       }
       items[index] = item;
@@ -1347,7 +1348,7 @@ export default function PresupuestosLista() {
         const costoConv = convertCosto(c.cand.costo, costoMoneda, p.moneda, p.tipo_cambio, p.tipo_cambio_divisas);
         // El precio de venta NO cambia: se recalcula el markup (sube el margen).
         return { ...x, proveedor_nombre: c.cand.proveedor, proveedor_lista: c.cand.proveedor, proveedor_id: provIds[k] || "", costo_moneda: costoMoneda as NewPRItem["costo_moneda"], precio_costo: c.cand.costo, price_rule_source: undefined,
-          markup_porcentaje: costoConv > 0 && x.precio_venta > 0 ? Number((((x.precio_venta / costoConv) - 1) * 100).toFixed(2)) : x.markup_porcentaje };
+          markup_porcentaje: costoConv > 0 && x.precio_venta > 0 ? ((x.precio_venta / costoConv) - 1) * 100 : x.markup_porcentaje };
       }),
     }));
     toast.success(`${cambios.length} costo(s) mejorados: el precio de venta no cambió, subió el margen`);
@@ -1562,7 +1563,7 @@ export default function PresupuestosLista() {
         cantidad: it.cantidad,
         unidad: it.unidad ?? "u",
         precio_costo: it.precio_costo ?? 0,
-        markup_porcentaje: it.markup_porcentaje ?? 0,
+        markup_porcentaje: Math.round((it.markup_porcentaje ?? 0) * 100) / 100,
         precio_venta: precioNeto(it, descGeneral),
         precio_lista: it.precio_venta ?? 0,
         descuento_porcentaje: Number(it.descuento_porcentaje) || 0,
@@ -2404,12 +2405,14 @@ export default function PresupuestosLista() {
           const costo = Number(it.precio_costo) || 0;
           const pv = Number(it.precio_lista ?? it.precio_venta) || 0;
           let markup = Number(it.markup_porcentaje) || 0;
-          // Back-calculate markup if DB has null/0 but precio_venta and precio_costo exist
-          if (!markup && costo > 0 && pv > 0) {
+          // Back-calculate markup if DB has null/0 but precio_venta and precio_costo exist.
+          // Si está guardado (con 2 decimales), se usa el exacto del precio: así no se corre el precio al rearmarlo.
+          if (costo > 0 && pv > 0) {
             const prTcDivisas = Number(fullPR.tipo_cambio_divisas) || 0;
             const costoConv = convertCosto(costo, it.costo_moneda || "ARS", prMoneda, prTc, prTcDivisas);
             if (costoConv > 0) {
-              markup = Number((((pv / costoConv) - 1) * 100).toFixed(2));
+              const exacto = ((pv / costoConv) - 1) * 100;
+              if (!markup || Math.abs(exacto - markup) < 0.006) markup = exacto;
             }
           }
           return {
@@ -3355,19 +3358,6 @@ export default function PresupuestosLista() {
                   usuario={profile?.full_name || undefined}
                   onGuardado={async (c) => { setSelected({ ...selected, ...c, ocCliente: c.ocCliente ?? (selected as any).ocCliente, ocClienteFecha: c.ocClienteFecha ?? (selected as any).ocClienteFecha, archivoUrl: c.archivoUrl ?? (selected as any).archivoUrl, archivoNombre: c.archivoNombre ?? (selected as any).archivoNombre, notasInternas: c.notasInternas ?? selected.notasInternas } as any); await fetchPresupuestos(); }}
                 />
-                {(selected.estado === "aprobado" || selected.estado === "facturar") && (
-                  <div className="col-span-2">
-                    <a
-                      href={`/ventas?venta=${selected.id}`}
-                      className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 transition-colors w-full justify-center"
-                    >
-                      <Receipt className="h-4 w-4" />
-                      Ver en Ventas (entregar, facturar, cobrar)
-                      <ArrowRight className="h-4 w-4" />
-                    </a>
-                    <p className="text-xs text-zinc-400 mt-1 text-center">Aprobado: la venta ya está en Ventas. Si el cliente manda OC, cargala acá arriba.</p>
-                  </div>
-                )}
                 {selected.enviadoAt && (
                   <div>
                     <p className="text-xs text-zinc-500">Enviado</p>
@@ -3806,7 +3796,7 @@ export default function PresupuestosLista() {
                 const tcD = mon === "ARS" ? (p.tipo_cambio_divisas || dolaresGuardados?.divisa?.valor || 0) : (modal === "divisas" ? p.tipo_cambio_divisas : 0);
                 const items = p.items.map(it => {
                   const costoConv = convertCosto(it.precio_costo, it.costo_moneda, mon, tc, tcD);
-                  return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
+                  return { ...it, precio_venta: precioDesdeMarkup(costoConv, it.markup_porcentaje, it.precio_venta) };
                 });
                 return { ...p, moneda: mon, tipo_cambio: tc, tipo_cambio_divisas: tcD, items };
               });
@@ -3825,7 +3815,7 @@ export default function PresupuestosLista() {
                 const tc = Number(e.target.value);
                 const items = p.items.map(it => {
                   const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, tc, 0);
-                  return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
+                  return { ...it, precio_venta: precioDesdeMarkup(costoConv, it.markup_porcentaje, it.precio_venta) };
                 });
                 return { ...p, tipo_cambio: tc, tipo_cambio_divisas: 0, cotizacion_modalidad: "billetes" as const, items };
               })}
@@ -3840,7 +3830,7 @@ export default function PresupuestosLista() {
                 const tcD = Number(e.target.value);
                 const items = p.items.map(it => {
                   const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, 0, tcD);
-                  return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
+                  return { ...it, precio_venta: precioDesdeMarkup(costoConv, it.markup_porcentaje, it.precio_venta) };
                 });
                 return { ...p, tipo_cambio_divisas: tcD, tipo_cambio: 0, cotizacion_modalidad: "divisas" as const, items };
               })}
@@ -3874,7 +3864,7 @@ export default function PresupuestosLista() {
               const items = p.items.map(it => {
                 if (!esCostoUsd(it.costo_moneda)) return it;
                 const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, tc, tcD);
-                return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
+                return { ...it, precio_venta: precioDesdeMarkup(costoConv, it.markup_porcentaje, it.precio_venta) };
               });
               return { ...p, tipo_cambio: tc, tipo_cambio_divisas: tcD, items };
             });
@@ -4342,7 +4332,7 @@ export default function PresupuestosLista() {
                         })()}
                       </td>
                       <td className="px-2 py-1.5">
-                        <NumInput value={item.markup_porcentaje} onChange={(n) => updateNewPRItem(idx, "markup_porcentaje", n)}
+                        <NumInput value={Math.round(item.markup_porcentaje * 100) / 100} onChange={(n) => updateNewPRItem(idx, "markup_porcentaje", n)}
                           className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
                         {item.markup_porcentaje > 999 && <span className="text-[9px] text-amber-500" title="Markup muy alto">!</span>}
                       </td>
