@@ -7,7 +7,7 @@
 // Órdenes de pago (19/10): "Nueva OP" → la misma ventana de OP de Finanzas (pagar.tsx). 20/10: Anular (y "Anular y pagar de nuevo").
 // Mismos datos y reglas que las pestañas de Finanzas; acá solo se miran, con filtros y orden por columna.
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Ban, Download, Eye, HandCoins, Loader2, Mail, MailCheck, Search, Wallet } from "lucide-react";
+import { Ban, Download, Eye, HandCoins, Loader2, Mail, MailCheck, Plus, Search, Wallet } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
@@ -20,6 +20,7 @@ import { useUser } from "@/lib/auth-context";
 import { descargarOP, EnviarOrdenPago, verOP } from "@/components/finanzas-lazza/orden-pago-doc";
 import { CobrarCliente } from "@/components/finanzas-lazza/cobrar";
 import { PagarProveedor } from "@/components/finanzas-lazza/pagar";
+import { NuevoMovimiento } from "@/components/finanzas-lazza/nuevo-movimiento";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -369,7 +370,9 @@ export function FinanzasLazzaRecibos({ sociedadId }: { sociedadId: string }) {
 const CLASE_LABEL: Record<ClaseMovimiento, string> = { ingreso: "Cobro / ingreso", egreso: "Pago / egreso", retencion_sufrida: "Retención sufrida", ajuste: "Ajuste", neutro: "Otro" };
 
 export function FinanzasLazzaMovimientos({ sociedadId }: { sociedadId: string }) {
-  const { datos, error } = useCarga(() => traerMovimientos(sociedadId), [sociedadId]);
+  const [recarga, setRecarga] = useState(0);
+  const [nuevo, setNuevo] = useState(false);
+  const { datos, error } = useCarga(() => traerMovimientos(sociedadId), [sociedadId, recarga]);
   const [texto, setTexto] = useState("");
   const [clase, setClase] = useState<"" | ClaseMovimiento | "anulados">("");
   const [conciliado, setConciliado] = useState("");
@@ -403,7 +406,11 @@ export function FinanzasLazzaMovimientos({ sociedadId }: { sociedadId: string })
     { key: "estado", label: "Estado", sortable: true, sortValue: (m) => (m.anulado ? "a" : m.conciliado ? "c" : "p"), render: (m) => <span className={`text-xs ${m.anulado ? "text-red-600" : m.conciliado ? "text-emerald-600" : "text-amber-600"}`}>{m.anulado ? "Anulado" : m.conciliado ? "Conciliado" : "Pendiente"}</span> },
   ];
   return (
+    <>
     <Marco error={error} cargando={!datos} filtros={<>
+      <button type="button" onClick={() => setNuevo(true)} className="inline-flex h-8 items-center gap-1 rounded-lg bg-orange-500 px-3 text-sm font-medium text-white hover:bg-orange-600">
+        <Plus className="h-4 w-4" /> Nuevo movimiento
+      </button>
       <Buscador valor={texto} cambiar={setTexto} placeholder="Buscar descripción, cliente o proveedor" />
       <select value={clase} onChange={(e) => setClase(e.target.value as typeof clase)} className={control}>
         <option value="">Todos los tipos</option>
@@ -415,6 +422,8 @@ export function FinanzasLazzaMovimientos({ sociedadId }: { sociedadId: string })
     </>} pie={<span>{visibles.length} movimientos · lo anulado queda tachado</span>}>
       <DataTable columns={cols} data={visibles} emptyMessage="No hay movimientos con ese filtro" />
     </Marco>
+    <NuevoMovimiento sociedadId={sociedadId} abierto={nuevo} onClose={() => setNuevo(false)} onGuardado={() => setRecarga((r) => r + 1)} />
+    </>
   );
 }
 

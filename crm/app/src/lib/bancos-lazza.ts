@@ -45,3 +45,25 @@ export function diasDesde(fecha: string | null | undefined, hoy: string): number
   if (!fecha) return null;
   return Math.round((Date.parse(`${hoy}T12:00:00Z`) - Date.parse(`${String(fecha).slice(0, 10)}T12:00:00Z`)) / 86_400_000);
 }
+
+export interface PesosCuenta { debe: number | null; vence: string | null; aPagar: number | null }
+
+const numAR = (s: string) => Number(s.replace(/\./g, "").replace(",", "."));
+
+/**
+ * BAVSA (cuenta en US$): lo que se debe en pesos y el vencimiento de la caución salen de las observaciones,
+ * que se cargan con el resumen ("En pesos DEBE $ 8.305.981,90 … VENCE 22/10/2026, a pagar $ 8.339.143,35").
+ * Sin esos datos devuelve null (la tarjeta sigue diciendo "en $: a definir").
+ */
+export function pesosDeObservaciones(obs: string | null | undefined): PesosCuenta | null {
+  const t = String(obs || "");
+  const debe = t.match(/en pesos debe \$\s*([\d.]+,\d{2})/i);
+  const vence = t.match(/vence (\d{2})\/(\d{2})\/(\d{4})/i);
+  const aPagar = t.match(/a pagar \$\s*([\d.]+,\d{2})/i);
+  if (!debe && !vence) return null;
+  return {
+    debe: debe ? numAR(debe[1]) : null,
+    vence: vence ? `${vence[3]}-${vence[2]}-${vence[1]}` : null,
+    aPagar: aPagar ? numAR(aPagar[1]) : null,
+  };
+}

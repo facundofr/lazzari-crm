@@ -159,7 +159,7 @@ export default function CoberturaFijos({ sociedadId, onMargen, compacto }: { soc
         <h3 className="flex items-center gap-2 text-sm font-semibold text-zinc-900 dark:text-white">
           <TrendingUp className="h-4 w-4 text-orange-500" /> ¿Cubro los gastos fijos? <span className="font-normal capitalize text-zinc-400">· {mesNombre}</span>
         </h3>
-        <Link href="/finanzas?tab=gastos_fijos" className="text-xs text-orange-600 hover:underline">ver gastos fijos</Link>
+        <Link href="/finanzas?seccion=gastos" className="text-xs text-orange-600 hover:underline">ver gastos fijos</Link>
       </div>
 
       {error ? (
@@ -191,7 +191,7 @@ export default function CoberturaFijos({ sociedadId, onMargen, compacto }: { soc
                 <p className="text-[11px] text-zinc-500">{pctObjetivo}% del objetivo de {formatCurrency(objetivo!)}</p>
               </>
             ) : (
-              <Link href="/finanzas?tab=objetivos" className="inline-flex items-center gap-1 text-[11px] text-orange-600 hover:underline"><Target className="h-3 w-3" /> Cargá tu objetivo del mes</Link>
+              <Link href="/finanzas?seccion=objetivos" className="inline-flex items-center gap-1 text-[11px] text-orange-600 hover:underline"><Target className="h-3 w-3" /> Cargá tu objetivo del mes</Link>
             )}
             <p className="text-[10px] text-zinc-400">Vendido = presupuestos aprobados, a facturar y facturados con fecha del mes. Lo facturado (facturas menos NC) está en la tarjeta de arriba. Todo sin IVA, US$ al tipo de cambio de cada uno.</p>
           </div>
@@ -200,7 +200,7 @@ export default function CoberturaFijos({ sociedadId, onMargen, compacto }: { soc
           <div className="space-y-1.5">
             <p className="text-xs font-medium text-zinc-500">Ganancia vs. gastos fijos</p>
             {!hayFijos ? (
-              <p className="text-sm text-zinc-500">Esta sociedad no tiene gastos fijos cargados. <Link href="/finanzas?tab=gastos_fijos" className="text-orange-600 hover:underline">Cargalos acá</Link>.</p>
+              <p className="text-sm text-zinc-500">Esta sociedad no tiene gastos fijos cargados. <Link href="/finanzas?seccion=gastos" className="text-orange-600 hover:underline">Cargalos acá</Link>.</p>
             ) : c.coberturaPct === null ? (
               <>
                 <p className="font-mono text-xl font-bold text-zinc-900 dark:text-white">{formatCurrency(c.ganancia)}</p>
@@ -216,7 +216,7 @@ export default function CoberturaFijos({ sociedadId, onMargen, compacto }: { soc
             )}
             {c.fijosUSD > 0 && c.fijosTotal !== null && (
               <p className="text-[11px] text-zinc-500">
-                Incluye US$ {c.fijosUSD} al dólar cargado en <Link href="/finanzas?tab=gastos_fijos" className="text-orange-600 hover:underline">Gastos fijos</Link>
+                Incluye US$ {c.fijosUSD} al dólar cargado en <Link href="/finanzas?seccion=gastos" className="text-orange-600 hover:underline">Gastos fijos</Link>
                 {hayUsdSinDolar && dolarBna ? ` (${usdSinDolar.map((f) => f.descripcion || "gasto en US$").join(", ")}: dólar BNA billete de hoy ${formatCurrency(dolarBna)})` : ""}.
               </p>
             )}

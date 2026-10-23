@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { diasDesde, resumenPrestamo } from "../src/lib/bancos-lazza";
+import { diasDesde, pesosDeObservaciones, resumenPrestamo } from "../src/lib/bancos-lazza";
 
 const hoy = "2026-10-19";
 
@@ -30,5 +30,11 @@ assert.deepEqual([todo.conCuotas, todo.falta, todo.proxima], [true, 0, null]);
 
 assert.equal(diasDesde("2026-10-16", hoy), 3);
 assert.equal(diasDesde(null, hoy), null);
+
+// BAVSA: deuda en pesos y vencimiento de la caución desde las observaciones
+assert.deepEqual(pesosDeObservaciones("Resumen al 19/10/2026: En pesos DEBE $ 8.305.981,90: caución … VENCE 22/10/2026, a pagar $ 8.339.143,35; a favor FCI $ 29.273,72"),
+  { debe: 8305981.9, vence: "2026-10-22", aPagar: 8339143.35 });
+assert.equal(pesosDeObservaciones("En pesos: a definir (Augusto ve si debe o tiene a favor)."), null);
+assert.equal(pesosDeObservaciones(null), null);
 
 console.log("test-bancos-lazza OK");

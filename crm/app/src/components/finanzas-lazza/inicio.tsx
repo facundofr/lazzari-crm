@@ -5,7 +5,7 @@
 // Cada dato se calcula aparte (si uno falla, esa tarjeta queda con "—" y el resto anda). Solo lectura.
 import { useEffect, useState } from "react";
 import {
-  BarChart3, Banknote, HandCoins, Wallet, Building2, FileSpreadsheet, Files, List, Percent, Receipt, ReceiptText, ShoppingBag, Target, Users,
+  BarChart3, HandCoins, Wallet, Building2, FileSpreadsheet, Files, List, Percent, Receipt, ReceiptText, ShoppingBag, Target, Users,
   type LucideIcon,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
@@ -37,7 +37,6 @@ export const TARJETAS: TarjetaDef[] = [
   { id: "retenciones", nombre: "Retenciones", que: "Practicadas y sufridas", icono: Percent, grupo: "pagos" },
   { id: "iva", nombre: "IVA", que: "Débito y crédito", icono: FileSpreadsheet, grupo: "pagos" },
   { id: "bancos", nombre: "Bancos", que: "Efectivo, tarjetas, préstamos", icono: Building2, grupo: "tesoreria" },
-  { id: "cheques", nombre: "Cheques", que: "Emitidos y en cartera", icono: Banknote, grupo: "tesoreria" },
   { id: "gastos", nombre: "Gastos", que: "Fijos y eventuales", icono: ShoppingBag, grupo: "tesoreria" },
   { id: "movimientos", nombre: "Movimientos", que: "Historial de todo", icono: List, grupo: "tesoreria" },
   { id: "objetivos", nombre: "Objetivos", que: "Mínimo 64 · Bueno 80 · Muy bueno 96M", icono: Target, grupo: "informes" },
@@ -69,7 +68,7 @@ const mas = (ars: number, usd: number) => `${millones(ars)}${Math.abs(usd) >= 1 
 /** Tarjetas que llena cada loader (mismo orden que `loaders`): si uno falla, esas quedan con "—". */
 const TARJETAS_DE_LOADER: SeccionFL[][] = [
   ["reportes", "gastos", "objetivos"], ["vencimientos", "cuentas", "cobrar", "pagar"], ["iva", "facturas"],
-  ["ordenes_pago", "retenciones"], ["recibos", "movimientos"], ["bancos"], ["cheques"],
+  ["ordenes_pago", "retenciones"], ["recibos", "movimientos"], ["bancos"],
 ];
 
 /** Cada loader devuelve los datos de una o más tarjetas. */
@@ -148,16 +147,13 @@ function loaders(sociedadId: string, periodo: string, hoy: string): (() => Promi
       if (error) throw error;
       const ars = (data || []).filter((c: any) => c.activa !== false && c.moneda !== "USD" && ["cuenta_corriente", "caja_ahorro", "fci", "efectivo"].includes(c.tipo))
         .reduce((s: number, c: any) => s + Number(c.saldo_banco ?? c.saldo_inicial ?? 0), 0);
-      return { bancos: { valor: millones(ars), sub: "según banco" } };
-    },
-    // Cheques propios a debitar en los próximos 7 días.
-    async () => {
+      // Cheques propios a debitar en los próximos 7 días (23/10: la tarjeta Cheques se fue a Bancos y este dato viene con ella).
       const hasta7 = new Date(Date.parse(`${hoy}T12:00:00Z`) + 7 * 86_400_000).toISOString().slice(0, 10);
-      const { data, error } = await db.from("echeqs").select("id, monto").eq("sociedad_id", sociedadId).eq("direccion", "emitido")
+      const ch = await db.from("echeqs").select("id, monto").eq("sociedad_id", sociedadId).eq("direccion", "emitido")
         .in("estado", ["pendiente", "entregado"]).gte("fecha_pago", hoy).lte("fecha_pago", hasta7);
-      if (error) throw error;
-      const n = (data || []).length;
-      return { cheques: { valor: `${n} esta semana`, sub: n ? `${millones((data || []).reduce((s: number, c: any) => s + Number(c.monto || 0), 0))} a debitar` : "a debitar", tono: n ? "naranja" : undefined } };
+      const filas: any[] = ch.error ? [] : ch.data || [];
+      const aDebitar = filas.reduce((s: number, c: any) => s + Number(c.monto || 0), 0);
+      return { bancos: { valor: millones(ars), sub: filas.length ? `según banco · ${filas.length} cheques esta semana (${millones(aDebitar)} a debitar)` : "según banco", tono: filas.length ? "naranja" : undefined } };
     },
   ];
 }

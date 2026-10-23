@@ -30,7 +30,7 @@ export function destinoEntidad(tipo: RevisarEntidad, id: string | null): { tab?:
   switch (tipo) {
     case "cheque": return { tab: "echeqs" };
     case "movimiento": return { tab: "movimientos" };
-    case "factura_venta": return id ? { href: `/finanzas?factura=${id}` } : { tab: "facturacion" };
+    case "factura_venta": return id ? { href: `/facturacion?factura=${id}` } : { tab: "facturacion" };
     case "factura_compra": return { tab: "facturas_compra" };
     case "orden_pago": return { tab: "ordenes_pago" };
     case "extracto": return { tab: "extractos" };

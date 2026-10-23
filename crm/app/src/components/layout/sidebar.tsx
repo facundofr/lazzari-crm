@@ -44,8 +44,8 @@ import { APP_VERSION_LABEL } from "@/lib/app-version";
 // Menú agrupado por lo que hace cada sector. Cada uno ve solo los módulos que su rol permite
 // (los vendedores/compradores no ven Plata). Los grupos sin nada visible no se muestran.
 // `oculto`: no aparece en el menú por ahora (se desarrolla más adelante); la pantalla sigue andando si se entra por el link.
-// `soloSuperAdmin`: en armado, por ahora la ve solo Augusto.
-const navigation: { grupo: string; items: { name: string; href: string; icon: typeof Users; module: string; oculto?: boolean; soloSuperAdmin?: boolean }[] }[] = [
+// `soloSuperAdmin`: en armado, por ahora la ve solo Augusto. `soloRoles`: solo esos roles (además de tener el módulo).
+const navigation: { grupo: string; items: { name: string; href: string; icon: typeof Users; module: string; oculto?: boolean; soloSuperAdmin?: boolean; soloRoles?: string[] }[] }[] = [
   { grupo: "Inicio", items: [
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, module: "dashboard", oculto: true }, // Augusto 20/10: fuera del menú (sigue por link); el sistema abre en Presupuestos
     { name: "Pendientes", href: "/pendientes", icon: ListChecks, module: "dashboard" },
@@ -74,8 +74,7 @@ const navigation: { grupo: string; items: { name: string; href: string; icon: ty
     { name: "Transportes", href: "/transportes", icon: Truck, module: "remitos" },
   ] },
   { grupo: "Plata", items: [
-    { name: "Finanzas", href: "/finanzas", icon: Wallet, module: "finanzas" },
-    { name: "Finanzas Lazza", href: "/finanzas-lazza", icon: Wallet, module: "finanzas", soloSuperAdmin: true },
+    { name: "Finanzas", href: "/finanzas", icon: Wallet, module: "finanzas", soloRoles: ["super_admin", "administrativo"] }, // Mudanza 23/10: Finanzas es la nueva (ex Finanzas Lazza); la vieja quedó oculta en /finanzas-vieja
     { name: "Reportes", href: "/reportes", icon: BarChart3, module: "reportes", oculto: true }, // Augusto 20/10: usa Reportes de Finanzas Lazza (sigue por link)
   ] },
 ];
@@ -183,7 +182,7 @@ export function Sidebar() {
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-3 py-2">
         {navigation.map((g) => {
-          const visibles = g.items.filter((item) => !item.oculto && (!item.soloSuperAdmin || role === "super_admin")).filter((item) => item.module === "compras_nueva" ? !!profile?.prueba_compras_nueva : item.module === "presupuestos_nuevo" ? !!profile?.prueba_presupuestos_nuevo : hasModuleAccess(role, item.module));
+          const visibles = g.items.filter((item) => !item.oculto && (!item.soloSuperAdmin || role === "super_admin") && (!item.soloRoles || item.soloRoles.includes(role))).filter((item) => item.module === "compras_nueva" ? !!profile?.prueba_compras_nueva : item.module === "presupuestos_nuevo" ? !!profile?.prueba_presupuestos_nuevo : hasModuleAccess(role, item.module));
           if (!visibles.length) return null;
           const showLabel = !collapsed || mobileSidebarOpen;
           return (

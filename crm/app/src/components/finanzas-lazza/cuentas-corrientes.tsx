@@ -21,6 +21,7 @@ import { CobrarCliente } from "./cobrar";
 import { PagarProveedor } from "./pagar";
 import { SaldoFavorFicha } from "@/components/saldo-favor-proveedor";
 import { AjusteManualCC } from "./ajuste-manual";
+import { RiesgoBcra } from "@/components/finanzas/riesgo-bcra";
 import { ResumenCuentaFicha } from "./resumen-cuenta";
 
 const db = supabase as any;
@@ -81,7 +82,28 @@ const columnas = (enPesos: (m: { ARS: number; USD: number }) => number): Column<
   { key: "proximo", label: "Próx. vencimiento", sortable: true, sortValue: (f) => f.proximoVencimiento || "9999", render: (f) => (f.proximoVencimiento ? formatDate(f.proximoVencimiento) : "—") },
 ];
 
+/** Saldos | Riesgo BCRA (clientes y proveedores): el mismo informe de Finanzas, adentro de Cuentas corrientes (23/10/2026). */
 export function FinanzasLazzaCuentasCorrientes({ sociedadId }: { sociedadId: string }) {
+  const [pestana, setPestana] = useState<"saldos" | "bcra_clientes" | "bcra_proveedores">("saldos");
+  const boton = (k: typeof pestana, l: string) => (
+    <button key={k} type="button" onClick={() => setPestana(k)}
+      className={`rounded-lg border px-3 py-1 text-xs font-medium ${pestana === k ? "border-orange-400 bg-orange-500 text-white" : "border-zinc-200 bg-white text-zinc-600 hover:border-orange-300 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"}`}>{l}</button>
+  );
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {boton("saldos", "Saldos")}
+        {boton("bcra_clientes", "Riesgo BCRA · Clientes")}
+        {boton("bcra_proveedores", "Riesgo BCRA · Proveedores")}
+      </div>
+      {pestana === "saldos" && <CuentasSaldos sociedadId={sociedadId} />}
+      {pestana === "bcra_clientes" && <RiesgoBcra key="cliente" tipo="cliente" />}
+      {pestana === "bcra_proveedores" && <RiesgoBcra key="proveedor" tipo="proveedor" />}
+    </div>
+  );
+}
+
+function CuentasSaldos({ sociedadId }: { sociedadId: string }) {
   const [datos, setDatos] = useState<Awaited<ReturnType<typeof traerCuentas>> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lado, setLado] = useState<"todos" | "cliente" | "proveedor">("todos");

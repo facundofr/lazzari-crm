@@ -88,14 +88,14 @@ export default function PendientesPage() {
         const { data: cuentas } = await db.from("cuentas_financieras").select("id").eq("sociedad_id", sociedadId);
         const ids = ((cuentas as { id: string }[]) || []).map((c) => c.id);
         const n = ids.length ? await contar(db.from("extracto_movimientos").select("id", { count: "exact", head: true }).in("cuenta_id", ids).eq("estado", "pendiente")) : 0;
-        return { id: "extracto", label: "Líneas del extracto sin cruzar", count: n, href: "/finanzas?tab=extractos" };
+        return { id: "extracto", label: "Líneas del extracto sin cruzar", count: n, href: "/finanzas-vieja?tab=extractos" };
       })());
       tareas.push(contar(db.from("facturas_compra").select("id", { count: "exact", head: true }).eq("sociedad_id", sociedadId)
         .not("estado", "in", "(anulada,pagada)").lt("fecha_vencimiento", hoy))
-        .then((n) => ({ id: "fc", label: "Facturas de compra vencidas sin pagar", count: n, href: "/finanzas?tab=facturas_compra" })));
+        .then((n) => ({ id: "fc", label: "Facturas de compra vencidas sin pagar", count: n, href: "/finanzas?seccion=pagar" })));
       tareas.push(contar(db.from("facturas").select("id", { count: "exact", head: true }).eq("sociedad_id", sociedadId)
         .in("estado", ["emitida", "parcial", "vencida"]).lt("fecha_vencimiento", hoy))
-        .then((n) => ({ id: "fv", label: "Facturas de venta vencidas sin cobrar", count: n, href: "/finanzas?tab=cc_clientes" })));
+        .then((n) => ({ id: "fv", label: "Facturas de venta vencidas sin cobrar", count: n, href: "/finanzas?seccion=cobrar" })));
     }
     // "OC sin factura del proveedor" se sacó (Augusto 19/10): las facturas de compra ya no se atan a la OC.
     if (puede(role, "presupuestos")) {
@@ -199,7 +199,7 @@ export default function PendientesPage() {
             </div>
             {revisar.length > 0 && (
               <div className="mt-2">
-                <Link href="/finanzas?tab=revisar" className="text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:underline">
+                <Link href="/finanzas-vieja?tab=revisar" className="text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:underline">
                   Anotado en Finanzas → Revisar ({revisar.length}) →
                 </Link>
                 <ul className="mt-1 space-y-0.5">

@@ -516,12 +516,12 @@ export default function DashboardPage() {
                   {/* Gastos con vencimiento: avisa desde 5 días antes si todavía no se cargó el pago en Gastos */}
                   {gastosFijos.filter((g) => !g.proveedorId && g.diaVencimiento).map((g) => ({ g, pm: pagoDelMes(g.id, pagosGastos, todayAR(), g.diaVencimiento) }))
                     .filter(({ pm }) => pm.falta && pm.diasAlVencimiento != null && pm.diasAlVencimiento <= 5).map(({ g, pm }) => (
-                    <Link key={g.id} href="/finanzas?tab=gastos_fijos" className={`block rounded px-2 py-1 text-xs font-medium ${pm.diasAlVencimiento! <= 0 ? "bg-red-50 text-red-700 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-300" : "bg-amber-50 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-300"}`}>
+                    <Link key={g.id} href="/finanzas?seccion=gastos" className={`block rounded px-2 py-1 text-xs font-medium ${pm.diasAlVencimiento! <= 0 ? "bg-red-50 text-red-700 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-300" : "bg-amber-50 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-300"}`}>
                       ⚠️ {g.descripcion}: falta pagar {pm.mesNombre} ({pm.diasAlVencimiento! < 0 ? `venció el ${g.diaVencimiento}` : pm.diasAlVencimiento === 0 ? "vence hoy" : `vence el ${g.diaVencimiento}`})
                     </Link>
                   ))}
                   {gastosFijos.filter((g) => g.proveedorId && facturaDelMes(g.proveedorId, facturasGastos, todayAR()).falta).map((g) => (
-                    <Link key={g.id} href="/finanzas?tab=gastos_fijos" className="block rounded bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-300">
+                    <Link key={g.id} href="/finanzas?seccion=gastos" className="block rounded bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-300">
                       ⚠️ {g.descripcion}: falta la factura de {facturaDelMes(g.proveedorId, facturasGastos, todayAR()).mesNombre}
                     </Link>
                   ))}

@@ -1,7 +1,8 @@
 "use client";
 
 // Finanzas Lazza → Bancos (Tanda 3, 19/10/2026; diseño con Augusto 18/10):
-// - Cuentas: saldo según el banco y su fecha (aviso si tiene más de 3 días), efectivo y BAVSA (US$; en $ "a definir"). Sin extractos acá.
+// - Cuentas: saldo según el banco y su fecha (aviso si tiene más de 3 días), efectivo y BAVSA (US$; en $ lo que debe y el
+//   vencimiento de la caución, leídos de las observaciones; si no están, "a definir"). Sin extractos acá.
 // - Tarjetas: por resumen. "Subir resumen" → la IA lee el PDF (api/finanzas/leer-resumen-tarjeta) → Augusto revisa y guarda (tarjeta_resumenes).
 // - Préstamos en dos partes: "Lo que debo" y "Lo que me deben", cada uno con su lista de cuotas o pagos (fecha, monto, falta).
 //   Los de la familia no tienen cuotas fijas: "Anotar pago" agrega el pago como cuota pagada.
@@ -12,7 +13,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Check, ChevronDown, ChevronRight, CreditCard, Landmark, Loader2, Plus, Upload, X } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
-import { diasDesde, resumenPrestamo, type CuotaPrestamo } from "@/lib/bancos-lazza";
+import { diasDesde, pesosDeObservaciones, resumenPrestamo, type CuotaPrestamo } from "@/lib/bancos-lazza";
+import { FinanzasLazzaCheques } from "./cheques";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -54,7 +56,7 @@ async function traerBancos(sociedadId: string) {
   };
 }
 
-export function FinanzasLazzaBancos({ sociedadId }: { sociedadId: string }) {
+export function FinanzasLazzaBancos({ sociedadId, pestanaInicial = "cuentas" }: { sociedadId: string; pestanaInicial?: "cuentas" | "prestamos" | "cheques" }) {
   const [datos, setDatos] = useState<Awaited<ReturnType<typeof traerBancos>> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [subiendo, setSubiendo] = useState<Cuenta | null>(null);
@@ -62,7 +64,7 @@ export function FinanzasLazzaBancos({ sociedadId }: { sociedadId: string }) {
   const [abiertaT, setAbiertaT] = useState<string | null>(null);
   const [pago, setPago] = useState<{ prestamo: Prestamo; fecha: string; monto: string } | null>(null);
   const [guardando, setGuardando] = useState(false);
-  const [pestana, setPestana] = useState<"cuentas" | "prestamos">("cuentas");
+  const [pestana, setPestana] = useState<"cuentas" | "prestamos" | "cheques">(pestanaInicial);
   const [marcandoCuota, setMarcandoCuota] = useState<string | null>(null);
   const hoy = todayAR();
 
@@ -125,7 +127,11 @@ export function FinanzasLazzaBancos({ sociedadId }: { sociedadId: string }) {
       <div className="flex w-fit rounded-lg border border-zinc-200 p-0.5 dark:border-zinc-700">
         <button type="button" onClick={() => setPestana("cuentas")} className={botonPestana(pestana === "cuentas")}>Cuentas y tarjetas</button>
         <button type="button" onClick={() => setPestana("prestamos")} className={botonPestana(pestana === "prestamos")}>Préstamos ({datos.prestamos.length})</button>
+        <button type="button" onClick={() => setPestana("cheques")} className={botonPestana(pestana === "cheques")}>Cheques</button>
       </div>
+
+      {/* Cheques (23/10, Augusto): la tarjeta Cheques salió del inicio y vive acá, con Martín F. adentro. */}
+      {pestana === "cheques" && <FinanzasLazzaCheques sociedadId={sociedadId} />}
 
       {pestana === "cuentas" && (
         <>
@@ -154,7 +160,21 @@ export function FinanzasLazzaBancos({ sociedadId }: { sociedadId: string }) {
                         {c.tipo === "efectivo" ? "al" : "según banco al"} {c.saldo_banco_fecha ? formatDate(c.saldo_banco_fecha) : "—"}{viejo ? ` · hace ${dias} d` : ""}
                       </span>
                     ) : c.saldo_inicial !== null ? <span className="text-zinc-400">al corte {formatDate(c.fecha_corte)}</span> : <span className="text-zinc-400">sin saldo cargado</span>}
-                    {esBavsa && <span className="block text-zinc-400">en $: a definir</span>}
+                    {esBavsa && (() => {
+                      const ars = pesosDeObservaciones(c.observaciones);
+                      if (!ars) return <span className="block text-zinc-400">en $: a definir</span>;
+                      const vencida = ars.vence !== null && ars.vence <= hoy;
+                      return (
+                        <>
+                          {ars.debe !== null && <span className="block font-semibold text-red-600">en $: debe <span className="font-mono">{formatCurrency(ars.debe)}</span></span>}
+                          {ars.vence && (
+                            <span className={`block ${vencida ? "font-semibold text-red-600" : "text-amber-600"}`} title="Caución tomadora: pagarla o renovarla">
+                              Caución vence {formatDate(ars.vence)}{ars.aPagar !== null ? <> · <span className="font-mono">{formatCurrency(ars.aPagar)}</span></> : null}
+                            </span>
+                          )}
+                        </>
+                      );
+                    })()}
                   </p>
                 </div>
               );

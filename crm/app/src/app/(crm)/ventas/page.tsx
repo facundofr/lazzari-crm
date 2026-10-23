@@ -348,7 +348,7 @@ export default function VentasPage() {
       case "oc": return { label: PASO_LABEL.oc, href: `/presupuestos?selected=${v.presupuesto.id}` };
       case "facturar": return puedeFacturar ? { label: e.refacturar ? "Re-facturar" : PASO_LABEL.facturar, onClick: () => abrirFacturar(v) } : null;
       case "entregar": return { label: v.remitos.length > 0 ? "Ver entrega" : "Remitar", onClick: () => setSelectedVentaId(v.presupuesto.id) };
-      case "cobrar": return puedeCobrar && factura ? { label: PASO_LABEL.cobrar, href: `/finanzas?tab=facturacion&grupo=cobrar&factura=${factura}&accion=cobro` } : null;
+      case "cobrar": return puedeCobrar && factura ? { label: PASO_LABEL.cobrar, href: `/facturacion?factura=${factura}&accion=cobro` } : null;
       default: return null;
     }
   }
@@ -689,14 +689,14 @@ function DetalleVenta({
               </button>
               <button onClick={() => onDescargar(factura.id, true)} disabled={downloadingFacturaId === factura.id} className={btnSecundario}><Eye className="h-3 w-3" /> Ver</button>
               {puedeCobrar && !e.cobrado && (
-                <Link href={`/finanzas?tab=facturacion&grupo=cobrar&factura=${factura.id}&accion=cobro`} className="inline-flex items-center gap-1 rounded-md bg-green-600 px-2 py-1 text-xs font-medium text-white hover:bg-green-700"><DollarSign className="h-3 w-3" /> Cobrar</Link>
+                <Link href={`/facturacion?factura=${factura.id}&accion=cobro`} className="inline-flex items-center gap-1 rounded-md bg-green-600 px-2 py-1 text-xs font-medium text-white hover:bg-green-700"><DollarSign className="h-3 w-3" /> Cobrar</Link>
               )}
               {puedeFacturar && factura.estado !== "pagada" && (
-                <Link href={`/finanzas?tab=facturacion&grupo=cobrar&factura=${factura.id}&accion=nc`} className="inline-flex items-center gap-1 rounded-md border border-red-300 dark:border-red-700 px-2 py-1 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30">
+                <Link href={`/facturacion?factura=${factura.id}&accion=nc`} className="inline-flex items-center gap-1 rounded-md border border-red-300 dark:border-red-700 px-2 py-1 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30">
                   <Ban className="h-3 w-3" /> NC
                 </Link>
               )}
-              <Link href={`/finanzas?tab=facturacion&grupo=cobrar&factura=${factura.id}`} className={`${linkClass} ml-auto`}>Facturación <ArrowRight className="h-3 w-3" /></Link>
+              <Link href={`/facturacion?factura=${factura.id}`} className={`${linkClass} ml-auto`}>Facturación <ArrowRight className="h-3 w-3" /></Link>
             </div>
           </>) : (<>
             <p className="text-zinc-500">{e.refacturar ? "Anulada por NC: podés volver a facturar o no facturar." : "Sin factura emitida"}</p>
