@@ -50,7 +50,11 @@ export default function FinanzasLazzaPage() {
   // Links viejos de Finanzas (?tab=..., ?factura=...): se traducen a la pantalla nueva o a la vieja.
   useEffect(() => {
     const destino = traducirLinkViejo(new URLSearchParams(window.location.search));
-    if (destino) router.replace(destino);
+    if (!destino) return;
+    // Si el destino es otra sección de acá, se abre ya (router.replace solo cambia la dirección, no vuelve a leerla).
+    const seccion = new URLSearchParams(destino.split("?")[1] || "").get("seccion");
+    if (destino.startsWith("/finanzas?") && esSeccionLazza(seccion)) setVista(seccion as SeccionFL);
+    router.replace(destino);
   }, [router]);
   const mesActual = periodoDeFecha(todayAR());
   const [periodo, setPeriodo] = useState(mesActual);
