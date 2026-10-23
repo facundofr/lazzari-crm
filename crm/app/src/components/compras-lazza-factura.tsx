@@ -18,7 +18,7 @@
  *    (registrar_nota_credito_compra_v2, la misma de Finanzas). La nota de débito no se carga acá.
  * Guardar usa guardar_conciliacion_compra (la de siempre), sin OC, sin aceptar costos ni aprender equivalencias.
  */
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
 import { useToast } from "@/components/ui/toast";
@@ -33,7 +33,7 @@ import { ivaYPercepciones, netoFactura, tipoNotaCredito, vencimientoPorDias } fr
 import { listaOPs, repartirSaldoFavor, totalSaldoFavor, type FuenteSaldoFavor } from "@/lib/saldo-favor-proveedor";
 import { aplicarSaldoFavor, traerSaldoFavor } from "@/components/saldo-favor-proveedor";
 import { Autocompletar } from "@/components/ui/autocompletar";
-import { AlertTriangle, Check, CreditCard, FileUp, Loader2, PenLine, Sparkles, UserPlus, X } from "lucide-react";
+import { AlertTriangle, Check, CreditCard, FileUp, Loader2, Sparkles, UserPlus, X } from "lucide-react";
 
 const db = supabase as any;
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -49,6 +49,8 @@ const SOCIEDAD_POR_CUIT: Record<string, { id: string; nombre: string }> = {
 const TIPO_SIN_FACTURA = "FC Manual";
 const numeroSinFactura = (fecha: string) => `SIN FACTURA ${String(fecha || todayAR()).split("-").reverse().join("/")}`;
 const esNumeroSinFactura = (n: string) => /^SIN FACTURA/i.test(n.trim());
+/** Factura C / NC C (monotributo) y comprobante "Sin factura": no discriminan IVA. */
+const tipoSinIva = (t: string) => t === TIPO_SIN_FACTURA || /\sC$/i.test(t);
 const renglonVacio = (iva = 21): ItemFactura => ({ codigo: "", descripcion: "", cantidad: 1, precio_unitario: 0, descuento_porcentaje: 0, iva_porcentaje: iva, unidad: "UN" });
 const netoRenglon = (it: ItemFactura) => round2((Number(it.cantidad) || 0) * (Number(it.precio_unitario) || 0) * (1 - (Number(it.descuento_porcentaje) || 0) / 100));
 const esMercadoLibre = (t: string | null | undefined) => /mercado\s*libre/i.test(String(t || ""));
@@ -99,8 +101,6 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
   // Saldo a favor con el proveedor (OP pagadas antes de la factura). Arranca sin tildar.
   const [fuentesSF, setFuentesSF] = useState<FuenteSaldoFavor[]>([]);
   const [usarSaldo, setUsarSaldo] = useState(false);
-  // Carga a mano: sin archivo. Se completan los datos de la factura a mano.
-  const [manual, setManual] = useState(false);
   const [provsLista, setProvsLista] = useState<Proveedor[]>([]);
   const [percTxt, setPercTxt] = useState("");
   const [totalTxt, setTotalTxt] = useState("");
@@ -108,6 +108,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
   const [filasKey, setFilasKey] = useState(0);
 
   const plata = (n: number) => formatCurrency(n, factura?.moneda || "ARS");
+  useEffect(() => { void empezarManual(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
   // ── 1. Leer (sistema primero; IA opcional) ──
   function reiniciar() {
@@ -115,11 +116,11 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
     setError(""); setFactura(null); setProveedor(null); setBuscandoProv(false);
     setConVisa(null); setFaltaElegirPago(false); setForma(null); setDiasTxt(null); setNotaPago(""); setDuplicada(false); setEsNota(false); setOtraSociedad(""); setNoSeLeyo(false); setOrigen("");
     setFuentesSF([]); setUsarSaldo(false);
-    setManual(false); setPercTxt(""); setTotalTxt("");
+    setPercTxt(""); setTotalTxt("");
   }
 
   async function leer(file: File) {
-    reiniciar(); setArchivo(file); setLeyendo(true);
+    setError(""); setNoSeLeyo(false); setArchivo(file); setLeyendo(true);
     try {
       const local = await leerFacturaLocal(file).catch(() => null);
       if (!local) { setNoSeLeyo(true); return; }
@@ -145,7 +146,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
   }
 
   async function empezarManual() {
-    reiniciar(); setArchivo(null); setManual(true);
+    reiniciar(); setArchivo(null);
     setFactura({ localId: `m${Date.now()}`, dbId: null, file: null, archivoNombre: "", numero: "", tipo: "FC A", fecha: todayAR(), vencimiento: "", cae: "", moneda: "ARS",
       subtotal: 0, iva: 0, ivaPorcentaje: 21, percepciones: 0, total: 0, items: [renglonVacio()], cuit: "" });
     setNetoTxt("");
@@ -177,7 +178,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
   function cambiarTipoManual(tipo: string) {
     if (!factura) return;
     const aSin = tipo === TIPO_SIN_FACTURA, deSin = factura.tipo === TIPO_SIN_FACTURA;
-    const items = aSin || deSin ? factura.items.map(it => ({ ...it, iva_porcentaje: aSin ? 0 : 21 })) : factura.items;
+    const items = tipoSinIva(tipo) !== tipoSinIva(factura.tipo) ? factura.items.map(it => ({ ...it, iva_porcentaje: tipoSinIva(tipo) ? 0 : 21 })) : factura.items;
     const numero = aSin ? (esNumeroSinFactura(factura.numero) || !factura.numero.trim() ? numeroSinFactura(factura.fecha) : factura.numero) : deSin && esNumeroSinFactura(factura.numero) ? "" : factura.numero;
     cambiarManual({ tipo, items, numero });
   }
@@ -185,14 +186,24 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
   async function usarDatos(file: File, d: any, como: "sistema" | "ia") {
     const leida = facturaDesdeDatos(file, d);
     const nc = tipoNotaCredito(d.tipo_comprobante);
-    const f = nc ? { ...leida, tipo: nc } : leida;
+    const tipo = nc ?? leida.tipo;
+    // Factura/NC C (monotributo): no discrimina IVA. Sin esto el QR (solo trae el total) se completaba con 21 % (FC C de Nadia, 23/10/2026).
+    const sinIva = tipoSinIva(tipo);
+    const pct = sinIva ? 0 : leida.ivaPorcentaje;
+    let items = leida.items.map(it => ({ ...it, iva_porcentaje: sinIva ? 0 : it.iva_porcentaje }));
+    const netoEst = leida.subtotal > 0 ? leida.subtotal : netoFactura({ subtotal: 0, total: leida.total, ivaPorcentaje: pct, percepciones: leida.percepciones }).neto;
+    const imp = sinIva ? { iva: 0, percepciones: leida.percepciones } : ivaYPercepciones({ total: leida.total, neto: netoEst, iva: leida.iva, percepciones: leida.percepciones, ivaPorcentaje: pct });
+    if (!items.length) items = [{ ...renglonVacio(pct), precio_unitario: netoEst }]; // sin renglones (QR o texto): uno solo con el neto, editable
+    const neto = round2(items.reduce((a, it) => a + netoRenglon(it), 0));
+    const total = leida.total > 0 ? leida.total : round2(neto + imp.iva + imp.percepciones);
+    const f: FacturaCarga = { ...leida, tipo, items, subtotal: neto, iva: imp.iva, percepciones: imp.percepciones, total, ivaPorcentaje: pct };
     const buscar = f.cuit.length === 11 && !(proveedor && digitos(proveedor.cuit) === f.cuit);
-    if (buscar) setBuscandoProv(true); // antes de mostrar la factura: así no aparece "no está cargado" mientras busca
-    setFactura(f); setOrigen(como);
+    if (buscar) { setProveedor(null); setBuscandoProv(true); } // así no aparece "no está cargado" mientras busca
+    setFactura(f); setOrigen(como); setFilasKey(k => k + 1);
+    setNetoTxt(neto ? aTexto(neto) : ""); setPercTxt(imp.percepciones ? aTexto(imp.percepciones) : ""); setTotalTxt(total ? aTexto(total) : "");
     setEsNota(!nc && /D[EÉ]BITO|^N\.?\s?D\b/i.test(String(d.tipo_comprobante || "")));
     const soc = SOCIEDAD_POR_CUIT[digitos(d.cuit_receptor)];
     setOtraSociedad(soc && soc.id !== sociedadId ? soc.nombre : "");
-    setNetoTxt(aTexto(netoFactura(f).neto));
     if (!buscar) return; // releída con IA: mismo proveedor
     try {
       const { data: ps } = await db.from("proveedores").select("id, razon_social, cuit, talles_especiales, medio_pago_preferido, plazo_cheque_dias, dias_pago, email, cbu, alias_bancario").eq("sociedad_id", sociedadId).eq("activo", true);
@@ -229,8 +240,8 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
   const diasSugeridos = formaPago === "echeq" ? (proveedor?.plazo_cheque_dias ?? proveedor?.dias_pago) : proveedor?.dias_pago;
   const dias = diasTxt ?? (diasSugeridos != null ? String(diasSugeridos) : "");
   const vencePago = factura ? vencimientoPorDias(factura.fecha, dias, factura.vencimiento) : null;
-  // IVA y percepciones (leída por QR el IVA viene en 0: IVA = neto × alícuota y lo que sobra son percepciones, ej. IIBB).
-  const impuestos = factura && manual ? { iva: factura.iva, percepciones: factura.percepciones, percepcionEstimada: false } : factura ? ivaYPercepciones({ total: factura.total, neto: num(netoTxt), iva: factura.iva, percepciones: factura.percepciones, ivaPorcentaje: factura.ivaPorcentaje }) : { iva: 0, percepciones: 0, percepcionEstimada: false };
+  // IVA y percepciones: los de la ventana (al leer el QR se calculan en usarDatos: IVA = neto × alícuota y lo que sobra son percepciones, ej. IIBB).
+  const impuestos = factura ? { iva: factura.iva, percepciones: factura.percepciones } : { iva: 0, percepciones: 0 };
   const ivaFactura = impuestos.iva;
   const percepcionesFactura = impuestos.percepciones;
   const faltaEmail = !!proveedor && !String(proveedor.email || "").trim();
@@ -256,7 +267,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
     } finally { setGuardandoProv(false); }
   }
   const textoPago = `Pago: ${formaPago === "echeq" ? "eCheq" : "transferencia"}${dias.trim() ? ` a ${Math.round(num(dias))} días` : ""}`;
-  const listo = !!factura && !!proveedor && !esNota && (!manual || factura.total > 0);
+  const listo = !!factura && !!proveedor && !esNota && factura.total > 0;
   const esNC = !!factura && factura.tipo.startsWith("NC");
 
   // ── 4. Guardar ──
@@ -278,7 +289,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
     try {
       if (!ncKey.current) ncKey.current = crypto.randomUUID();
       const iva = Number(factura.ivaPorcentaje ?? 21);
-      const itemsFC = manual ? factura.items.filter(it => it.descripcion.trim() && it.cantidad > 0) : factura.items;
+      const itemsFC = factura.items.filter(it => it.descripcion.trim() && it.cantidad > 0);
       const items = itemsFC.length ? itemsFC.map(it => ({ codigo: it.codigo || null, descripcion: it.descripcion, cantidad: it.cantidad, precio_unitario: it.precio_unitario, descuento_porcentaje: it.descuento_porcentaje, unidad: it.unidad, iva_porcentaje: it.iva_porcentaje }))
         : [{ codigo: null, descripcion: "Nota de crédito (sin detalle de artículos)", cantidad: 1, precio_unitario: num(netoTxt), descuento_porcentaje: 0, unidad: "UN", iva_porcentaje: iva }];
       const notas = [notaPago.trim() ? `Nota para Finanzas: ${notaPago.trim()}` : "", "Cargada con «Compras Lazza» (sin OC)"].filter(Boolean).join("\n");
@@ -313,7 +324,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
       // Sin OC (Augusto 19/10): la factura va a la cuenta corriente del proveedor. No se toca ningún costo.
       // Sin artículos leídos, un renglón "Factura sin detalle" con el neto.
       const iva = Number(factura.ivaPorcentaje ?? 21);
-      const itemsFC = manual ? factura.items.filter(it => it.descripcion.trim() && it.cantidad > 0) : factura.items;
+      const itemsFC = factura.items.filter(it => it.descripcion.trim() && it.cantidad > 0);
       const items = itemsFC.length
         ? itemsFC.map((it, i) => ({ key: lineKey(factura, i), ...it }))
         : [{ key: "fc", codigo: "", descripcion: "Factura (sin detalle de artículos)", cantidad: 1, precio_unitario: num(netoTxt), descuento_porcentaje: 0, iva_porcentaje: iva, unidad: "UN" }];
@@ -375,44 +386,37 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
           <button onClick={onClose} disabled={guardando} className="rounded p-1 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-5 w-5" /></button>
         </div>
 
-        {!factura && (
-          <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-zinc-300 p-8 text-sm text-zinc-500 hover:border-orange-400 dark:border-zinc-600">
-            {leyendo ? <span className="flex items-center gap-2 text-orange-600"><Loader2 className="h-5 w-5 animate-spin" /> Leyendo la factura…</span>
-              : <><FileUp className="h-6 w-6 text-orange-500" /> Arrastrá la factura acá o hacé clic para elegirla (PDF o foto)</>}
-            <input type="file" accept="application/pdf,image/png,image/jpeg,image/webp" className="hidden" disabled={leyendo || leyendoIA}
-              onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void leer(f); }} />
-          </label>
-        )}
-        {!factura && !leyendo && (
-          <button onClick={() => void empezarManual()} className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:border-orange-400 hover:bg-orange-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800">
-            <PenLine className="h-4 w-4 text-orange-500" /> Cargar a mano (sin archivo)
-          </button>
-        )}
-        {!factura && noSeLeyo && (
-          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
-            <AlertTriangle className="h-4 w-4" /> El sistema no pudo leer «{archivo?.name}» solo (sin QR ni texto).
-            <button onClick={() => void leerConIA()} disabled={leyendoIA} className="ml-auto inline-flex items-center gap-1 rounded-md bg-violet-600 px-2 py-1 text-xs font-medium text-white">
-              {leyendoIA ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Leer con IA
-            </button>
-          </div>
-        )}
-
         {factura && (
           <div className="space-y-3">
-            {manual && (
+            {(
               <div className="space-y-2 rounded-lg bg-zinc-50 px-3 py-2 text-sm dark:bg-zinc-800/60">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className={`inline-flex cursor-pointer items-center gap-1 rounded-md bg-orange-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-orange-600 ${leyendo || leyendoIA || guardando ? "pointer-events-none opacity-60" : ""}`}>
+                    {leyendo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileUp className="h-3.5 w-3.5" />} {leyendo ? "Leyendo…" : "Subir factura (PDF o foto)"}
+                    <input type="file" accept="application/pdf,image/png,image/jpeg,image/webp" className="hidden" disabled={leyendo || leyendoIA || guardando}
+                      onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void leer(f); }} />
+                  </label>
+                  <button onClick={() => void leerConIA()} disabled={!archivo || leyendo || leyendoIA || guardando} title={archivo ? "La IA lee también los renglones" : "Primero subí la factura"}
+                    className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-40">
+                    {leyendoIA ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Leer con IA
+                  </button>
+                  {archivo && <span className="text-xs text-zinc-600 dark:text-zinc-300">{archivo.name}{origen === "ia" ? " · ✨ leída con IA" : origen === "sistema" ? " · leída por el sistema" : ""}</span>}
+                  {!archivo && <span className="text-xs text-zinc-500">o cargá los datos a mano</span>}
+                </div>
+                {noSeLeyo && <p className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400"><AlertTriangle className="h-3.5 w-3.5" /> El sistema no pudo leer «{archivo?.name}» solo (sin QR ni texto): tocá Leer con IA o cargala a mano.</p>}
+                {origen === "sistema" && factura.items.length <= 1 && !factura.items[0]?.descripcion && <p className="text-xs text-zinc-500">Los renglones no vienen en el QR: queda uno solo con el neto. Tocá Leer con IA para traerlos.</p>}
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium">{proveedor ? proveedor.razon_social : "Proveedor"}</span>
                   {proveedor && <span className="text-xs text-zinc-500">CUIT {proveedor.cuit || "?"}</span>}
                   <Autocompletar opciones={provsLista.map(p => ({ valor: p.id, texto: p.razon_social, detalle: p.cuit || undefined }))} placeholder={proveedor ? "Cambiar proveedor…" : "Escribí el proveedor…"} chico className="w-56"
                     onElegir={id => { const p = provsLista.find(x => x.id === id); if (p) { const f = { ...factura, cuit: digitos(p.cuit) }; setFactura(f); void elegirProveedor(p, f); } }} />
                   <button onClick={() => setCrearProv(true)} className="inline-flex items-center gap-1 rounded-md border border-zinc-300 px-2 py-0.5 text-xs dark:border-zinc-600"><UserPlus className="h-3 w-3" /> Proveedor nuevo</button>
-                  <button onClick={() => { reiniciar(); setArchivo(null); }} disabled={guardando} className="ml-auto text-xs text-zinc-500 underline">Otra factura</button>
+                  <button onClick={() => void empezarManual()} disabled={guardando} className="ml-auto text-xs text-zinc-500 underline">Otra factura</button>
                 </div>
                 <div className="flex flex-wrap items-end gap-2">
                   <label className="text-[11px] text-zinc-500">Tipo
                     <select value={factura.tipo} onChange={e => cambiarTipoManual(e.target.value)} className="mt-0.5 block w-36 rounded border border-zinc-300 bg-white px-1 py-0.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100">
-                      {["FC A", "FC B", "FC C", "NC A", "NC B", "NC C"].map(t => <option key={t}>{t}</option>)}
+                      {[...new Set(["FC A", "FC B", "FC C", "NC A", "NC B", "NC C", ...(factura.tipo === TIPO_SIN_FACTURA ? [] : [factura.tipo])])].map(t => <option key={t}>{t}</option>)}
                       <option value={TIPO_SIN_FACTURA}>Sin factura (manual)</option>
                     </select></label>
                   <label className="text-[11px] text-zinc-500">Número
@@ -455,51 +459,11 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
                   <label className="text-[11px] text-zinc-500">Percepciones<input value={percTxt} onChange={e => cambiarManual({ perc: e.target.value })} inputMode="decimal" placeholder="0,00" className="mt-0.5 block w-28 text-right rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100" /></label>
                   <label className="text-[11px] text-zinc-500">Total<input value={totalTxt} onChange={e => cambiarManual({ total: e.target.value })} inputMode="decimal" placeholder="0,00" className="mt-0.5 block w-32 text-right font-bold rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100" /></label>
                 </div>
-                <label className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
-                  <FileUp className="h-3.5 w-3.5" /> PDF o foto (opcional): {archivo ? <b className="text-zinc-700 dark:text-zinc-200">{archivo.name}</b> : "sin adjuntar"}
-                  <input type="file" accept="application/pdf,image/png,image/jpeg,image/webp" className="text-xs" onChange={e => { const f = e.target.files?.[0]; if (f) setArchivo(f); }} />
-                </label>
                 {factura.tipo === TIPO_SIN_FACTURA && <p className="text-xs text-zinc-500">Sin factura del proveedor: se carga sin IVA (total = neto) y el número queda «{factura.numero || "SIN FACTURA"}».</p>}
+                {/\sC$/i.test(factura.tipo) && factura.iva > 0 && <p className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400"><AlertTriangle className="h-3.5 w-3.5" /> Una factura C no discrimina IVA: revisá el IVA de los renglones (debería ser 0).</p>}
+                {/\sC$/i.test(factura.tipo) && factura.iva === 0 && <p className="text-xs text-zinc-500">Factura C: no discrimina IVA (total = neto).</p>}
                 {factura.total <= 0 && <p className="text-xs text-zinc-500">Completá el neto (o el total) para poder guardar.</p>}
               </div>
-            )}
-            {/* Encabezado */}
-            {!manual && <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-zinc-50 px-3 py-2 text-sm dark:bg-zinc-800/60">
-              <b>{factura.tipo}</b>
-              <input value={factura.numero} onChange={e => setFactura({ ...factura, numero: e.target.value })} placeholder="Número" className="w-36 rounded border border-zinc-300 bg-white px-1.5 py-0.5 font-semibold dark:border-zinc-600 dark:bg-zinc-900" />
-              <span className="text-zinc-500">{formatDate(factura.fecha || todayAR())}</span>
-              <span className="font-medium">{proveedor?.razon_social || factura.razonSocialLeida || "Proveedor"}</span>
-              <span className="text-xs text-zinc-500">CUIT {factura.cuit || "?"}</span>
-              <button onClick={() => { reiniciar(); setArchivo(null); }} disabled={guardando} className="ml-auto text-xs text-zinc-500 underline">Otra factura</button>
-            </div>}
-            {/* Augusto 19/10: ver la información de la factura (tipo, número, neto, IVA, percepciones, total). */}
-            {!manual && <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {([["Neto", num(netoTxt)], [`IVA${factura.ivaPorcentaje ? ` ${String(factura.ivaPorcentaje).replace(".", ",")} %` : ""}`, ivaFactura],
-                [`Percepciones${impuestos.percepcionEstimada ? " (calculadas)" : ""}`, percepcionesFactura], ["Total", factura.total]] as const).map(([t, v]) => (
-                <div key={t} className="rounded-lg border border-zinc-200 px-2 py-1 dark:border-zinc-700">
-                  <p className="text-[11px] text-zinc-500">{t}</p>
-                  <p className={`text-sm ${t === "Total" ? "font-bold" : "font-medium"}`}>{plata(v)}</p>
-                </div>
-              ))}
-            </div>}
-            {/* Artículos: opcionales. El sistema (sin IA) no los lee; con IA sí. */}
-            {manual ? null : origen === "ia" && factura.items.length > 0 ? (
-              <details className="rounded-lg border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-700">
-                <summary className="cursor-pointer text-zinc-600 dark:text-zinc-300">✨ Leída con IA · {factura.items.length} artículo(s)</summary>
-                <ul className="mt-1 max-h-48 space-y-0.5 overflow-y-auto">
-                  {factura.items.map((it, i) => (
-                    <li key={i} className="flex gap-2"><b>{cant(it.cantidad)}</b> × <span className="flex-1">{it.descripcion}</span><span className="text-zinc-500">{plata(it.precio_unitario)}</span></li>
-                  ))}
-                </ul>
-              </details>
-            ) : (
-              <p className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
-                <span className="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800">{origen === "ia" ? "✨ Leída con IA · sin artículos" : "Leída por el sistema (sin IA)"}</span>
-                {origen !== "ia" && <>Para ver los artículos, tocá
-                  <button onClick={() => void leerConIA()} disabled={leyendoIA || guardando} className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-2 py-0.5 text-xs font-medium text-white disabled:opacity-40">
-                    {leyendoIA ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />} Leer con IA
-                  </button></>}
-              </p>
             )}
             {otraSociedad && <p className="flex items-center gap-1 text-sm text-amber-700 dark:text-amber-400"><AlertTriangle className="h-4 w-4" /> Está a nombre de {otraSociedad}: cargala desde esa sociedad.</p>}
             {duplicada && <p className="flex items-center gap-1 text-sm text-red-600"><AlertTriangle className="h-4 w-4" /> {esNC ? "Esta nota de crédito" : "Esta factura"} ya está cargada en el sistema.</p>}
@@ -507,10 +471,10 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
             {!proveedor && !esNota && buscandoProv && (
               <p className="flex items-center gap-2 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Buscando proveedor…</p>
             )}
-            {!manual && !proveedor && !esNota && !buscandoProv && (
+            {!proveedor && !esNota && !buscandoProv && !!factura.cuit && (
               <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
-                <AlertTriangle className="h-4 w-4" /> {factura.cuit ? `El proveedor CUIT ${factura.cuit} no está cargado.` : "No se leyó el CUIT del proveedor."}
-                {factura.cuit && <button onClick={() => setCrearProv(true)} className="ml-auto inline-flex items-center gap-1 rounded-md bg-amber-500 px-2 py-1 text-xs font-medium text-white"><UserPlus className="h-3.5 w-3.5" /> Crear proveedor</button>}
+                <AlertTriangle className="h-4 w-4" /> El proveedor CUIT {factura.cuit} no está cargado.
+                <button onClick={() => setCrearProv(true)} className="ml-auto inline-flex items-center gap-1 rounded-md bg-amber-500 px-2 py-1 text-xs font-medium text-white"><UserPlus className="h-3.5 w-3.5" /> Crear proveedor</button>
               </div>
             )}
 
@@ -583,7 +547,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
             </div>
           </div>
         )}
-        {error && !factura && <p className="mt-2 rounded-lg bg-red-50 p-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400">{error}</p>}
+        {false && error && !factura && <p className="mt-2 rounded-lg bg-red-50 p-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400">{error}</p>}
       </div>
 
       <ProveedorFormModal open={crearProv} proveedorId={null} consultarArcaAlAbrir

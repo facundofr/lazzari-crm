@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { comparar, netoFactura, netoPorOc, crucesSeguros, notaObservar, aFacturarPorRenglon, costoPrAnterior, vencimientoPorDias, tipoNotaCredito, ivaYPercepciones, totalesOc, renglonesPrDeOc, monedaRenglonOc, prDeRenglones, monedaNuevaOc } from "../src/lib/compras-lazza";
 import { repartirEnvio } from "../src/lib/cargar-factura";
+import { facturaDesdeDatos } from "../src/lib/factura-compra-leida";
 
 // Neto
 assert.deepEqual(netoFactura({ subtotal: 1000, total: 1210, ivaPorcentaje: 21 }), { neto: 1000, estimado: false });
@@ -142,5 +143,14 @@ assert.deepEqual([...atado], [["a", "p9"], ["b", "p2"]], "el atado manda; el que
 assert.equal(monedaNuevaOc(["USD", "USD", "ARS"]), "USD");
 assert.equal(monedaNuevaOc(["USD", "ARS"]), "ARS");
 assert.equal(monedaNuevaOc([]), "ARS");
+
+// Factura C (monotributo): no discrimina IVA. El QR trae solo el total: antes se suponía 21 % (FC C de Nadia, 700.000 → IVA 121.487,60).
+const fc = facturaDesdeDatos({ name: "x.pdf" } as any, { tipo_comprobante: "C", numero_factura: "00001-00000031", total: 700000, cae: "1" });
+assert.equal(fc.tipo, "FC C"); assert.equal(fc.ivaPorcentaje, 0);
+const nfc = netoFactura({ subtotal: 0, total: fc.total, ivaPorcentaje: fc.ivaPorcentaje, percepciones: fc.percepciones });
+assert.deepEqual(nfc, { neto: 700000, estimado: true });
+assert.deepEqual(ivaYPercepciones({ total: 700000, neto: 700000, iva: 0, percepciones: 0, ivaPorcentaje: 0 }), { iva: 0, percepciones: 0, percepcionEstimada: false });
+assert.equal(facturaDesdeDatos({ name: "x.pdf" } as any, { tipo_comprobante: "A", total: 1210 }).ivaPorcentaje, 21); // la A sigue en 21 %
+assert.equal(facturaDesdeDatos({ name: "x.pdf" } as any, { tipo_comprobante: "NOTA DE CREDITO C", total: 100 }).ivaPorcentaje, 0);
 
 console.log("test-compras-lazza OK");

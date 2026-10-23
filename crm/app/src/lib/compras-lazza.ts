@@ -165,7 +165,9 @@ export function ivaYPercepciones(f: { total: number; neto: number; iva: number; 
   if ((Number(f.iva) || 0) > 0) return { iva: round2(Number(f.iva)), percepciones: round2(perc), percepcionEstimada: false };
   const porDiferencia = { iva: Math.max(0, round2(total - perc - neto)), percepciones: round2(perc), percepcionEstimada: false };
   if (!(neto > 0) || !(total > 0)) return porDiferencia;
-  const iva = round2(neto * (Number(f.ivaPorcentaje ?? 21) || 21) / 100);
+  const pct = Number(f.ivaPorcentaje ?? 21);
+  if (!(pct > 0)) return porDiferencia; // 0 % (Factura C, exento): no hay IVA que calcular
+  const iva = round2(neto * pct / 100);
   const resto = round2(total - neto - iva - perc);
   if (resto < 1) return porDiferencia; // redondeo, o IVA más bajo (10,5 %)
   return { iva, percepciones: round2(perc + resto), percepcionEstimada: true };

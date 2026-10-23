@@ -64,6 +64,7 @@ Reglas:
 - FORMATO NUMÉRICO OBLIGATORIO: Todos los montos deben ser números planos sin separadores de miles. Ejemplo: 1234567.89 (correcto), 1.234.567,89 (incorrecto), 1,234,567.89 (incorrecto). El punto es SIEMPRE separador decimal. Nunca devuelvas números con formato local ni símbolos de moneda.
 - Si un item tiene IVA 0% o es Exento/No Gravado, usá iva_porcentaje: 0. Agregá en notas si es "Exento", "No Gravado" o "IVA 0%" para distinguir.
 - CUIDADO con el pie de la factura: muchas imprimen los títulos "IVA 21%", "IVA 10.5%", "Iva 0%", "Exento" aunque estén VACÍOS. Un título sin importe al lado NO es la tasa de ningún renglón. La tasa de cada item es la del renglón de IVA que tiene importe (si solo "IVA Insc. 21%" tiene importe, todos los items van al 21%). Comprobá que subtotal + iva + percepciones = total impreso.
+- FACTURA C (y nota de crédito/débito C, emisor Monotributo): NO discrimina IVA. Usá iva: 0, iva_porcentaje: 0, percepciones: 0 y subtotal igual al total impreso; en cada item iva_porcentaje: 0. Nunca separes un IVA 21% de una factura C.
 - Si un campo no existe en el documento, usá null para texto o 0 para números.
 - El número de factura debe incluir punto de venta si aparece (ej: 0001-00012345).
 - Percepciones: devolvé el total en "percepciones" y además desglosá en "percepcion_iibb" (número o null), "percepcion_iva" (número o null), "percepcion_ganancias" (número o null). Si no podés identificar el tipo, poné todo en "percepciones" y dejá los campos individuales en null.

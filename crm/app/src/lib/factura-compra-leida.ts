@@ -66,7 +66,9 @@ export function lineasParaCruce(file: File, d: any): { lineas: InvoiceLineInput[
 
 /** Arma una factura de la conciliación con los datos que devolvió /api/parse-factura-compra. */
 export function facturaDesdeDatos(file: File, d: any): FacturaCarga {
-  const ivaPct = d.iva_porcentaje != null ? Number(d.iva_porcentaje) || 0 : 21;
+  // Factura/NC C (monotributo): no discrimina IVA. Sin alícuota leída se suponía 21 % y la FC C de Nadia (23/10/2026) entró con IVA que no existe.
+  const sinIva = /\bC$/.test(tipoComprobante(d.tipo_comprobante)) || /^NC C\b/i.test(String(d.tipo_comprobante || "").trim());
+  const ivaPct = sinIva ? 0 : d.iva_porcentaje != null ? Number(d.iva_porcentaje) || 0 : 21;
   return {
     localId: `f${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
     dbId: null,
