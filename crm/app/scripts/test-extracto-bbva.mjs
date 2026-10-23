@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import {
   leerImporte, leerFecha, digitosCuenta, leerExtractoBbva, leerListadoCheques, chequesParaCompletar,
-  cruzarExtracto, totalesBancoPorMes,
+  cruzarExtracto, totalesBancoPorMes, leerMovimientosBbva,
 } from "../src/lib/extracto-bbva.ts";
 
 // Importes y fechas en los formatos del banco y de la planilla.
@@ -200,6 +200,35 @@ console.log("extracto-bbva OK");
   // Sin el número al final no se inventa uno a partir de los 15 dígitos de la cuenta: queda sin cheque seguro.
   const r2 = cruzarExtracto([{ id: "l3", fecha: "2026-10-16", concepto: "CH/CLEAR.48  019100670000014", importe: -169157.02, cuenta_id: null }], [], cheques, [], [], new Set());
   assert.notEqual(get(r2, "l3")?.cheque_id && get(r2, "l3")?.auto, true);
+}
+
+
+// Textos abreviados del Excel "Movimientos": impuestos y comisiones se reconocen solos (23/10/2026).
+{
+  const lin = (id, concepto, importe) => ({ id, fecha: "2026-10-22", concepto, importe, cuenta_id: null });
+  const r = cruzarExtracto([
+    lin("a", "IVA TASA GRA", -199.5), lin("b", "LEY NRO 25.4 21/10/26 00015", -7495.46), lin("c", "IMPUESTO LEY 21/10/26 00013", -168726.47),
+    lin("d", "REG REC SIRC 21/10/26 00015X · CTE 000000000983", -45189.76), lin("e", "COMISION TRA 30716314797 · CTE 000011111111", -950),
+  ], [], [], [], [], new Set());
+  const g = (id) => (Array.isArray(r) ? r : [...r.values()]).find((p) => p.linea_id === id);
+  assert.equal(g("a").subtipo, "iva");
+  assert.equal(g("b").subtipo, "ley_25413");
+  assert.equal(g("c").subtipo, "ley_25413");
+  assert.equal(g("d").subtipo, "sircreb");
+  assert.equal(g("e").clasificacion, "gasto_bancario");
+  assert.ok([ "a", "b", "c", "d", "e" ].every((id) => g(id).auto));
+}
+
+// Un Excel que solo trae el día de hoy se acepta si su saldo de apertura es el último saldo cargado, y se rechaza si no (23/10/2026).
+{
+  const hojas = [[
+    ["Cuenta: ", "091-312483/1(CC $)"], ["Saldo: ", "1.000,00"], [],
+    ["Fecha", "Fecha Valor", "Concepto", "Codigo", "Número Documento", "Oficina", "Crédito", "Débito", "Detalle"],
+    ["23-10-2026", "23-10-2026", "IVA TASA GRA", "236", "", "91 - X", "", "-100.00", ""],
+  ]];
+  const ok = leerMovimientosBbva(hojas, { fecha: "2026-10-22", saldo: 1100 });
+  assert.equal(ok.lineas.length, 1);
+  assert.throws(() => leerMovimientosBbva(hojas, { fecha: "2026-10-22", saldo: 1200 }), /no cierran/);
 }
 
 console.log("extracto-bbva OK");

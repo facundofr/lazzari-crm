@@ -7,7 +7,7 @@
 // Débitos automáticos: al abrir el mes en curso se cargan solos los del día ya pasado (cargar_debitos_automaticos, migración
 // 20261020150000), con aviso y Deshacer. Lógica pura en lib/gastos-lazza.ts.
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Loader2, Pencil, Plus, Search, Trash2, Undo2, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ChevronsUpDown, Loader2, Pencil, Plus, Search, Trash2, Undo2, X } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { useUser } from "@/lib/auth-context";
@@ -25,6 +25,11 @@ const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
 const sel = "!h-8 !py-0 !px-2 text-sm";
 const opcionesGrupo = GRUPOS.map((g) => ({ value: g, label: g }));
+type ColOrden = "fecha" | "grupo" | "detalle" | "tipo" | "pago" | "monto";
+const COLUMNAS: { col: ColOrden; label: string }[] = [
+  { col: "fecha", label: "Fecha" }, { col: "grupo", label: "Grupo" }, { col: "detalle", label: "Detalle" },
+  { col: "tipo", label: "Tipo" }, { col: "pago", label: "Pago" }, { col: "monto", label: "Monto" },
+];
 const opcionesMedio = Object.entries(MEDIOS).map(([value, label]) => ({ value, label }));
 const faltaFuncion = (e: any) => e && (e.code === "PGRST202" || e.code === "42883" || /Could not find the function|does not exist/i.test(String(e.message || "")));
 const plata = (m: { ARS: number; USD: number }) => [m.ARS > 0.005 || !m.USD ? formatCurrency(m.ARS) : "", m.USD > 0.005 ? formatCurrency(m.USD, "USD") : ""].filter(Boolean).join(" + ");
@@ -49,6 +54,9 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
   const [tipo, setTipo] = useState<"" | "fijo" | "eventual">("");
   const [soloDebito, setSoloDebito] = useState(false);
   const [texto, setTexto] = useState("");
+  // 23/10 (Augusto): las filas se ordenan tocando el título de la columna y se filtran por moneda.
+  const [moneda, setMoneda] = useState<"" | "ARS" | "USD">("");
+  const [orden, setOrden] = useState<{ col: ColOrden; dir: 1 | -1 }>({ col: "fecha", dir: -1 });
   const hoy = todayAR();
   const esMesActual = periodo === hoy.slice(0, 7);
   const nombreMes = `${MESES[Number(periodo.slice(5, 7)) - 1]} ${periodo.slice(0, 4)}`;
@@ -89,7 +97,24 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
 
   const recargar = () => setRecarga((n) => n + 1);
   const filas = useMemo(() => armarFilasGastos(gastos || [], fijos), [gastos, fijos]);
-  const visibles = useMemo(() => filtrarGastos(filas, { grupo, tipo, soloDebito, texto }), [filas, grupo, tipo, soloDebito, texto]);
+  const visibles = useMemo(() => {
+    const base = filtrarGastos(filas, { grupo, tipo, soloDebito, texto }).filter((x) => !moneda || x.moneda === moneda);
+    const clave = (x: (typeof base)[number]): string | number => {
+      switch (orden.col) {
+        case "fecha": return x.fecha;
+        case "grupo": return x.grupo;
+        case "detalle": return String(x.detalle || "").toLowerCase();
+        case "tipo": return x.fijo ? "Fijo" : "Eventual";
+        case "pago": return etiquetaMedio(x.medio);
+        default: return x.moneda === "USD" ? 1e12 + x.monto : x.monto; // el monto ordena primero los pesos y después los dólares
+      }
+    };
+    return [...base].sort((a, b) => {
+      const ka = clave(a), kb = clave(b);
+      const c = typeof ka === "number" && typeof kb === "number" ? ka - kb : String(ka).localeCompare(String(kb), "es");
+      return c * orden.dir || String(a.fecha).localeCompare(String(b.fecha)) * -1;
+    });
+  }, [filas, grupo, tipo, soloDebito, texto, moneda, orden]);
   const totales = useMemo(() => totalesPorGrupo(filas), [filas]);
   const totalVisible = useMemo(() => ({ ARS: visibles.filter((x) => x.moneda === "ARS").reduce((s, x) => s + x.monto, 0), USD: visibles.filter((x) => x.moneda === "USD").reduce((s, x) => s + x.monto, 0) }), [visibles]);
   const pendientes = useMemo(() => fijosSinCargar(fijos, gastos || [], periodo), [fijos, gastos, periodo]);
@@ -226,6 +251,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
         </div>
         <div className="w-44"><Select value={grupo} onChange={(e) => setGrupo(e.target.value as "" | Grupo)} options={opcionesGrupo} placeholder="Todos los grupos" className={sel} /></div>
         <div className="w-36"><Select value={tipo} onChange={(e) => setTipo(e.target.value as typeof tipo)} options={[{ value: "fijo", label: "Fijos" }, { value: "eventual", label: "Eventuales" }]} placeholder="Fijos y eventuales" className={sel} /></div>
+        <div className="w-32"><Select value={moneda} onChange={(e) => setMoneda(e.target.value as typeof moneda)} options={[{ value: "ARS", label: "Pesos ($)" }, { value: "USD", label: "Dólares (US$)" }]} placeholder="Todas las monedas" className={sel} /></div>
         <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-300"><input type="checkbox" checked={soloDebito} onChange={(e) => setSoloDebito(e.target.checked)} className="h-4 w-4 accent-orange-500" /> Solo 🔁</label>
         <button type="button" onClick={() => setVerFijos((v) => !v)} className="text-xs text-orange-600 hover:underline">{verFijos ? "Ocultar gastos fijos" : "Editar gastos fijos"}</button>
       </div>
@@ -238,7 +264,13 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
         <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
           <table className="w-full text-sm">
             <thead className="bg-zinc-50 text-left text-[11px] uppercase text-zinc-500 dark:bg-zinc-800">
-              <tr><th className="px-2 py-1.5">Fecha</th><th className="px-2 py-1.5">Grupo</th><th className="px-2 py-1.5">Detalle</th><th className="px-2 py-1.5">Tipo</th><th className="px-2 py-1.5">Pago</th><th className="px-2 py-1.5 text-right">Monto</th><th className="w-16" /></tr>
+              <tr>{COLUMNAS.map((c) => (
+                <th key={c.col} className={`px-2 py-1.5 ${c.col === "monto" ? "text-right" : ""}`} aria-sort={orden.col === c.col ? (orden.dir === 1 ? "ascending" : "descending") : "none"}>
+                  <button type="button" onClick={() => setOrden((o) => (o.col === c.col ? { col: c.col, dir: (o.dir * -1) as 1 | -1 } : { col: c.col, dir: c.col === "fecha" || c.col === "monto" ? -1 : 1 }))} className="inline-flex items-center gap-0.5 uppercase hover:text-orange-600" title="Ordenar">
+                    {c.label}{orden.col === c.col ? (orden.dir === 1 ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : <ChevronsUpDown className="h-3 w-3 opacity-40" />}
+                  </button>
+                </th>
+              ))}<th className="w-16" /></tr>
             </thead>
             <tbody>
               {visibles.map((f) => borrador?.id === f.id ? (

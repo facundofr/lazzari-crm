@@ -259,7 +259,9 @@ export function leerMovimientosBbva(hojas: unknown[][][], ancla?: { fecha: strin
 
   let saltos = 0;
   if (ancla) {
-    const hasta = saldoAl(lineas, ancla.fecha);
+    let hasta = saldoAl(lineas, ancla.fecha);
+    // Si el Excel arranca DESPUÉS del último saldo cargado (ej. solo trae el día de hoy), su saldo de apertura tiene que ser ese saldo.
+    if (hasta === null && lineas.length && lineas[0].fecha > ancla.fecha && lineas[0].saldo !== null) hasta = r2(lineas[0].saldo - lineas[0].importe);
     if (hasta === null || centavos(hasta) !== centavos(ancla.saldo)) {
       const dif = hasta === null ? null : r2(hasta - ancla.saldo);
       throw new Error(`Los saldos no cierran contra lo que ya está cargado (al ${ancla.fecha.split("-").reverse().join("/")} el CRM tiene ${ancla.saldo.toLocaleString("es-AR")} y este Excel da ${hasta === null ? "—" : hasta.toLocaleString("es-AR")}${dif === null ? "" : `, diferencia ${dif.toLocaleString("es-AR")}`}). Suele pasar cuando el Excel no incluye el último día cerrado: volvé a bajarlo cuando el banco lo actualice, o usá el "Detalle_mov_cuenta".`);
@@ -464,9 +466,10 @@ function clasificarPorConcepto(l: LineaCruce, ctx: Contexto): Omit<Propuesta, "l
     return { ...base, clasificacion: r.clasificacion, subtipo: r.subtipo || null, contra_cuenta_id: r.contra_cuenta_id || null, nota: r.nota || null, motivo: `Regla: "${r.texto}"` };
   }
 
-  if (/IVA TASA GENERAL/.test(c)) return { ...base, clasificacion: "impuesto", subtipo: "iva", motivo: "IVA del banco" };
-  if (/25\.?413/.test(c)) return { ...base, clasificacion: "impuesto", subtipo: "ley_25413", motivo: "Impuesto al cheque" };
-  if (/SIRCREB/.test(c)) return { ...base, clasificacion: "impuesto", subtipo: "sircreb", motivo: "SIRCREB (Ingresos Brutos)" };
+  // El Excel "Movimientos" abrevia los textos: "IVA TASA GRA", "LEY NRO 25.4 …", "IMPUESTO LEY dd/mm/aa …", "REG REC SIRC …" (códigos del banco 236, 609, 589 y 550).
+  if (/IVA TASA (GENERAL|GRA)/.test(c)) return { ...base, clasificacion: "impuesto", subtipo: "iva", motivo: "IVA del banco" };
+  if (/25\.?413|LEY NRO 25\.4|^IMPUESTO LEY \d/.test(c)) return { ...base, clasificacion: "impuesto", subtipo: "ley_25413", motivo: "Impuesto al cheque" };
+  if (/SIRCREB|REG REC SIRC/.test(c)) return { ...base, clasificacion: "impuesto", subtipo: "sircreb", motivo: "SIRCREB (Ingresos Brutos)" };
   if (/MANT(\.|ENIMIENTO)? ?MENS|CO\.MANT/.test(c)) return { ...base, clasificacion: "gasto_bancario", subtipo: "mantenimiento", motivo: "Mantenimiento de cuenta" };
   if (/^COMI(SION|\s)|COMISION/.test(c)) return { ...base, clasificacion: "gasto_bancario", subtipo: "comision", motivo: "Comisión del banco" };
   if (/INTERESES GANADOS/.test(c) && credito) return { ...base, clasificacion: "intereses", subtipo: "intereses", motivo: "Intereses" };
