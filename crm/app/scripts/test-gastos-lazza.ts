@@ -1,6 +1,6 @@
 // npx tsx scripts/test-gastos-lazza.ts
 import assert from "node:assert/strict";
-import { armarFilasGastos, filtrarGastos, fijosSinCargar, grupoDe, grupoDeCategoria, totalesPorGrupo, venceEnMes, type FijoRow, type GastoRow } from "../src/lib/gastos-lazza";
+import { nombreGrupo, armarFilasGastos, filtrarGastos, fijosSinCargar, grupoDe, grupoDeCategoria, totalesPorGrupo, venceEnMes, type FijoRow, type GastoRow } from "../src/lib/gastos-lazza";
 
 assert.equal(grupoDeCategoria("Sueldos"), "Personal");
 assert.equal(grupoDeCategoria("Débitos automáticos"), "Local y servicios");
@@ -47,5 +47,10 @@ assert.equal(venceEnMes(null, "2026-10"), null);
 assert.deepEqual(fijosSinCargar(fijos, gastos, "2026-10").map((f) => [f.id, f.vence, f.grupoFinal]), [["sueldo", "2026-10-31", "Personal"]]);
 // Noviembre: faltan los 3 activos (el alquiler sin día, al final).
 assert.deepEqual(fijosSinCargar(fijos, gastos, "2026-11").map((f) => f.id), ["luz", "sueldo", "alq"]);
+
+// Nombres que se ven en pantalla (Augusto 23/10): el valor guardado no cambia.
+assert.equal(nombreGrupo("Personal"), "Sueldos");
+assert.equal(nombreGrupo("Personales"), "Augusto");
+assert.equal(nombreGrupo("Impuestos"), "Impuestos");
 
 console.log("test-gastos-lazza OK");

@@ -15,7 +15,7 @@ import { useToast } from "@/components/ui/toast";
 import { Select } from "@/components/ui/input";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import {
-  GRUPOS, MEDIOS, armarFilasGastos, etiquetaMedio, filtrarGastos, fijosSinCargar, grupoDe, totalesPorGrupo,
+  GRUPOS, MEDIOS, nombreGrupo, armarFilasGastos, etiquetaMedio, filtrarGastos, fijosSinCargar, grupoDe, totalesPorGrupo,
   type FijoRow, type FilaGasto, type GastoRow, type Grupo,
 } from "@/lib/gastos-lazza";
 import { rangoMes } from "./datos";
@@ -24,7 +24,7 @@ const db = supabase as any;
 const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
 const sel = "!h-8 !py-0 !px-2 text-sm";
-const opcionesGrupo = GRUPOS.map((g) => ({ value: g, label: g }));
+const opcionesGrupo = GRUPOS.map((g) => ({ value: g, label: nombreGrupo(g) }));
 type ColOrden = "fecha" | "grupo" | "detalle" | "tipo" | "pago" | "monto";
 const COLUMNAS: { col: ColOrden; label: string }[] = [
   { col: "fecha", label: "Fecha" }, { col: "grupo", label: "Grupo" }, { col: "detalle", label: "Detalle" },
@@ -102,7 +102,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
     const clave = (x: (typeof base)[number]): string | number => {
       switch (orden.col) {
         case "fecha": return x.fecha;
-        case "grupo": return x.grupo;
+        case "grupo": return nombreGrupo(x.grupo);
         case "detalle": return String(x.detalle || "").toLowerCase();
         case "tipo": return x.fijo ? "Fijo" : "Eventual";
         case "pago": return etiquetaMedio(x.medio);
@@ -125,7 +125,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
     const monto = Math.round(Number(String(b.monto).replace(",", ".")) * 100) / 100;
     if (!b.detalle.trim()) { toast.error("Poné el detalle del gasto"); return; }
     if (!(monto > 0)) { toast.error("El monto tiene que ser mayor a 0"); return; }
-    const descMov = `Gasto — ${b.grupo} — ${b.detalle.trim()}`;
+    const descMov = `Gasto — ${nombreGrupo(b.grupo)} — ${b.detalle.trim()}`;
     if (b.id) {
       const atados = pagosDe(b.id);
       const cruzado = atados.find((p) => p.cruzado || p.conciliado);
@@ -232,7 +232,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
         {totales.map((t) => (
           <button key={t.grupo} type="button" onClick={() => setGrupo((g) => (g === t.grupo ? "" : t.grupo))}
             className={`rounded-lg border px-2 py-1.5 text-left ${grupo === t.grupo ? "border-orange-400 bg-orange-50 dark:bg-orange-950/30" : "border-zinc-200 bg-white hover:border-orange-300 dark:border-zinc-700 dark:bg-zinc-900"}`}>
-            <span className="block truncate text-[11px] text-zinc-500">{t.grupo} · {t.n}</span>
+            <span className="block truncate text-[11px] text-zinc-500">{nombreGrupo(t.grupo)} · {t.n}</span>
             <span className="block truncate font-mono text-xs font-semibold text-zinc-800 dark:text-zinc-100">{plata(t)}</span>
           </button>
         ))}
@@ -251,7 +251,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
         </div>
         <div className="w-44"><Select value={grupo} onChange={(e) => setGrupo(e.target.value as "" | Grupo)} options={opcionesGrupo} placeholder="Todos los grupos" className={sel} /></div>
         <div className="w-36"><Select value={tipo} onChange={(e) => setTipo(e.target.value as typeof tipo)} options={[{ value: "fijo", label: "Fijos" }, { value: "eventual", label: "Eventuales" }]} placeholder="Fijos y eventuales" className={sel} /></div>
-        <div className="w-32"><Select value={moneda} onChange={(e) => setMoneda(e.target.value as typeof moneda)} options={[{ value: "ARS", label: "Pesos ($)" }, { value: "USD", label: "Dólares (US$)" }]} placeholder="Todas las monedas" className={sel} /></div>
+        <div className="w-44"><Select value={moneda} onChange={(e) => setMoneda(e.target.value as typeof moneda)} options={[{ value: "ARS", label: "Pesos ($)" }, { value: "USD", label: "Dólares (US$)" }]} placeholder="Todas las monedas" className={sel} /></div>
         <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-300"><input type="checkbox" checked={soloDebito} onChange={(e) => setSoloDebito(e.target.checked)} className="h-4 w-4 accent-orange-500" /> Solo 🔁</label>
         <button type="button" onClick={() => setVerFijos((v) => !v)} className="text-xs text-orange-600 hover:underline">{verFijos ? "Ocultar gastos fijos" : "Editar gastos fijos"}</button>
       </div>
@@ -279,7 +279,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
               ) : (
                 <tr key={f.id} onClick={() => setBorrador(desdeFila(f))} className="cursor-pointer border-t border-zinc-100 hover:bg-orange-50/40 dark:border-zinc-800 dark:hover:bg-zinc-800/50">
                   <td className="whitespace-nowrap px-2 py-1.5">{formatDate(f.fecha)}</td>
-                  <td className="whitespace-nowrap px-2 py-1.5 text-xs">{f.grupo}</td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-xs">{nombreGrupo(f.grupo)}</td>
                   <td className="px-2 py-1.5">{f.detalle}{f.cargadoSolo && <span className="ml-1 text-[10px] text-blue-600">(cargado solo)</span>}</td>
                   <td className="px-2 py-1.5 text-xs">{f.fijo ? "Fijo" : "Eventual"}</td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-xs">{etiquetaMedio(f.medio)}{pagosDe(f.id).some((p) => p.cruzado || p.conciliado) && <span className="ml-1 text-emerald-600" title="Cruzado con el banco">✓ banco</span>}</td>
@@ -306,7 +306,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
             {pendientes.map((f) => (
               <div key={f.id} className="flex flex-wrap items-center gap-2 px-1 py-1 text-sm">
                 <span className="w-24 text-xs text-zinc-500">{f.vence ? `vence ${formatDate(f.vence)}` : "sin día"}</span>
-                <span className="w-36 truncate text-xs">{f.grupoFinal}</span>
+                <span className="w-36 truncate text-xs">{nombreGrupo(f.grupoFinal)}</span>
                 <span className="min-w-[160px] flex-1">{f.descripcion}{f.medio_pago === "debito_automatico" && <span className="ml-1 text-xs">🔁</span>}</span>
                 <span className="font-mono text-xs">{formatCurrency(Number(f.monto || 0), String(f.moneda).toUpperCase() === "USD" ? "USD" : "ARS")}</span>
                 <button type="button" onClick={() => setBorrador(desdeFijo(f))} className="rounded-lg border border-orange-300 px-2 py-0.5 text-xs font-medium text-orange-700 hover:bg-orange-50 dark:border-orange-800 dark:text-orange-300">Cargar</button>

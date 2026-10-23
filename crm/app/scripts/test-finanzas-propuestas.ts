@@ -1,6 +1,6 @@
 // Prueba rápida: npx tsx scripts/test-finanzas-propuestas.ts
 import assert from "node:assert/strict";
-import { armarBandeja, textoParaRegla, cuitEnTexto, lineasParaIA, resumenBandeja, gastosFijosParaDebito, type DatosBandeja, type FacturaBandeja } from "../src/lib/finanzas-propuestas";
+import { armarBandeja, nombreEsComienzoDe, textoParaRegla, cuitEnTexto, lineasParaIA, resumenBandeja, gastosFijosParaDebito, type DatosBandeja, type FacturaBandeja } from "../src/lib/finanzas-propuestas";
 
 const CTA = "cta-cc";
 const fac = (id: string, pv: number, numero: number, saldo: number, cliente: string, extra: Partial<FacturaBandeja> = {}): FacturaBandeja => ({
@@ -167,4 +167,56 @@ assert.equal(cuitEnTexto("CTE 007875 285 30707784292 X"), "30707784292");
   ] });
   assert.ok(!/AUGUSTO LAZZARI/.test(items.find((i) => i.linea_id === "fondeo")!.titulo), "el CUIT propio no es proveedor");
 }
+
+// ── Guardas del 23/10/2026: una entrada NO es cobro sin evidencia ─────────────────────────────────────────────
+// Caso real: "DNET CREDITO … SANITARIOS SAN MA" por $ 216.913,48 era una DEVOLUCIÓN de un proveedor; el sistema proponía el cobro de una factura abierta
+// de la Municipalidad porque casi coincidía la suma. Ahora: si el que figura es un proveedor, no se arma ningún cobro.
+{
+  assert.ok(nombreEsComienzoDe("SANITARIOS SAN MA", "SANITARIOS SAN MARTIN S.A."));
+  assert.ok(!nombreEsComienzoDe("SANITARIOS", "SANITARIOS SAN MARTIN S.A."), "una sola palabra no alcanza");
+  assert.ok(!nombreEsComienzoDe("SANITARIOS LA PLATA", "SANITARIOS SAN MARTIN S.A."));
+  const items = armarBandeja({
+    ...base,
+    proveedores: [...base.proveedores, { id: "san", razon_social: "SANITARIOS SAN MARTIN S.A.", cuit: "30718092511" }],
+    clientes: [...base.clientes, { id: "muni", razon_social: "MUNICIPALIDAD DE PERGAMINO", cuit: "30999034515" }],
+    facturas: [...base.facturas, fac("fb2", 16, 2, 217273.9, "muni", { cliente_nombre: "MUNICIPALIDAD DE PERGAMINO", cliente_cuit: "30999034515", tipo: "FB" })],
+    lineas: [{ id: "devo", fecha: "2026-10-22", concepto: "DNET CREDITO NE3326720 · CTE 326720 007-002389330101 SANITARIOS SAN MA", importe: 216913.48, cuenta_id: CTA }],
+    pagosMail: [],
+  });
+  const it = items.find((i) => i.linea_id === "devo")!;
+  assert.notEqual(it.tipo, "cobro_nuevo", "una entrada de un proveedor no es un cobro");
+  assert.equal(it.confianza, "baja");
+  assert.ok(!it.cobro);
+}
+// Sin cliente identificado ni aviso: la suma de unas facturas es solo una suposición (débil) y no entra en las confirmaciones en bloque.
+{
+  const items = armarBandeja({
+    ...base,
+    clientes: [...base.clientes, { id: "muni", razon_social: "MUNICIPALIDAD DE PERGAMINO", cuit: "30999034515" }],
+    facturas: [...base.facturas, fac("fb2", 16, 2, 217273.9, "muni", { cliente_nombre: "MUNICIPALIDAD DE PERGAMINO", cliente_cuit: "30999034515", tipo: "FB" })],
+    lineas: [{ id: "adivina", fecha: "2026-10-22", concepto: "DNET CREDITO NE9999999", importe: 216913.48, cuenta_id: CTA }],
+    pagosMail: [],
+  });
+  const it = items.find((i) => i.linea_id === "adivina")!;
+  if (it.tipo === "cobro_nuevo") { assert.equal(it.debil, true); assert.equal(it.confianza, "baja"); }
+}
+
+// Prisina es cliente Y proveedor y entre ellos no hay devoluciones (Augusto 23/10): una entrada de Prisina se busca primero como COBRO; si no se encuentra, queda como duda (nunca como devolución).
+{
+  const datos = (conFactura: boolean) => ({
+    ...base,
+    clientes: [...base.clientes, { id: "pri", razon_social: "PRISINA S.A.", cuit: "30709905402" }],
+    proveedores: [...base.proveedores, { id: "pri-p", razon_social: "PRISINA S.A.", cuit: "30709905402" }],
+    facturas: conFactura ? [...base.facturas, fac("fp1", 15, 31, 500000, "pri", { cliente_nombre: "PRISINA S.A.", cliente_cuit: "30709905402" })] : base.facturas,
+    lineas: [{ id: "pagapri", fecha: "2026-10-22", concepto: "TRANSFERENCIA 30709905402", importe: 500000, cuenta_id: CTA }],
+    pagosMail: [],
+  });
+  const a = armarBandeja(datos(true)).find((i) => i.linea_id === "pagapri")!;
+  assert.equal(a.tipo, "cobro_nuevo", "cliente y proveedor con una factura abierta exacta: es un cobro");
+  assert.equal(a.confianza, "alta");
+  const b = armarBandeja(datos(false)).find((i) => i.linea_id === "pagapri")!;
+  assert.notEqual(b.tipo, "cobro_nuevo", "sin factura que coincida no se inventa un cobro");
+  assert.ok(!/Entrada de un proveedor/.test(b.titulo), "no se toma como devolución de un proveedor");
+}
+
 console.log("finanzas-propuestas: OK", items.length, "renglones");

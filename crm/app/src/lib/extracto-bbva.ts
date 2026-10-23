@@ -41,6 +41,12 @@ export const SUBTIPO_LABEL: Record<string, string> = {
   iibb: "Ingresos Brutos (pago)",
   afip: "AFIP / ARCA (VEP, plan de pagos)",
   otro_impuesto: "Otro impuesto",
+  // Una ENTRADA dentro de una familia de impuestos o comisiones es una devolución o una reversa del banco, nunca un costo (Augusto 23/10).
+  devolucion_iva: "Devolución de IVA del banco",
+  devolucion_ley_25413: "Devolución del impuesto al cheque (Ley 25.413)",
+  devolucion_sircreb: "Devolución o reversa de SIRCREB",
+  devolucion_mantenimiento: "Devolución de mantenimiento de cuenta",
+  devolucion_comision: "Devolución de comisión del banco",
   seguro: "Seguro",
   servicio: "Servicio (luz, internet, teléfono…)",
   sueldo: "Sueldo",
@@ -459,6 +465,8 @@ function clasificarPorConcepto(l: LineaCruce, ctx: Contexto): Omit<Propuesta, "l
   const c = l.concepto.toUpperCase();
   const credito = esCredito(l);
   const base = { auto: true, candidatos: [] as string[] };
+  /** Una entrada en estas familias es una devolución, no un costo: se guarda aparte para que los totales no se mezclen. */
+  const fam = <T extends { clasificacion: ClasificacionLinea; subtipo: string; motivo: string }>(r: T): T => (credito ? { ...r, subtipo: `devolucion_${r.subtipo}`, motivo: `Devolución: ${r.motivo}` } : r);
 
   for (const r of ctx.reglas) {
     if (!r.texto.trim() || !c.includes(r.texto.trim().toUpperCase())) continue;
@@ -467,11 +475,11 @@ function clasificarPorConcepto(l: LineaCruce, ctx: Contexto): Omit<Propuesta, "l
   }
 
   // El Excel "Movimientos" abrevia los textos: "IVA TASA GRA", "LEY NRO 25.4 …", "IMPUESTO LEY dd/mm/aa …", "REG REC SIRC …" (códigos del banco 236, 609, 589 y 550).
-  if (/IVA TASA (GENERAL|GRA)/.test(c)) return { ...base, clasificacion: "impuesto", subtipo: "iva", motivo: "IVA del banco" };
-  if (/25\.?413|LEY NRO 25\.4|^IMPUESTO LEY \d/.test(c)) return { ...base, clasificacion: "impuesto", subtipo: "ley_25413", motivo: "Impuesto al cheque" };
-  if (/SIRCREB|REG REC SIRC/.test(c)) return { ...base, clasificacion: "impuesto", subtipo: "sircreb", motivo: "SIRCREB (Ingresos Brutos)" };
-  if (/MANT(\.|ENIMIENTO)? ?MENS|CO\.MANT/.test(c)) return { ...base, clasificacion: "gasto_bancario", subtipo: "mantenimiento", motivo: "Mantenimiento de cuenta" };
-  if (/^COMI(SION|\s)|COMISION/.test(c)) return { ...base, clasificacion: "gasto_bancario", subtipo: "comision", motivo: "Comisión del banco" };
+  if (/IVA TASA (GENERAL|GRA)/.test(c)) return fam({ ...base, clasificacion: "impuesto", subtipo: "iva", motivo: "IVA del banco" });
+  if (/25\.?413|LEY NRO 25\.4|^IMPUESTO LEY \d/.test(c)) return fam({ ...base, clasificacion: "impuesto", subtipo: "ley_25413", motivo: "Impuesto al cheque" });
+  if (/SIRCREB|REG REC SIRC/.test(c)) return fam({ ...base, clasificacion: "impuesto", subtipo: "sircreb", motivo: "SIRCREB (Ingresos Brutos)" });
+  if (/MANT(\.|ENIMIENTO)? ?MENS|CO\.MANT/.test(c)) return fam({ ...base, clasificacion: "gasto_bancario", subtipo: "mantenimiento", motivo: "Mantenimiento de cuenta" });
+  if (/^COMI(SION|\s)|COMISION/.test(c)) return fam({ ...base, clasificacion: "gasto_bancario", subtipo: "comision", motivo: "Comisión del banco" });
   if (/INTERESES GANADOS/.test(c) && credito) return { ...base, clasificacion: "intereses", subtipo: "intereses", motivo: "Intereses" };
   if (/REINTEGRO PROMO/.test(c) && credito) return { ...base, clasificacion: "intereses", subtipo: "reintegro", motivo: "Reintegro de promoción" };
 

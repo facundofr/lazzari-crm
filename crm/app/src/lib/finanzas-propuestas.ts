@@ -51,6 +51,8 @@ export interface ItemBandeja {
   /** Para aplicar_cruces_extracto (tipo cruce y a_cargar). */
   cruce?: { clasificacion: ClasificacionLinea; subtipo?: string | null; movimiento_id?: string | null; cheque_id?: string | null; contra_cuenta_id?: string | null; nota?: string | null };
   cobro?: CobroArmado;
+  /** Cobro armado solo por una SUPOSICIÓN (la suma de unas facturas coincide) y sin evidencia del que pagó: nunca entra en las confirmaciones en bloque y pide una confirmación aparte. */
+  debil?: boolean;
   gasto?: { id: string; descripcion: string };
   /** Débito automático de un gasto fijo (luz, Flow, ARBA…): al confirmar se carga el gasto del mes y se paga con la línea. */
   gastoFijo?: { id: string; descripcion: string; categoria: string };
@@ -72,6 +74,15 @@ const fmt = (n: number) => `$ ${Math.abs(n).toLocaleString("es-AR", { minimumFra
 export function cuitEnTexto(texto: string): string | null {
   const m = String(texto || "").match(/\b((?:20|23|24|27|30|33|34)\d{9})\b/);
   return m ? m[1] : null;
+}
+
+/** El nombre del banco viene cortado ("SANITARIOS SAN MA"): ¿es el comienzo de esta razón social? Palabras completas y la última puede ser un prefijo. */
+export function nombreEsComienzoDe(texto: string, razonSocial: string | null | undefined): boolean {
+  const pal = (x: string) => String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9 ]+/g, " ").split(/\s+/).filter(Boolean);
+  const A = pal(texto), B = pal(razonSocial || "");
+  if (A.length < 2 || B.length < A.length) return false;
+  for (let i = 0; i < A.length - 1; i++) if (A[i] !== B[i]) return false;
+  return B[A.length - 1].startsWith(A[A.length - 1]);
 }
 
 /** Nombre que trae el detalle del Excel "Movimientos" ("TRANSFERENCIA · CTE 007875 285-… FUNDACION CARGI"). */
@@ -343,6 +354,18 @@ export function armarBandeja(d: DatosBandeja): ItemBandeja[] {
       const cuit = cuitEnTexto(l.concepto);
       const nombre = nombreEnTexto(l.concepto);
       const cliente = (cuit && cliPorCuit.get(cuit)) || (nombre ? d.clientes.find((c) => mismoCliente(c.razon_social, nombre)) : undefined);
+      // Empresas que son cliente Y proveedor (ej. Prisina, Augusto 23/10): entre ellas no hay devoluciones, solo se pagan facturas o pagos a cuenta. Si es cliente, la entrada se trata primero como COBRO;
+      // el aviso de "entrada de un proveedor" de abajo solo corre cuando NO es cliente.
+      // Si el que figura es un PROVEEDOR (no un cliente), una entrada es una devolución o un reembolso: nunca se arma un cobro por suposición.
+      const provNombre = !cliente && nombre ? d.proveedores.find((p) => !propio(p.cuit) && (mismoCliente(p.razon_social, nombre) || nombreEsComienzoDe(nombre, p.razon_social))) : undefined;
+      const provEntrada = !cliente ? ((cuit && provPorCuit.get(cuit)) || provNombre) : undefined;
+      if (provEntrada) {
+        out.push({
+          ...base(l), tipo: "sin_resolver", confianza: "baja", origen: "cuit", titulo: `Entrada de un proveedor: ${provEntrada.razon_social}`,
+          detalle: [l.concepto, "El que figura es un PROVEEDOR tuyo: probablemente es una devolución o un reembolso, no un cobro. Elegí qué es con \"Otra cosa\"."], avisos: [],
+        });
+        continue;
+      }
       // Sin aviso: solo facturas emitidas hasta el día del pago.
       const libres = abiertas.filter((f) => !facturasUsadas.has(f.id) && (f.moneda || "ARS") === "ARS" && f.fecha <= l.fecha);
       let elegidas: FacturaBandeja[] | null = null;
@@ -370,7 +393,7 @@ export function armarBandeja(d: DatosBandeja): ItemBandeja[] {
         if (armado) {
           armado.cobro.facturas.forEach((f) => facturasUsadas.add(f.id));
           out.push({
-            ...base(l), tipo: "cobro_nuevo", confianza: cliente && !retencionEstimada ? "alta" : "media", origen: "facturas",
+            ...base(l), tipo: "cobro_nuevo", confianza: !cliente || retencionEstimada ? "baja" : "alta", debil: !cliente || Boolean(retencionEstimada), origen: "facturas",
             titulo: `Cobro de ${armado.cobro.cliente_nombre} → ${armado.cobro.facturas.length} factura${armado.cobro.facturas.length > 1 ? "s" : ""}`,
             detalle: [armado.cobro.facturas.map((f) => f.numero).join(", "), como],
             avisos: armado.avisos, cobro: armado.cobro,

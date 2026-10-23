@@ -686,6 +686,11 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
   /** Vista simple: impuestos y comisiones que ya cruzan solos van juntos en una fila; lo demás sin cerrar es "para vos". */
   const esRuidoSimple = (i: ItemBandeja) => Boolean(i.cruce && ["impuesto", "gasto_bancario"].includes(i.cruce.clasificacion));
   const ruidoSimple = porConfianza.alta.filter(esRuidoSimple);
+  // Las devoluciones (entradas dentro de impuestos o comisiones) se muestran aparte del costo: nunca se mezclan.
+  const esDevolucion = (i: ItemBandeja) => String(i.cruce?.subtipo || "").startsWith("devolucion");
+  const costoRuido = ruidoSimple.filter((i) => !esDevolucion(i));
+  const devolRuido = ruidoSimple.filter(esDevolucion);
+  const textoRuido = `${formatCurrency(costoRuido.reduce((s, i) => s + i.importe, 0))} (${costoRuido.length} líneas)${devolRuido.length ? ` · devoluciones ${formatCurrency(devolRuido.reduce((s, i) => s + i.importe, 0))} (${devolRuido.length})` : ""}`;
   const resueltasSimple = porConfianza.alta.filter((i) => !esRuidoSimple(i));
   const paraVosSimple = [...porConfianza.media, ...porConfianza.baja];
 
@@ -703,13 +708,14 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
             </p>
             <p className="truncate text-xs text-zinc-500" title={i.concepto}>{i.concepto}{i.cuenta_id ? ` · ${cuentaNombre.get(i.cuenta_id) || ""}` : ""}</p>
             {i.detalle.filter(Boolean).map((d, k) => <p key={k} className="text-xs text-zinc-500">{d}</p>)}
+            {i.debil && <p className="text-xs font-semibold text-red-600 dark:text-red-400">⛔ Sin evidencia: es una suposición por la suma de las facturas. Verificá con el aviso de pago antes de confirmar.</p>}
             {i.avisos.map((a, k) => <p key={k} className="text-xs font-medium text-amber-700 dark:text-amber-300">⚠️ {a}</p>)}
           </div>
           <span className={`w-32 shrink-0 text-right font-mono ${i.importe < 0 ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(i.importe)}</span>
           <div className="flex shrink-0 gap-1">
             {puedeConfirmar && (
-              <button disabled={ocupado !== null} onClick={() => void confirmar([i], Boolean(i.cobro))} className="rounded-md bg-emerald-600 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
-                {ocupado === i.linea_id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : simple ? "Sí, es eso" : "Confirmar"}
+              <button disabled={ocupado !== null} onClick={() => { if (i.debil && !window.confirm("⚠️ Esto es una SUPOSICIÓN: el cobro se armó porque la suma de unas facturas coincide, pero no hay un aviso de pago, un CUIT ni un nombre que confirmen quién pagó. Confirmalo solo si estás seguro de que ese cliente pagó esas facturas. ¿Confirmar igual?")) return; void confirmar([i], Boolean(i.cobro)); }} className="rounded-md bg-emerald-600 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
+                {ocupado === i.linea_id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : i.debil ? "Confirmar igual…" : simple ? "Sí, es eso" : "Confirmar"}
               </button>
             )}
             <button disabled={ocupado !== null} onClick={() => {
@@ -857,7 +863,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-violet-200 bg-violet-50/60 p-3 text-sm dark:border-violet-900 dark:bg-violet-950/30">
               <div className="flex flex-wrap gap-x-6 gap-y-1">
                 <span className="text-emerald-700 dark:text-emerald-300"><b className="text-lg">{porConfianza.alta.length}</b> resueltas solas</span>
-                {ruidoSimple.length > 0 && <span><b>{formatCurrency(ruidoSimple.reduce((s, i) => s + i.importe, 0))}</b> en impuestos y comisiones ({ruidoSimple.length} líneas)</span>}
+                {ruidoSimple.length > 0 && <span><b>{textoRuido}</b> en impuestos y comisiones</span>}
                 <span><b className="text-lg">{paraVosSimple.length}</b> para vos</span>
                 {iaTrabajando && <span className="flex items-center gap-1 text-violet-700 dark:text-violet-300"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Mirando {paraIA.length} líneas…</span>}
                 {iaError && <span className="text-amber-700">IA: {iaError} <button className="underline" onClick={() => { iaPedidas.current.clear(); void preguntarIA(paraIA); }}>Reintentar</button></span>}
@@ -908,7 +914,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
                 {verResueltas && <div className="divide-y divide-zinc-100 rounded-xl border border-zinc-200 bg-white px-3 dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">{resueltasSimple.map(renglon)}</div>}
                 {ruidoSimple.length > 0 && (
                   <button onClick={() => setVerRuido((v) => !v)} className="flex items-center gap-1 text-zinc-600 hover:text-zinc-900 dark:text-zinc-300">
-                    {verRuido ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />} Impuestos y comisiones del banco: {formatCurrency(ruidoSimple.reduce((s, i) => s + i.importe, 0))} ({ruidoSimple.length} líneas) · ver detalle
+                    {verRuido ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />} Impuestos y comisiones del banco: {textoRuido} · ver detalle
                   </button>
                 )}
                 {verRuido && <div className="divide-y divide-zinc-100 rounded-xl border border-zinc-200 bg-white px-3 dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">{ruidoSimple.map(renglon)}</div>}

@@ -182,6 +182,27 @@ assert.deepEqual(tot, { "2026-10": { iva: -5921.82, ley_25413: 1829.52 }, "2026-
   assert.deepEqual(nuevas.map((l) => l.clave), ["2026-10-13|3247761.58|-50000.00|DNET CREDITO"]);
 }
 
+// Una ENTRADA dentro de impuestos o comisiones es una devolución, no un costo (23/10/2026): +60.662,95 de Ley 25.413, +404.419,69 de SIRCREB anulado.
+{
+  const lin = (id, concepto, importe) => ({ id, fecha: "2026-10-21", concepto, importe, cuenta_id: null });
+  const r = cruzarExtracto([
+    lin("d1", "LEY NRO 25.4 20/10/26 00017", 60662.95), lin("d2", "REG REC SIRC 20/10/26 00017X · CTE 000000000019", 404419.69),
+    lin("d3", "IMPUESTO LEY 21/10/26 00009", 2426.51), lin("c1", "LEY NRO 25.4 20/10/26 00014", -151995.03), lin("c2", "REG REC SIRC 20/10/26 00016X", -404419.69),
+  ], [], [], [], [], new Set());
+  const g = (id) => (Array.isArray(r) ? r : [...r.values()]).find((p) => p.linea_id === id);
+  assert.equal(g("d1").subtipo, "devolucion_ley_25413");
+  assert.equal(g("d2").subtipo, "devolucion_sircreb");
+  assert.equal(g("d3").subtipo, "devolucion_ley_25413");
+  assert.equal(g("c1").subtipo, "ley_25413");
+  assert.equal(g("c2").subtipo, "sircreb");
+  const tot = totalesBancoPorMes([
+    { fecha: "2026-10-21", importe: 60662.95, clasificacion: "impuesto", subtipo: "devolucion_ley_25413" },
+    { fecha: "2026-10-21", importe: -151995.03, clasificacion: "impuesto", subtipo: "ley_25413" },
+  ]);
+  assert.equal(tot["2026-10"].ley_25413, -151995.03);
+  assert.equal(tot["2026-10"].devolucion_ley_25413, 60662.95);
+}
+
 console.log("extracto-bbva OK");
 
 // Cheque propio del Excel "Movimientos": el N° viene de la columna "Número Documento" y queda al final del concepto (23/10/2026).

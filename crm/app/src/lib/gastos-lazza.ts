@@ -5,6 +5,10 @@
 export const GRUPOS = ["Personal", "Local y servicios", "Profesionales", "Impuestos", "Bancos y financieros", "Operativos", "Personales"] as const;
 export type Grupo = (typeof GRUPOS)[number];
 
+/** Nombre que se ve en pantalla (Augusto 23/10: "Sueldos" y "Augusto"). El valor guardado en la base no cambia: lo restringe un check de la tabla. */
+const NOMBRE_GRUPO: Record<string, string> = { Personal: "Sueldos", Personales: "Augusto" };
+export const nombreGrupo = (g: string | null | undefined) => NOMBRE_GRUPO[String(g || "")] || String(g || "");
+
 /** Misma tabla que la migración 20261020150000. */
 const POR_CATEGORIA: Record<string, Grupo> = {
   sueldos: "Personal", comisiones: "Personal",
