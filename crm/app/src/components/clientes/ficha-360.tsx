@@ -412,7 +412,6 @@ export function Ficha360({ sociedadId, cliente }: { sociedadId: string | undefin
               ))}
             </ul>
           )}
-          <a href="/muestras" className="mt-2 inline-block text-orange-600 hover:underline">Ir a Muestras</a>
         </div>
       )}
     </div>

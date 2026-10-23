@@ -2569,7 +2569,7 @@ ${nota}` : nota }).eq("id", p.prId).eq("sociedad_id", sociedadActiva?.id);
                         }} className="rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-600">No, cerrar el PR (rechazado)</button>
                       </div>
                     )}
-                    {ncPrPregunta.resuelto === "si" && <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-400">Listo: el PR queda en Ventas para re-facturar (corregí el precio antes si hace falta).</p>}
+                    {ncPrPregunta.resuelto === "si" && <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-400">Listo: el PR queda en Finanzas Lazza → Facturar para re-facturar (corregí el precio antes si hace falta).</p>}
                     {ncPrPregunta.resuelto === "no" && <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-400">Listo: el PR quedó como rechazado, con una nota interna, y ya no cuenta como venta.</p>}
                     {ncPrPregunta.resuelto === "error" && <p className="mt-2 text-xs text-red-600">No se pudo cerrar el PR. Podés pasarlo a Rechazado a mano desde Presupuestos.</p>}
                   </div>
