@@ -156,7 +156,7 @@ export function FinanzasLazzaFacturar({ sociedadId }: { sociedadId: string }) {
 
   // Igual que "No facturar" de Ventas: el PR pasa a «rechazado» y sale de la lista; la factura anulada y su NC quedan como están.
   const noFacturar = async (f: FilaFacturar) => {
-    if (!confirm(`¿No facturar ${f.numero}? La factura anulada y su NC quedan como están, y el PR pasa a «rechazado» (sale de esta lista y de Ventas).`)) return;
+    if (!confirm(`¿No facturar ${f.numero}? La factura anulada y su NC quedan como están, y el PR pasa a «rechazado» (sale de esta lista).`)) return;
     const { error } = await db.from("presupuestos").update({ estado: "rechazado" }).eq("id", f.id).eq("sociedad_id", sociedadId);
     if (error) { alert("No se pudo guardar: " + error.message); return; }
     setRecarga((n) => n + 1);

@@ -36,6 +36,7 @@ import { useRefrescarAlVolver } from "@/lib/use-refrescar";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import EnviarOCProveedor from "@/components/enviar-oc-proveedor";
 import { calculateOwnStockPurchaseOrder, groupOwnStockItemsByCurrency, normalizePurchaseCurrency } from "@/lib/own-stock-purchase-orders";
+import { estadoPorRecibido } from "@/lib/compras-recepcion";
 import { calculateNetPrice, parseQuantityRange, type PriceListRule } from "@/lib/price-list-rules";
 import { observacionesParaCliente } from "@/lib/observaciones-cliente";
 import { margenPR, MARGEN_MINIMO_PR } from "@/lib/presupuesto-margen";
@@ -1613,7 +1614,7 @@ export default function PresupuestosLista() {
         if (error) throw new Error(error.message);
         await guardarEnvioInterno(editingPRId);
 
-        // Sync existing OCs with updated PR items (resets estado to pendiente)
+        // Sync existing OCs with updated PR items. Lo ya recibido se conserva (la OC queda con lo que falta).
         const ocsSynced = await syncOCsFromPR(editingPRId, newPR.modalidad_emision === "manual");
 
         setShowNewPR(false);
@@ -1812,7 +1813,7 @@ export default function PresupuestosLista() {
       // Get active OCs linked to this PR
       const { data: ocs } = await supabase
         .from("ordenes_compra")
-        .select("id, proveedor_id, moneda, observaciones")
+        .select("id, proveedor_id, moneda, observaciones, estado")
         .eq("presupuesto_origen_id", prId)
         .not("estado", "eq", "cancelada");
       if (!ocs || ocs.length === 0) return 0;
@@ -1842,22 +1843,47 @@ export default function PresupuestosLista() {
           : it.proveedor_id === oc.proveedor_id && !it.stock_propio)));
         if (matchingItems.length === 0) continue;
 
-        // Delete old OC items and recreate from PR
-        await supabase.from("orden_compra_items").delete().eq("orden_id", oc.id);
-
-        const ocItems = matchingItems.map((it: any, idx: number) => ({
-          orden_id: oc.id,
-          codigo: it.codigo || "",
-          descripcion: it.descripcion || "Sin descripción",
-          cantidad: Number(it.cantidad) || 1,
-          unidad: it.unidad || "u",
-          precio_unitario: Number(it.precio_costo) || 0,
-          iva_porcentaje: isManual ? 0 : Number(it.iva_porcentaje ?? 21),
-          orden: idx + 1,
-          cantidad_recibida: 0,
-          presupuesto_item_id: it.id,
-        }));
-        await supabase.from("orden_compra_items").insert(ocItems as any);
+        // Se actualizan los renglones de la OC en su lugar (no se borran): así se conserva lo recibido
+        // y los datos del proveedor/talle. Un renglón nuevo del PR se agrega; uno sacado del PR se borra
+        // solo si no llegó nada.
+        const { data: viejosRaw } = await (supabase as any).from("orden_compra_items").select("*").eq("orden_id", oc.id);
+        const viejos: any[] = [...(viejosRaw || [])];
+        const norm = (t: any) => String(t || "").trim().toLowerCase();
+        const sacar = (pred: (v: any) => boolean) => { const k = viejos.findIndex(pred); return k >= 0 ? viejos.splice(k, 1)[0] : null; };
+        const ocItems: any[] = [];
+        for (let idx = 0; idx < matchingItems.length; idx++) {
+          const it: any = matchingItems[idx];
+          const viejo = sacar((v) => v.presupuesto_item_id === it.id)
+            || (norm(it.codigo) ? sacar((v) => norm(v.codigo) === norm(it.codigo)) : null)
+            || sacar((v) => norm(v.descripcion) === norm(it.descripcion));
+          const datos = {
+            codigo: it.codigo || "",
+            descripcion: it.descripcion || "Sin descripción",
+            cantidad: Number(it.cantidad) || 1,
+            unidad: it.unidad || "u",
+            precio_unitario: Number(it.precio_costo) || 0,
+            iva_porcentaje: isManual ? 0 : Number(it.iva_porcentaje ?? 21),
+            orden: idx + 1,
+            presupuesto_item_id: it.id,
+            moneda: normalizePurchaseCurrency(it.costo_moneda),
+          };
+          if (viejo) {
+            await (supabase as any).from("orden_compra_items").update(datos).eq("id", viejo.id);
+            ocItems.push({ ...datos, cantidad_recibida: Number(viejo.cantidad_recibida) || 0 });
+          } else {
+            const nuevoItem = { ...datos, orden_id: oc.id, cantidad_recibida: 0 };
+            await (supabase as any).from("orden_compra_items").insert(nuevoItem);
+            ocItems.push(nuevoItem);
+          }
+        }
+        // Renglones que ya no están en el PR: se borran solo si no llegó nada (si llegó algo, quedan).
+        for (const v of viejos) {
+          if (Number(v.cantidad_recibida) > 0) {
+            ocItems.push({ ...v, precio_unitario: Number(v.precio_unitario) || 0, cantidad: Number(v.cantidad) || 0, iva_porcentaje: Number(v.iva_porcentaje ?? 21) });
+          } else {
+            await (supabase as any).from("orden_compra_items").delete().eq("id", v.id);
+          }
+        }
 
         // Recalculate OC totals
         const ocSubtotal = ocItems.reduce((sum, it) => sum + it.precio_unitario * it.cantidad, 0);
@@ -1867,9 +1893,10 @@ export default function PresupuestosLista() {
         const costoMonedas = new Set(matchingItems.map((it: any) => (it.costo_moneda || "ARS").startsWith("USD") ? "USD" : "ARS"));
         const ocMoneda = costoMonedas.size === 1 ? [...costoMonedas][0] : "ARS";
 
+        const hayRecibido = ocItems.some((i) => Number(i.cantidad_recibida) > 0);
         await (supabase as any)
           .from("ordenes_compra")
-          .update({ subtotal: ocSubtotal, iva: ocIva, total: ocSubtotal + ocIva, moneda: ocMoneda, estado: "pendiente" })
+          .update({ subtotal: ocSubtotal, iva: ocIva, total: ocSubtotal + ocIva, moneda: ocMoneda, estado: hayRecibido ? estadoPorRecibido(ocItems, oc.estado || "enviada") : "pendiente" })
           .eq("id", oc.id);
       }
       return ocs.length;
@@ -3226,7 +3253,7 @@ export default function PresupuestosLista() {
                   <Mail className="h-3.5 w-3.5" />
                   <span className="hidden @2xl:inline">Email</span>
                 </button>
-                {["solicitud", "pendiente", "rechazado", "postergado", "aprobado"].includes(selected.estado) && (
+                {(
                   <button
                     onClick={() => handleEditPR(selected)}
                     className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 transition-colors"

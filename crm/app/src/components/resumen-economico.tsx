@@ -181,7 +181,7 @@ export default function ResumenEconomico({ sociedadId, montos, notas, onIr, comp
           {columna("tengo")}
           {columna("debo")}
         </div>
-        <p className="mt-2 text-[11px] text-zinc-400">Pantallazo con los saldos de hoy. El detalle fino va en Reportes.</p>
+        <p className="mt-2 text-[11px] text-zinc-400">Pantallazo con los saldos de hoy. El detalle fino va en Reportes de Finanzas Lazza.</p>
       </details>
     </div>
   );

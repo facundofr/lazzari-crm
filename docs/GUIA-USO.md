@@ -17,11 +17,6 @@ Guía corta de cada pantalla para el equipo. La usa también el asistente ✨ pa
 **Buscador:** el cuadro "Buscar clientes, PR, facturas..." de arriba (Ctrl+K). Con 2 letras busca clientes (razón social), presupuestos (número), facturas (número) y productos (código o nombre), hasta 3 de cada uno, de la sociedad activa.
 **Ayuda (botón violeta abajo a la derecha):** muestra la guía de la pantalla donde estás y tiene un buscador ("¿Qué necesitás hacer?") que es gratis. Atajos: **Resumen de hoy**, **Stock bajo**, **Mis pendientes**, **Clientes dormidos**, **Top facturado**. Si la guía no alcanza, **¿No alcanza? Preguntarle a la IA**: responde con la guía y con los datos que tu usuario puede ver; solo consulta, no carga ni cambia nada. Tiene un tope de gasto por mes (US$ 5); al llegar, queda la búsqueda gratis. **Solo Augusto (por ahora): Preguntale o pedile algo a la IA**: además de consultar, le podés pedir cambios chicos (mail, teléfono, dirección, notas o datos bancarios de un cliente o proveedor; agregar o corregir un contacto; a quién se envió una factura o su nota interna; observaciones de una OC; cuánto llegó de un renglón de OC). Te muestra **antes → después** y no guarda nada hasta que apretás **Hacer**; **Descartar** la deja sin hacer. Arriba, **Historial** ("Lo que hizo la IA") lista lo hecho con **Deshacer** (no pisa lo que alguien cambió después). No factura, no toca precios, pagos ni ARCA, y no borra.
 
-### Dashboard — /dashboard — todos
-**Para qué sirve:** resumen del día: facturado del mes, presupuestos activos, conversión, margen promedio, últimos PR, alertas, mejores clientes, actividad.
-**Cómo se hace:** 1) **Nuevo PR** arma un presupuesto rápido; **Clientes** va a la lista. 2) **Pendientes** (admin y administrativo) lleva a la lista de cosas abiertas. 3) **Ver en Reportes** para gráficos e historia.
-**Ojo:** admin y administrativo ven "¿Cubro los gastos fijos?" (vendido neto del mes vs objetivo, ganancia vs fijos, "¿Cuánto me falta vender?"). El dólar del alquiler se carga ahí y queda solo en esa compu. El "Margen promedio" de arriba se calcula distinto que el del recuadro.
-
 ### Pendientes — /pendientes — todos
 **Para qué sirve:** junta lo que hay para hacer y para responder, por área (Pagos, Cobros, Compras y proveedores, Gastos fijos, Bancos y créditos, Sistema, Decisiones).
 **Cómo se hace:** 1) Arriba, "Atrasos que cuenta el sistema" (facturas vencidas, OC sin factura, PR en Solicitud, extracto sin cruzar; solo lo que tu rol ve). 2) **Ir** lleva a la pantalla donde se resuelve. 3) Escribí en **Respuesta** (se guarda al salir). 4) Tildá para marcar hecho; **Ver hechos** / **Ver abiertos**. 5) "Agregar un pendiente…", elegí área y "Para hacer"/"Para responder", **Agregar**. 6) **Copiar respuestas** copia lo abierto con tus respuestas.
@@ -38,7 +33,7 @@ Guía corta de cada pantalla para el equipo. La usa también el asistente ✨ pa
 ### Clientes — /clientes — todos (viewer solo mira)
 **Para qué sirve:** padrón de clientes con datos, contactos, sucursales, cuenta corriente y Ficha 360.
 **Cómo se hace:** 1) **Nuevo cliente** → CUIT → **Consultar ARCA** → **Crear cliente**. 2) Buscar por razón social, CUIT o email, o filtrar. 3) En el cliente: Datos, Contactos, Sucursales, Relevamiento, **Ficha 360**, Actividad, Cta. Cte. 4) Ficha 360: cotizado, ganado, conversión, última compra, saldo, oportunidades, PR, artículos, facturas, cobros y muestras en su poder. 5) Tarjeta **Central de Deudores (BCRA)**: semáforo, deuda en bancos, cheques rechazados; **Actualizar ahora**, **Ver detalle por banco**.
-**Ojo:** "cliente parecido / CUIT repetido" y BCRA son avisos: se puede guardar igual. **Pide OC para facturar** lo muestra en Ventas → "Esperando OC" (no bloquea). **Eliminar** pide motivo; con historial queda desactivado.
+**Ojo:** "cliente parecido / CUIT repetido" y BCRA son avisos: se puede guardar igual. **Pide OC para facturar** lo muestra en Finanzas Lazza → Facturar (no bloquea). **Eliminar** pide motivo; con historial queda desactivado.
 
 ### Oportunidades — /oportunidades — todos
 **Para qué sirve:** a quién llamar y qué ofrecerle según lo que compró.
@@ -50,20 +45,10 @@ Guía corta de cada pantalla para el equipo. La usa también el asistente ✨ pa
 **Cómo se hace:** 0) Pestaña **Armar presupuesto**: pegá el mail o WhatsApp (con la firma), o arrastrá foto, PDF o Excel → **Armar presupuesto con IA**. La IA busca al cliente, elige artículo y proveedor de la lista de costos y propone el precio (el último que le cobraste si deja margen; si no, el de la lista). Si le falta un dato (talle, modelo, marca) pregunta: respondé o **Seguir sin responder**. Revisá el semáforo (Listo / Revisar / Falta), cambiá artículo con **Buscar** o el precio a mano, y usá "Decile a la IA qué cambiar" (**Deshacer** vuelve atrás). **Crear presupuesto** lo deja en la lista y lo abre. 1) **Nuevo PR** → cliente → **Agregar item**, **Lista de costos** o **Repetir presupuesto anterior** → **Crear presupuesto**. 2) Pedido largo: **Cotización express (IA)** (Excel, PDF, imagen o mensaje) → **Armar cotización** (si a la IA le falta un dato como talle, modelo o marca, pregunta: respondé o **Seguir sin responder**) → revisá; en "Decile a la IA qué cambiar" podés pedir "agregame 20 guantes nitrilo T9", "cambiá los anteojos a Segufer" o "sacá X" → **Aplicar** → **Agregar … al presupuesto**. 3) Si todavía no se cotiza: **Crear como Solicitud** → escribí lo que pide el cliente y/o **Elegir productos (como en un PR)** o **Armar con IA** → después **Convertir**. 4) Enviar: **Descargar PDF**, **Enviar por email**, **Copiar resumen** (para WhatsApp). 5) Estado: Solicitud, Pendiente, Aprobado, Rechazado (dentro: Rechazado o Postergado, con motivo). 6) **Seguimiento**: renglones apretados con días sin respuesta por colores, estado y **Llamar**. 7) Arriba, la franja roja "X vencidos (últimos 30 días)" → **Ver**; el botón **Vencido** está al lado de Pendiente. En cada PR vencido, **Extender 5 días** (vence hoy + 5). 8) En el detalle: franja con ítems, total, ganancia y margen; **Ocultar costos** (para mostrarle la pantalla al cliente) y la pantalla completa se recuerdan en la compu. 9) **Eliminar** (papelera): el admin cualquiera; el vendedor solo los suyos sin aprobar. Pide motivo (puede ir vacío) y queda en notas internas; el admin los ve en **Papelera** y los puede restaurar.
 **Ojo:** margen mínimo 15 % = aviso, se guarda igual. Cantidad a la argentina: "1.000" = mil; cantidad con decimales o precio 0 = aviso amarillo, no frena. **Ganancia / Margen** descuenta 7 % de gastos (2 % si es manual sin ARCA): rojo < 15 %, ámbar < 20 %; es interno. En la ventana del PR, debajo de **Descuento general**: Subtotal · IVA · Total y abajo lo interno 🔒 (Margen · Ganancia · neto). Aprobar sin costos avisa (**Aprobar de todos modos**) y después ofrece enviar las OC. Aprobado: **+ Cargar OC** del cliente. "Facturado" lo pone la factura. Los recuadros son del mes en curso; "Todos" no muestra facturados.
 
-### Muestras — /muestras — todos (viewer solo mira)
-**Para qué sirve:** prendas que se dejan al cliente para ver.
-**Cómo se hace:** 1) **Registrar entrega** → cliente, sucursal, prendas (artículo, talle, color, cantidad), **Otra prenda** → **Registrar**. 2) Al resolver, cada prenda: **Devolvió**, **Se la quedó** o **Baja / regalo**.
-**Ojo:** "Se la quedó" no factura: hay que hacer el PR o la factura. "Más de 30 días en el cliente" avisa qué reclamar.
-
-### Ventas — /ventas — todos
-**Para qué sirve:** sigue cada PR aprobado hasta cobrarlo.
-**Cómo se hace:** 1) Bandejas: Esperando OC, Para facturar, Para entregar, Para cobrar, Terminadas, Todas. 2) **Próximo paso** (Cargar OC / Facturar / Entregar / Cobrar). 3) En la venta: OC del cliente, entrega (remitos o **Remitar desde el PR**), compras, factura y cobro; **Cobrar** va al cobro. 4) Buscar por cliente, PR, OC o factura.
-**Ojo:** sin OC del cliente igual se factura. Más de 15 días aprobado sin facturar → aviso. **Facturar** y **Cancelar venta** solo con permiso de facturación (el resto ve "La factura la emite administración"). Cancelar pasa el PR a rechazado.
-
 ### Facturas — /consulta-facturas — todos
 **Para qué sirve:** consultar facturas de venta y de compra (solo lectura).
 **Cómo se hace:** 1) **De venta** / **De compra**; buscar por cliente o proveedor, CUIT, número, PR u OC. 2) Venta: **Ver / bajar PDF**, **Reenviar al cliente**. 3) Compra: **Ver factura del proveedor**.
-**Ojo:** acá no se emite, cobra, paga ni anula (eso es Ventas o Finanzas).
+**Ojo:** acá no se emite, cobra, paga ni anula (eso es Finanzas Lazza).
 
 ---
 
@@ -129,7 +114,7 @@ Lo que dejaste con dudas y lo que encuentra el sistema (fechas futuras, cheques 
 Informes: BCRA clientes y BCRA proveedores. Objetivos: consulta de objetivos (monto, período, asignado, activo).
 
 ### Cobrar → Facturas de venta (Facturación ARCA)
-1) **Emitir factura**: tipo, cliente, ítems; dólares → **Traer BNA**; **Con ARCA** o **Manual (sin CAE)**. 2) Desde Ventas "Para facturar" abre lo mismo. 3) En la factura: **Registrar cobro**, **Anular comprobante** (solo sin CAE). 4) **Nota de crédito (NC) a un cliente**: abrí la factura → **Emitir Nota de crédito** (si estaba pagada queda a favor). **Ojo:** facturar solo en el sistema publicado, nunca en una compu de prueba. FCE pide CBU y SCA/ADC. Divisa o billete sale de la ficha: Corteva, Synthon y Aerolíneas se facturan en ARS o USD **divisa**, nunca billete.
+1) **Emitir factura**: tipo, cliente, ítems; dólares → **Traer BNA**; **Con ARCA** o **Manual (sin CAE)**. 2) Desde Finanzas Lazza → Facturar abre lo mismo. 3) En la factura: **Registrar cobro**, **Anular comprobante** (solo sin CAE). 4) **Nota de crédito (NC) a un cliente**: abrí la factura → **Emitir Nota de crédito** (si estaba pagada queda a favor). **Ojo:** facturar solo en el sistema publicado, nunca en una compu de prueba. FCE pide CBU y SCA/ADC. Divisa o billete sale de la ficha: Corteva, Synthon y Aerolíneas se facturan en ARS o USD **divisa**, nunca billete.
 
 ### Cobrar → CC Clientes y cobro masivo
 1) Cliente → **Realizar cobro**. 2) Tildá facturas → **Continuar a liquidación**. 3) Medios de pago y retenciones; **Adjuntar OP y leer con IA**; USD: **Divisas** o **Billetes** y cotización. 4) Si faltan pesos: "Saldo en la factura más nueva" o "Diferencia a la cuenta corriente (las facturas quedan pagadas)". 5) "Dejar en Revisar: diferencia a confirmar". 6) **Confirmar cobro**. **Ojo:** con diferencia se confirma igual. Si sobra, queda a favor. La diferencia a CC no aparece en USD. **Ajuste manual** corrige saldo sin mover caja.
@@ -167,9 +152,6 @@ Líneas de crédito: usado, disponible, vencimiento, TNA (consulta).
 ---
 
 ## Sistema
-
-### Reportes — /reportes — todos (Comisiones: admin y administrativo)
-Pestañas: Analisis comercial, Compras vs ventas, Comisiones, Ranking por Articulo, Libro IVA. "Moneda": Original, Todo en ARS, Todo en USD.
 
 ### Configuración — /configuracion — super_admin, admin, administrativo
 **Usuarios** (solo super_admin: **Invitar usuario**, rol, quitar acceso). **Integraciones** (ARCA, banco, mail, IA). **Comisiones** (super_admin y admin: **Nueva regla de comisión**). **Retenciones** (mínimos y tasas). **Fechas de cheque** (días del mes en que se centralizan los cheques emitidos; la OP los propone).
