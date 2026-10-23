@@ -25,7 +25,7 @@ import { useToast } from "@/components/ui/toast";
 import { ProveedorFormModal } from "@/components/proveedor-form-modal";
 import { EVENTO_FACTURAS_COMPRA } from "@/components/carga-masiva-global";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
-import { facturaDesdeDatos, lineKey, type FacturaCarga } from "@/lib/factura-compra-leida";
+import { facturaDesdeDatos, lineKey, type FacturaCarga, type ItemFactura } from "@/lib/factura-compra-leida";
 import { leerFacturaLocal } from "@/lib/leer-factura-local";
 import { traerTarjetas, tarjetaSugerida, registrarPagoTarjeta, movimientoPagoTarjeta } from "@/lib/pago-tarjeta";
 import { cant } from "@/lib/cargar-factura";
@@ -49,6 +49,8 @@ const SOCIEDAD_POR_CUIT: Record<string, { id: string; nombre: string }> = {
 const TIPO_SIN_FACTURA = "FC Manual";
 const numeroSinFactura = (fecha: string) => `SIN FACTURA ${String(fecha || todayAR()).split("-").reverse().join("/")}`;
 const esNumeroSinFactura = (n: string) => /^SIN FACTURA/i.test(n.trim());
+const renglonVacio = (iva = 21): ItemFactura => ({ codigo: "", descripcion: "", cantidad: 1, precio_unitario: 0, descuento_porcentaje: 0, iva_porcentaje: iva, unidad: "UN" });
+const netoRenglon = (it: ItemFactura) => round2((Number(it.cantidad) || 0) * (Number(it.precio_unitario) || 0) * (1 - (Number(it.descuento_porcentaje) || 0) / 100));
 const esMercadoLibre = (t: string | null | undefined) => /mercado\s*libre/i.test(String(t || ""));
 
 type Proveedor = { id: string; razon_social: string; cuit: string | null; talles_especiales?: string[] | null; medio_pago_preferido?: string | null; plazo_cheque_dias?: number | null; dias_pago?: number | null; email?: string | null; cbu?: string | null; alias_bancario?: string | null };
@@ -100,9 +102,10 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
   // Carga a mano: sin archivo. Se completan los datos de la factura a mano.
   const [manual, setManual] = useState(false);
   const [provsLista, setProvsLista] = useState<Proveedor[]>([]);
-  const [ivaTxt, setIvaTxt] = useState("");
   const [percTxt, setPercTxt] = useState("");
   const [totalTxt, setTotalTxt] = useState("");
+  // Cambia al sacar/agregar renglones: los campos de texto de la tabla se rearman con los valores nuevos.
+  const [filasKey, setFilasKey] = useState(0);
 
   const plata = (n: number) => formatCurrency(n, factura?.moneda || "ARS");
 
@@ -112,7 +115,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
     setError(""); setFactura(null); setProveedor(null); setBuscandoProv(false);
     setConVisa(null); setFaltaElegirPago(false); setForma(null); setDiasTxt(null); setNotaPago(""); setDuplicada(false); setEsNota(false); setOtraSociedad(""); setNoSeLeyo(false); setOrigen("");
     setFuentesSF([]); setUsarSaldo(false);
-    setManual(false); setIvaTxt(""); setPercTxt(""); setTotalTxt("");
+    setManual(false); setPercTxt(""); setTotalTxt("");
   }
 
   async function leer(file: File) {
@@ -144,7 +147,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
   async function empezarManual() {
     reiniciar(); setArchivo(null); setManual(true);
     setFactura({ localId: `m${Date.now()}`, dbId: null, file: null, archivoNombre: "", numero: "", tipo: "FC A", fecha: todayAR(), vencimiento: "", cae: "", moneda: "ARS",
-      subtotal: 0, iva: 0, ivaPorcentaje: 21, percepciones: 0, total: 0, items: [], cuit: "" });
+      subtotal: 0, iva: 0, ivaPorcentaje: 21, percepciones: 0, total: 0, items: [renglonVacio()], cuit: "" });
     setNetoTxt("");
     if (!provsLista.length) {
       const { data: ps } = await db.from("proveedores").select("id, razon_social, cuit, talles_especiales, medio_pago_preferido, plazo_cheque_dias, dias_pago, email, cbu, alias_bancario").eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social");
@@ -152,26 +155,31 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
     }
   }
 
-  /** Carga a mano: neto o % → IVA y total se arman solos; IVA o percepciones → el total se rearma; el total se puede corregir a mano. */
-  function cambiarManual(c: { neto?: string; pct?: number; iva?: string; perc?: string; total?: string; tipo?: string; numero?: string; fecha?: string }) {
+  /** Carga a mano: renglones como en una factura (cantidad × precio, descuento, IVA por renglón). Neto, IVA y total se arman solos; las percepciones y el total se pueden corregir. */
+  function cambiarManual(c: { items?: ItemFactura[]; perc?: string; total?: string; tipo?: string; numero?: string; fecha?: string }) {
     if (!factura) return;
-    const pct = c.pct ?? factura.ivaPorcentaje;
-    const neto = num(c.neto ?? netoTxt);
-    const iva = c.iva != null ? num(c.iva) : (c.neto != null || c.pct != null) ? round2(neto * pct / 100) : factura.iva;
+    const items = c.items ?? factura.items;
+    const neto = round2(items.reduce((a, it) => a + netoRenglon(it), 0));
+    const iva = round2(items.reduce((a, it) => a + round2(netoRenglon(it) * (Number(it.iva_porcentaje) || 0) / 100), 0));
     const perc = c.perc != null ? num(c.perc) : factura.percepciones;
     const total = c.total != null ? num(c.total) : round2(neto + iva + perc);
-    if (c.neto != null) setNetoTxt(c.neto);
-    if (c.iva != null) setIvaTxt(c.iva); else if (c.neto != null || c.pct != null) setIvaTxt(iva ? aTexto(iva) : "");
+    setNetoTxt(neto ? aTexto(neto) : "");
     if (c.perc != null) setPercTxt(c.perc);
-    if (c.total != null) setTotalTxt(c.total); else setTotalTxt(total ? aTexto(total) : "");
-    setFactura({ ...factura, ivaPorcentaje: pct, subtotal: neto, iva, percepciones: perc, total, ...(c.tipo != null ? { tipo: c.tipo } : {}), ...(c.numero != null ? { numero: c.numero } : {}), ...(c.fecha != null ? { fecha: c.fecha } : {}) });
+    setTotalTxt(c.total != null ? c.total : total ? aTexto(total) : "");
+    setFactura({ ...factura, items, subtotal: neto, iva, percepciones: perc, total, ivaPorcentaje: Number(items[0]?.iva_porcentaje ?? factura.ivaPorcentaje),
+      ...(c.tipo != null ? { tipo: c.tipo } : {}), ...(c.numero != null ? { numero: c.numero } : {}), ...(c.fecha != null ? { fecha: c.fecha } : {}) });
+  }
+  function cambiarRenglon(i: number, cambio: Partial<ItemFactura>) {
+    if (factura) cambiarManual({ items: factura.items.map((it, k) => k === i ? { ...it, ...cambio } : it) });
   }
 
   /** Cambia el tipo en la carga a mano: "Sin factura" va sin IVA y con número SIN FACTURA dd/mm/aaaa; al volver a una factura se limpia. */
   function cambiarTipoManual(tipo: string) {
     if (!factura) return;
-    if (tipo === TIPO_SIN_FACTURA) cambiarManual({ tipo, pct: 0, numero: esNumeroSinFactura(factura.numero) || !factura.numero.trim() ? numeroSinFactura(factura.fecha) : factura.numero });
-    else cambiarManual({ tipo, ...(factura.tipo === TIPO_SIN_FACTURA ? { pct: 21, numero: esNumeroSinFactura(factura.numero) ? "" : factura.numero } : {}) });
+    const aSin = tipo === TIPO_SIN_FACTURA, deSin = factura.tipo === TIPO_SIN_FACTURA;
+    const items = aSin || deSin ? factura.items.map(it => ({ ...it, iva_porcentaje: aSin ? 0 : 21 })) : factura.items;
+    const numero = aSin ? (esNumeroSinFactura(factura.numero) || !factura.numero.trim() ? numeroSinFactura(factura.fecha) : factura.numero) : deSin && esNumeroSinFactura(factura.numero) ? "" : factura.numero;
+    cambiarManual({ tipo, items, numero });
   }
 
   async function usarDatos(file: File, d: any, como: "sistema" | "ia") {
@@ -270,7 +278,8 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
     try {
       if (!ncKey.current) ncKey.current = crypto.randomUUID();
       const iva = Number(factura.ivaPorcentaje ?? 21);
-      const items = factura.items.length ? factura.items.map(it => ({ codigo: it.codigo || null, descripcion: it.descripcion, cantidad: it.cantidad, precio_unitario: it.precio_unitario, descuento_porcentaje: it.descuento_porcentaje, unidad: it.unidad, iva_porcentaje: it.iva_porcentaje }))
+      const itemsFC = manual ? factura.items.filter(it => it.descripcion.trim() && it.cantidad > 0) : factura.items;
+      const items = itemsFC.length ? itemsFC.map(it => ({ codigo: it.codigo || null, descripcion: it.descripcion, cantidad: it.cantidad, precio_unitario: it.precio_unitario, descuento_porcentaje: it.descuento_porcentaje, unidad: it.unidad, iva_porcentaje: it.iva_porcentaje }))
         : [{ codigo: null, descripcion: "Nota de crédito (sin detalle de artículos)", cantidad: 1, precio_unitario: num(netoTxt), descuento_porcentaje: 0, unidad: "UN", iva_porcentaje: iva }];
       const notas = [notaPago.trim() ? `Nota para Finanzas: ${notaPago.trim()}` : "", "Cargada con «Compras Lazza» (sin OC)"].filter(Boolean).join("\n");
       const { data, error: e } = await db.rpc("registrar_nota_credito_compra_v2", {
@@ -304,8 +313,9 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
       // Sin OC (Augusto 19/10): la factura va a la cuenta corriente del proveedor. No se toca ningún costo.
       // Sin artículos leídos, un renglón "Factura sin detalle" con el neto.
       const iva = Number(factura.ivaPorcentaje ?? 21);
-      const items = factura.items.length
-        ? factura.items.map((it, i) => ({ key: lineKey(factura, i), ...it }))
+      const itemsFC = manual ? factura.items.filter(it => it.descripcion.trim() && it.cantidad > 0) : factura.items;
+      const items = itemsFC.length
+        ? itemsFC.map((it, i) => ({ key: lineKey(factura, i), ...it }))
         : [{ key: "fc", codigo: "", descripcion: "Factura (sin detalle de artículos)", cantidad: 1, precio_unitario: num(netoTxt), descuento_porcentaje: 0, iva_porcentaje: iva, unidad: "UN" }];
       const notas = [
         pagaVisa || cubreTodo ? "" : textoPago,
@@ -416,15 +426,34 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
                       <option>ARS</option><option>USD</option>
                     </select></label>
                 </div>
-                <div className="flex flex-wrap items-end gap-2">
-                  <label className="text-[11px] text-zinc-500">Neto<input value={netoTxt} onChange={e => cambiarManual({ neto: e.target.value })} inputMode="decimal" placeholder="0,00" className="mt-0.5 block w-32 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-right text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100" /></label>
-                  <label className="text-[11px] text-zinc-500">IVA %
-                    <select value={String(factura.ivaPorcentaje)} onChange={e => cambiarManual({ pct: Number(e.target.value) })} className="mt-0.5 block w-20 rounded border border-zinc-300 bg-white px-1 py-0.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100">
-                      {["21", "10.5", "27", "0"].map(v => <option key={v} value={v}>{v.replace(".", ",")}</option>)}
-                    </select></label>
-                  <label className="text-[11px] text-zinc-500">IVA $<input value={ivaTxt} onChange={e => cambiarManual({ iva: e.target.value })} inputMode="decimal" placeholder="0,00" className="mt-0.5 block w-28 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-right text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100" /></label>
-                  <label className="text-[11px] text-zinc-500">Percepciones<input value={percTxt} onChange={e => cambiarManual({ perc: e.target.value })} inputMode="decimal" placeholder="0,00" className="mt-0.5 block w-28 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-right text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100" /></label>
-                  <label className="text-[11px] text-zinc-500">Total<input value={totalTxt} onChange={e => cambiarManual({ total: e.target.value })} inputMode="decimal" placeholder="0,00" className="mt-0.5 block w-32 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-right text-sm font-bold text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100" /></label>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead><tr className="text-left text-[11px] text-zinc-500">
+                      <th className="px-1 font-normal">Código</th><th className="px-1 font-normal">Descripción</th><th className="px-1 text-right font-normal">Cant.</th><th className="px-1 text-right font-normal">Precio unit.</th>
+                      <th className="px-1 text-right font-normal">Dto %</th><th className="px-1 font-normal">IVA %</th><th className="px-1 text-right font-normal">Importe</th><th />
+                    </tr></thead>
+                    <tbody>
+                      {factura.items.map((it, i) => (
+                        <tr key={`${filasKey}-${i}`}>
+                          <td className="p-0.5"><input value={it.codigo} onChange={e => cambiarRenglon(i, { codigo: e.target.value })} placeholder="Cód." className="w-20 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100" /></td>
+                          <td className="p-0.5"><input value={it.descripcion} onChange={e => cambiarRenglon(i, { descripcion: e.target.value })} placeholder="Qué se compró" className="w-full min-w-40 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100" /></td>
+                          <td className="p-0.5"><input defaultValue={it.cantidad ? aTexto(it.cantidad) : ""} onChange={e => cambiarRenglon(i, { cantidad: num(e.target.value) })} inputMode="decimal" className="w-16 text-right rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100" /></td>
+                          <td className="p-0.5"><input defaultValue={it.precio_unitario ? aTexto(it.precio_unitario) : ""} onChange={e => cambiarRenglon(i, { precio_unitario: num(e.target.value) })} inputMode="decimal" placeholder="0,00" className="w-28 text-right rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100" /></td>
+                          <td className="p-0.5"><input defaultValue={it.descuento_porcentaje ? aTexto(it.descuento_porcentaje) : ""} onChange={e => cambiarRenglon(i, { descuento_porcentaje: Math.min(100, num(e.target.value)) })} inputMode="decimal" placeholder="0" className="w-14 text-right rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100" /></td>
+                          <td className="p-0.5"><select value={String(it.iva_porcentaje)} onChange={e => cambiarRenglon(i, { iva_porcentaje: Number(e.target.value) })} className="w-16 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100">{["21", "10.5", "27", "0"].map(v => <option key={v} value={v}>{v.replace(".", ",")}</option>)}</select></td>
+                          <td className="whitespace-nowrap px-1 text-right">{plata(netoRenglon(it))}</td>
+                          <td className="p-0.5"><button onClick={() => { setFilasKey(k => k + 1); cambiarManual({ items: factura.items.length > 1 ? factura.items.filter((_, k) => k !== i) : [renglonVacio(factura.tipo === TIPO_SIN_FACTURA ? 0 : 21)] }); }} title="Sacar renglón" className="rounded p-1 text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700"><X className="h-3.5 w-3.5" /></button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <button onClick={() => cambiarManual({ items: [...factura.items, renglonVacio(factura.tipo === TIPO_SIN_FACTURA ? 0 : 21)] })} className="mt-1 text-xs font-medium text-orange-600 hover:underline">+ Agregar renglón</button>
+                </div>
+                <div className="flex flex-wrap items-end justify-end gap-3">
+                  <div className="text-[11px] text-zinc-500">Neto<p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{plata(num(netoTxt))}</p></div>
+                  <div className="text-[11px] text-zinc-500">IVA<p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{plata(factura.iva)}</p></div>
+                  <label className="text-[11px] text-zinc-500">Percepciones<input value={percTxt} onChange={e => cambiarManual({ perc: e.target.value })} inputMode="decimal" placeholder="0,00" className="mt-0.5 block w-28 text-right rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100" /></label>
+                  <label className="text-[11px] text-zinc-500">Total<input value={totalTxt} onChange={e => cambiarManual({ total: e.target.value })} inputMode="decimal" placeholder="0,00" className="mt-0.5 block w-32 text-right font-bold rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100" /></label>
                 </div>
                 <label className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
                   <FileUp className="h-3.5 w-3.5" /> PDF o foto (opcional): {archivo ? <b className="text-zinc-700 dark:text-zinc-200">{archivo.name}</b> : "sin adjuntar"}
