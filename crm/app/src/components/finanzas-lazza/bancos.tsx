@@ -15,6 +15,7 @@ import { supabase } from "@/lib/supabase/client";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { diasDesde, pesosDeObservaciones, resumenPrestamo, type CuotaPrestamo } from "@/lib/bancos-lazza";
 import { FinanzasLazzaCheques } from "./cheques";
+import FinanzasParaConfirmar from "@/components/finanzas-para-confirmar";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -56,7 +57,7 @@ async function traerBancos(sociedadId: string) {
   };
 }
 
-export function FinanzasLazzaBancos({ sociedadId, pestanaInicial = "cuentas" }: { sociedadId: string; pestanaInicial?: "cuentas" | "prestamos" | "cheques" }) {
+export function FinanzasLazzaBancos({ sociedadId, pestanaInicial = "cuentas" }: { sociedadId: string; pestanaInicial?: "cuentas" | "prestamos" | "cheques" | "extracto" }) {
   const [datos, setDatos] = useState<Awaited<ReturnType<typeof traerBancos>> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [subiendo, setSubiendo] = useState<Cuenta | null>(null);
@@ -64,7 +65,7 @@ export function FinanzasLazzaBancos({ sociedadId, pestanaInicial = "cuentas" }: 
   const [abiertaT, setAbiertaT] = useState<string | null>(null);
   const [pago, setPago] = useState<{ prestamo: Prestamo; fecha: string; monto: string } | null>(null);
   const [guardando, setGuardando] = useState(false);
-  const [pestana, setPestana] = useState<"cuentas" | "prestamos" | "cheques">(pestanaInicial);
+  const [pestana, setPestana] = useState<"cuentas" | "prestamos" | "cheques" | "extracto">(pestanaInicial);
   const [marcandoCuota, setMarcandoCuota] = useState<string | null>(null);
   const hoy = todayAR();
 
@@ -128,10 +129,14 @@ export function FinanzasLazzaBancos({ sociedadId, pestanaInicial = "cuentas" }: 
         <button type="button" onClick={() => setPestana("cuentas")} className={botonPestana(pestana === "cuentas")}>Cuentas y tarjetas</button>
         <button type="button" onClick={() => setPestana("prestamos")} className={botonPestana(pestana === "prestamos")}>Préstamos ({datos.prestamos.length})</button>
         <button type="button" onClick={() => setPestana("cheques")} className={botonPestana(pestana === "cheques")}>Cheques</button>
+        <button type="button" onClick={() => setPestana("extracto")} className={botonPestana(pestana === "extracto")}>Extracto</button>
       </div>
 
       {/* Cheques (23/10, Augusto): la tarjeta Cheques salió del inicio y vive acá, con Martín F. adentro. */}
       {pestana === "cheques" && <FinanzasLazzaCheques sociedadId={sociedadId} />}
+
+      {/* Extracto (23/10, Augusto): subir el Excel "Movimientos" del BBVA y cerrar las líneas; la bandeja de siempre, en versión simple. */}
+      {pestana === "extracto" && <FinanzasParaConfirmar simple />}
 
       {pestana === "cuentas" && (
         <>

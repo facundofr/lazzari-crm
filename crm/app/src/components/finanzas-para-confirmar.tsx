@@ -43,7 +43,11 @@ const CONF: Record<Confianza, { label: string; clase: string }> = {
   baja: { label: "Sin resolver", clase: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" },
 };
 
-export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: string) => void }) {
+/**
+ * `simple` (23/10/2026, Bancos > Extracto de Finanzas Lazza): la misma bandeja y la misma lógica, con menos pantalla:
+ * tres números arriba, una sola lista "Para vos", los impuestos y comisiones del banco juntos en una fila y el registro como link.
+ */
+export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { onIrATab?: (tab: string) => void; simple?: boolean }) {
   const { sociedadActiva, profile } = useUser() as any;
   const sociedadId: string | undefined = sociedadActiva?.id;
   const [cargando, setCargando] = useState(true);
@@ -68,8 +72,10 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
   const [aviso, setAviso] = useState<string | null>(null);
   const [archivos, setArchivos] = useState<ArchivoPreview[]>([]);
   const [verRegistro, setVerRegistro] = useState(false);
+  const [verResueltas, setVerResueltas] = useState(false);
+  const [verRuido, setVerRuido] = useState(false);
   const [filtroRegistro, setFiltroRegistro] = useState("");
-  const [abiertos, setAbiertos] = useState<Record<Confianza, boolean>>({ alta: true, media: true, baja: false });
+  const [abiertos, setAbiertos] = useState<Record<Confianza, boolean>>(simple ? { alta: false, media: true, baja: true } : { alta: true, media: true, baja: false });
   const [corrigiendo, setCorrigiendo] = useState<string | null>(null);
   const [correccion, setCorreccion] = useState<{ clasificacion: ClasificacionLinea | ""; nota: string; recordar: boolean }>({ clasificacion: "", nota: "", recordar: true });
   const [arrastrando, setArrastrando] = useState(false);
@@ -677,6 +683,11 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
   if (!sociedadId) return null;
 
   const registroVisible = registro.filter((r) => !filtroRegistro.trim() || `${r.resumen} ${r.accion} ${r.tipo} ${nombres.get(r.usuario_id || "")}`.toLowerCase().includes(filtroRegistro.trim().toLowerCase()));
+  /** Vista simple: impuestos y comisiones que ya cruzan solos van juntos en una fila; lo demás sin cerrar es "para vos". */
+  const esRuidoSimple = (i: ItemBandeja) => Boolean(i.cruce && ["impuesto", "gasto_bancario"].includes(i.cruce.clasificacion));
+  const ruidoSimple = porConfianza.alta.filter(esRuidoSimple);
+  const resueltasSimple = porConfianza.alta.filter((i) => !esRuidoSimple(i));
+  const paraVosSimple = [...porConfianza.media, ...porConfianza.baja];
 
   const renglon = (i: ItemBandeja) => {
     const abiertoCorregir = corrigiendo === i.linea_id;
@@ -698,17 +709,17 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
           <div className="flex shrink-0 gap-1">
             {puedeConfirmar && (
               <button disabled={ocupado !== null} onClick={() => void confirmar([i], Boolean(i.cobro))} className="rounded-md bg-emerald-600 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
-                {ocupado === i.linea_id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Confirmar"}
+                {ocupado === i.linea_id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : simple ? "Sí, es eso" : "Confirmar"}
               </button>
             )}
             <button disabled={ocupado !== null} onClick={() => {
-              if (i.cobro || i.gasto) { onIrATab?.("extractos"); return; }
+              if (!simple && (i.cobro || i.gasto)) { onIrATab?.("extractos"); return; }
               setCorrigiendo(abiertoCorregir ? null : i.linea_id);
               setCorreccion({ clasificacion: (i.cruce?.clasificacion as ClasificacionLinea) || "", nota: i.cruce?.nota || "", recordar: true });
             }} className="rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800" title={i.cobro || i.gasto ? "Abre Extractos para resolverla a mano" : "Elegir otra clasificación"}>
-              Corregir
+              {simple ? "Otra cosa" : "Corregir"}
             </button>
-            {i.importe > 0 && !i.cobro && !faltaMigracion && (
+            {!simple && i.importe > 0 && !i.cobro && !faltaMigracion && (
               <button disabled={ocupado !== null} onClick={() => setAnterior(anterior?.linea_id === i.linea_id ? null : { linea_id: i.linea_id, cliente: "", facturas: "", bruto: "", referencia: "", rets: [{ tipo: "retencion_ganancias", monto: "", certificado: "" }, { tipo: "retencion_iibb", monto: "", certificado: "" }] })}
                 className="rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800" title="Cobro de facturas que no están en el CRM: cliente, retenciones con certificado y nota literal">
                 Sist. anterior
@@ -731,7 +742,7 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
             <input value={correccion.nota} onChange={(e) => setCorreccion((c) => ({ ...c, nota: e.target.value }))} placeholder="Nota (ej. sueldo Mariana)" className="min-w-[12rem] flex-1 rounded-md border border-zinc-200 bg-white px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900" />
             <label className="flex items-center gap-1"><input type="checkbox" checked={correccion.recordar} onChange={(e) => setCorreccion((c) => ({ ...c, recordar: e.target.checked }))} /> Recordar para la próxima</label>
             <button disabled={ocupado !== null} onClick={() => void guardarCorreccion(i)} className="rounded-md bg-emerald-600 px-2 py-1 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">Guardar</button>
-            <button onClick={() => onIrATab?.("extractos")} className="text-orange-600 hover:underline">Cheques, cuentas o movimientos: en Extractos</button>
+            {!simple && <button onClick={() => onIrATab?.("extractos")} className="text-orange-600 hover:underline">Cheques, cuentas o movimientos: en Extractos</button>}
           </div>
         )}
         {anterior?.linea_id === i.linea_id && (() => {
@@ -784,7 +795,9 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
         className={`rounded-xl border-2 border-dashed p-3 text-sm transition ${arrastrando ? "border-orange-400 bg-orange-50 dark:bg-orange-950/30" : "border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900"}`}
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
+          {simple ? <p className="text-zinc-600 dark:text-zinc-300"><b>Arrastrá acá el Excel "Movimientos"</b> del home banking. Se controlan los saldos al centavo y no se duplica nada.</p> : (
           <p className="text-zinc-600 dark:text-zinc-300"><b>Arrastrá acá el Excel del BBVA</b> (se verifican los saldos al centavo), el <b>resumen mensual en PDF</b> (pone nombre y CUIT a cada transferencia y débito automático) y el <b>CSV de ARCA</b> "Mis comprobantes recibidos" (qué factura paga cada transferencia a un proveedor).</p>
+          )}
           <label className="flex cursor-pointer items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-600">
             {ocupado === "subir" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} Subir extracto
             <input type="file" accept=".xls,.xlsx,.pdf,.csv" multiple className="hidden" onChange={(e) => { void subir(e.target.files); e.target.value = ""; }} />
@@ -823,6 +836,7 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
       ) : (
         <>
           {/* Resumen */}
+          {!simple && (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-violet-200 bg-violet-50/60 p-3 text-sm dark:border-violet-900 dark:bg-violet-950/30">
             <div className="flex flex-wrap gap-x-5 gap-y-1">
               <span><b className="text-lg">{resumen.total}</b> líneas del banco para cerrar</span>
@@ -838,9 +852,27 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
               {ocupado === "bloque" ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />} Confirmar los {porConfianza.alta.length} seguros
             </button>
           </div>
+          )}
+          {simple && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-violet-200 bg-violet-50/60 p-3 text-sm dark:border-violet-900 dark:bg-violet-950/30">
+              <div className="flex flex-wrap gap-x-6 gap-y-1">
+                <span className="text-emerald-700 dark:text-emerald-300"><b className="text-lg">{porConfianza.alta.length}</b> resueltas solas</span>
+                {ruidoSimple.length > 0 && <span><b>{formatCurrency(ruidoSimple.reduce((s, i) => s + i.importe, 0))}</b> en impuestos y comisiones ({ruidoSimple.length} líneas)</span>}
+                <span><b className="text-lg">{paraVosSimple.length}</b> para vos</span>
+                {iaTrabajando && <span className="flex items-center gap-1 text-violet-700 dark:text-violet-300"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Mirando {paraIA.length} líneas…</span>}
+                {iaError && <span className="text-amber-700">IA: {iaError} <button className="underline" onClick={() => { iaPedidas.current.clear(); void preguntarIA(paraIA); }}>Reintentar</button></span>}
+              </div>
+              <button disabled={!porConfianza.alta.length || ocupado !== null || faltaMigracion} onClick={() => void confirmar(porConfianza.alta, true)}
+                className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50">
+                {ocupado === "bloque" ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />} Confirmar las {porConfianza.alta.length}
+              </button>
+            </div>
+          )}
 
           {!items.length && <p className="rounded-xl border border-zinc-200 bg-white p-4 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900">Nada para confirmar: todas las líneas del banco están cerradas. Subí el próximo extracto cuando lo bajes.</p>}
 
+          {!simple && (
+            <>
           {(["alta", "media", "baja"] as Confianza[]).map((k) => porConfianza[k].length > 0 && (
             <div key={k} className="rounded-xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -857,6 +889,33 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
               {abiertos[k] && <div className="mt-1 divide-y divide-zinc-100 dark:divide-zinc-800">{porConfianza[k].map(renglon)}</div>}
             </div>
           ))}
+            </>
+          )}
+          {simple && (
+            <>
+              {paraVosSimple.length > 0 && (
+                <div className="rounded-xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+                  <p className="font-semibold text-zinc-900 dark:text-white">Para vos · {paraVosSimple.length} · {formatCurrency(paraVosSimple.reduce((s, i) => s + i.importe, 0))}</p>
+                  <div className="mt-1 divide-y divide-zinc-100 dark:divide-zinc-800">{paraVosSimple.map(renglon)}</div>
+                </div>
+              )}
+              <div className="space-y-1 text-sm">
+                {resueltasSimple.length > 0 && (
+                  <button onClick={() => setVerResueltas((v) => !v)} className="flex items-center gap-1 text-zinc-600 hover:text-zinc-900 dark:text-zinc-300">
+                    {verResueltas ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />} Ver las {resueltasSimple.length} resueltas solas
+                  </button>
+                )}
+                {verResueltas && <div className="divide-y divide-zinc-100 rounded-xl border border-zinc-200 bg-white px-3 dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">{resueltasSimple.map(renglon)}</div>}
+                {ruidoSimple.length > 0 && (
+                  <button onClick={() => setVerRuido((v) => !v)} className="flex items-center gap-1 text-zinc-600 hover:text-zinc-900 dark:text-zinc-300">
+                    {verRuido ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />} Impuestos y comisiones del banco: {formatCurrency(ruidoSimple.reduce((s, i) => s + i.importe, 0))} ({ruidoSimple.length} líneas) · ver detalle
+                  </button>
+                )}
+                {verRuido && <div className="divide-y divide-zinc-100 rounded-xl border border-zinc-200 bg-white px-3 dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">{ruidoSimple.map(renglon)}</div>}
+                <button onClick={() => setVerRegistro((v) => !v)} className="flex items-center gap-1 text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"><History className="h-4 w-4" /> Historial</button>
+              </div>
+            </>
+          )}
 
           {aCargar.length > 0 && (
             <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3 text-xs dark:border-amber-900 dark:bg-amber-950/30">
@@ -866,6 +925,7 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
           )}
 
           {/* Registro */}
+          {(!simple || verRegistro) && (
           <div className="rounded-xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <button onClick={() => setVerRegistro((v) => !v)} className="flex items-center gap-1.5 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
@@ -887,6 +947,7 @@ export default function FinanzasParaConfirmar({ onIrATab }: { onIrATab?: (tab: s
               </div>
             )}
           </div>
+          )}
         </>
       )}
     </div>

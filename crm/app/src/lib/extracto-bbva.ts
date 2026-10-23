@@ -217,6 +217,8 @@ export function leerMovimientosBbva(hojas: unknown[][][], ancla?: { fecha: strin
     const enc = (filas[iniEnc] || []).map((c) => String(c ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim());
     const cCred = enc.findIndex((c) => c.startsWith("credito")), cDeb = enc.findIndex((c) => c.startsWith("debito"));
     const cDet = enc.findIndex((c) => c === "detalle"), cOfi = enc.findIndex((c) => c === "oficina");
+    // "Número Documento" (histórico) o "Nro de cheque" (del día): en los cheques es el N° del cheque.
+    const cDoc = enc.findIndex((c) => c === "numero documento" || c === "nro de cheque");
     if (cCred < 0 || cDeb < 0) continue;
     filas.slice(iniEnc + 1).forEach((f, k) => {
       const fecha = leerFechaGuiones(f?.[0]);
@@ -228,6 +230,9 @@ export function leerMovimientosBbva(hojas: unknown[][][], ancla?: { fecha: strin
       // El detalle suele nombrar al que pagó (ej. "CTE 007875 285-… FUNDACION CARGI"): se agrega para poder identificarlo.
       if (det && !/^[\d ]+$/.test(det) && !/saldo disponible/i.test(det)) concepto += ` · ${det}`;
       const sucursal = cOfi >= 0 ? String(f?.[cOfi] ?? "").replace(/\s+/g, " ").trim() : "";
+      // El N° de cheque es la identificación del cheque (Augusto 23/10): se suma al concepto para cruzarlo por número.
+      const doc = cDoc >= 0 ? String(f?.[cDoc] ?? "").replace(/\D/g, "") : "";
+      if (/^\d{7,8}$/.test(doc) && /^(CH\/CLEAR|CJE\. INTERNO|PAGO CHEQUE|CHEQUE)/i.test(concepto) && !concepto.trim().endsWith(doc)) concepto += ` N ${doc}`;
       const l = { fecha, concepto, sucursal, importe: r2(importe), saldo: null as number | null };
       (esDia ? dia : hist).push({ ...l, clave: "", orden: k });
     });
@@ -557,7 +562,8 @@ export function cruzarExtracto(
     if (fija) { out.set(l.id, { linea_id: l.id, ...fija }); continue; }
 
     // Cheque propio debitado: PAGO CHEQUE 48HS CAP.FED. N 90016949 / PAGO CHEQUE 24HS 00496366
-    const pagoCheque = c.match(/^PAGO CHEQUE.*?(\d{8})\s*$/);
+    // (En el Excel "Movimientos" el N° viene en la columna "Número Documento" y el lector lo agrega al final: "CH/CLEAR.48 … N 90017341".)
+    const pagoCheque = c.match(/^PAGO CHEQUE.*?(\d{8})\s*$/) || c.match(/^(?:CH\/CLEAR|CJE\. INTERNO).* N (\d{8})\s*$/);
     if (pagoCheque && !esCredito(l)) {
       const num = numeroCheque(pagoCheque[1]);
       const lista = (emitidosPorNumero.get(num) || []).filter((ch) => !usado("cheque_emitido", ch.id));

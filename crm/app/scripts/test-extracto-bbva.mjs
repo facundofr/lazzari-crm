@@ -183,3 +183,23 @@ assert.deepEqual(tot, { "2026-10": { iva: -5921.82, ley_25413: 1829.52 }, "2026-
 }
 
 console.log("extracto-bbva OK");
+
+// Cheque propio del Excel "Movimientos": el N° viene de la columna "Número Documento" y queda al final del concepto (23/10/2026).
+{
+  const cheques = [{ id: "c1", numero: "90017341", monto: 169157.02, direccion: "emitido", estado: "entregado", fecha_pago: "2026-10-16" }];
+  const lineas = [
+    { id: "l1", fecha: "2026-10-16", concepto: "CH/CLEAR.48  019100670000014 N 90017341", importe: -169157.02, cuenta_id: null },
+    { id: "l2", fecha: "2026-10-15", concepto: "CJE. INTERNO N 90017077", importe: -412455.59, cuenta_id: null },
+  ];
+  const r = cruzarExtracto(lineas, [], cheques, [], [], new Set());
+  const get = (res, id) => (Array.isArray(res) ? res : [...res.values()]).find((p) => p.linea_id === id);
+  const p1 = get(r, "l1");
+  assert.equal(p1.clasificacion, "cheque_emitido");
+  assert.equal(p1.cheque_id, "c1");
+  assert.equal(p1.auto, true);
+  // Sin el número al final no se inventa uno a partir de los 15 dígitos de la cuenta: queda sin cheque seguro.
+  const r2 = cruzarExtracto([{ id: "l3", fecha: "2026-10-16", concepto: "CH/CLEAR.48  019100670000014", importe: -169157.02, cuenta_id: null }], [], cheques, [], [], new Set());
+  assert.notEqual(get(r2, "l3")?.cheque_id && get(r2, "l3")?.auto, true);
+}
+
+console.log("extracto-bbva OK");
