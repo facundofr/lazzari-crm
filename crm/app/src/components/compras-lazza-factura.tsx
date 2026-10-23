@@ -12,6 +12,8 @@
  * 4b. Saldo a favor (19/10): si al proveedor se le pagó antes (OP sin factura, ej. De Pascale), se puede tildar
  *    "Aplicar saldo a favor" (nunca se tilda solo). Si cubre todo, la factura queda pagada; si no, el resto va a Pagos.
  *    Se guarda con aplicar_saldo_favor_proveedor (components/saldo-favor-proveedor.tsx).
+ * 4c. Carga a mano (sin archivo): "Cargar a mano" en la pantalla de arranque. Se elige el proveedor, tipo, número, fecha, neto, IVA,
+ *    percepciones y total (el total se arma solo y se puede corregir); el PDF se puede adjuntar o no. Del pago para abajo es igual.
  * 5. Nota de crédito: sin forma de pago; va a la cuenta corriente del proveedor como crédito
  *    (registrar_nota_credito_compra_v2, la misma de Finanzas). La nota de débito no se carga acá.
  * Guardar usa guardar_conciliacion_compra (la de siempre), sin OC, sin aceptar costos ni aprender equivalencias.
@@ -30,7 +32,8 @@ import { cant } from "@/lib/cargar-factura";
 import { ivaYPercepciones, netoFactura, tipoNotaCredito, vencimientoPorDias } from "@/lib/compras-lazza";
 import { listaOPs, repartirSaldoFavor, totalSaldoFavor, type FuenteSaldoFavor } from "@/lib/saldo-favor-proveedor";
 import { aplicarSaldoFavor, traerSaldoFavor } from "@/components/saldo-favor-proveedor";
-import { AlertTriangle, Check, CreditCard, FileUp, Loader2, Sparkles, UserPlus, X } from "lucide-react";
+import { Autocompletar } from "@/components/ui/autocompletar";
+import { AlertTriangle, Check, CreditCard, FileUp, Loader2, PenLine, Sparkles, UserPlus, X } from "lucide-react";
 
 const db = supabase as any;
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -42,6 +45,10 @@ const SOCIEDAD_POR_CUIT: Record<string, { id: string; nombre: string }> = {
   "20379309128": { id: "eee2a3c8-fe6c-494d-bd2f-7a5d8067d021", nombre: "Lazzari" },
   "30719396042": { id: "fee94607-747a-4e87-ba24-aff9032f7a56", nombre: "Grupo LA" },
 };
+/** Comprobante interno cuando el proveedor no hace factura (mismo formato que los ya cargados: tipo "FC Manual", sin IVA). */
+const TIPO_SIN_FACTURA = "FC Manual";
+const numeroSinFactura = (fecha: string) => `SIN FACTURA ${String(fecha || todayAR()).split("-").reverse().join("/")}`;
+const esNumeroSinFactura = (n: string) => /^SIN FACTURA/i.test(n.trim());
 const esMercadoLibre = (t: string | null | undefined) => /mercado\s*libre/i.test(String(t || ""));
 
 type Proveedor = { id: string; razon_social: string; cuit: string | null; talles_especiales?: string[] | null; medio_pago_preferido?: string | null; plazo_cheque_dias?: number | null; dias_pago?: number | null; email?: string | null; cbu?: string | null; alias_bancario?: string | null };
@@ -90,6 +97,12 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
   // Saldo a favor con el proveedor (OP pagadas antes de la factura). Arranca sin tildar.
   const [fuentesSF, setFuentesSF] = useState<FuenteSaldoFavor[]>([]);
   const [usarSaldo, setUsarSaldo] = useState(false);
+  // Carga a mano: sin archivo. Se completan los datos de la factura a mano.
+  const [manual, setManual] = useState(false);
+  const [provsLista, setProvsLista] = useState<Proveedor[]>([]);
+  const [ivaTxt, setIvaTxt] = useState("");
+  const [percTxt, setPercTxt] = useState("");
+  const [totalTxt, setTotalTxt] = useState("");
 
   const plata = (n: number) => formatCurrency(n, factura?.moneda || "ARS");
 
@@ -99,6 +112,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
     setError(""); setFactura(null); setProveedor(null); setBuscandoProv(false);
     setConVisa(null); setFaltaElegirPago(false); setForma(null); setDiasTxt(null); setNotaPago(""); setDuplicada(false); setEsNota(false); setOtraSociedad(""); setNoSeLeyo(false); setOrigen("");
     setFuentesSF([]); setUsarSaldo(false);
+    setManual(false); setIvaTxt(""); setPercTxt(""); setTotalTxt("");
   }
 
   async function leer(file: File) {
@@ -127,6 +141,39 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
     } finally { setLeyendoIA(false); }
   }
 
+  async function empezarManual() {
+    reiniciar(); setArchivo(null); setManual(true);
+    setFactura({ localId: `m${Date.now()}`, dbId: null, file: null, archivoNombre: "", numero: "", tipo: "FC A", fecha: todayAR(), vencimiento: "", cae: "", moneda: "ARS",
+      subtotal: 0, iva: 0, ivaPorcentaje: 21, percepciones: 0, total: 0, items: [], cuit: "" });
+    setNetoTxt("");
+    if (!provsLista.length) {
+      const { data: ps } = await db.from("proveedores").select("id, razon_social, cuit, talles_especiales, medio_pago_preferido, plazo_cheque_dias, dias_pago, email, cbu, alias_bancario").eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social");
+      setProvsLista((ps || []) as Proveedor[]);
+    }
+  }
+
+  /** Carga a mano: neto o % → IVA y total se arman solos; IVA o percepciones → el total se rearma; el total se puede corregir a mano. */
+  function cambiarManual(c: { neto?: string; pct?: number; iva?: string; perc?: string; total?: string; tipo?: string; numero?: string; fecha?: string }) {
+    if (!factura) return;
+    const pct = c.pct ?? factura.ivaPorcentaje;
+    const neto = num(c.neto ?? netoTxt);
+    const iva = c.iva != null ? num(c.iva) : (c.neto != null || c.pct != null) ? round2(neto * pct / 100) : factura.iva;
+    const perc = c.perc != null ? num(c.perc) : factura.percepciones;
+    const total = c.total != null ? num(c.total) : round2(neto + iva + perc);
+    if (c.neto != null) setNetoTxt(c.neto);
+    if (c.iva != null) setIvaTxt(c.iva); else if (c.neto != null || c.pct != null) setIvaTxt(iva ? aTexto(iva) : "");
+    if (c.perc != null) setPercTxt(c.perc);
+    if (c.total != null) setTotalTxt(c.total); else setTotalTxt(total ? aTexto(total) : "");
+    setFactura({ ...factura, ivaPorcentaje: pct, subtotal: neto, iva, percepciones: perc, total, ...(c.tipo != null ? { tipo: c.tipo } : {}), ...(c.numero != null ? { numero: c.numero } : {}), ...(c.fecha != null ? { fecha: c.fecha } : {}) });
+  }
+
+  /** Cambia el tipo en la carga a mano: "Sin factura" va sin IVA y con número SIN FACTURA dd/mm/aaaa; al volver a una factura se limpia. */
+  function cambiarTipoManual(tipo: string) {
+    if (!factura) return;
+    if (tipo === TIPO_SIN_FACTURA) cambiarManual({ tipo, pct: 0, numero: esNumeroSinFactura(factura.numero) || !factura.numero.trim() ? numeroSinFactura(factura.fecha) : factura.numero });
+    else cambiarManual({ tipo, ...(factura.tipo === TIPO_SIN_FACTURA ? { pct: 21, numero: esNumeroSinFactura(factura.numero) ? "" : factura.numero } : {}) });
+  }
+
   async function usarDatos(file: File, d: any, como: "sistema" | "ia") {
     const leida = facturaDesdeDatos(file, d);
     const nc = tipoNotaCredito(d.tipo_comprobante);
@@ -151,6 +198,12 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
     const { data: dups } = await db.from("facturas_compra").select("numero_factura, tipo_comprobante").eq("sociedad_id", sociedadId).eq("proveedor_id", p.id).neq("estado", "anulada");
     const norm = (n: string) => { const m = String(n || "").replace(/\s+/g, "").match(/^(\d{1,5})[-/](\d{1,8})$/); return m ? `${m[1].padStart(5, "0")}-${m[2].padStart(8, "0")}` : String(n || "").replace(/\s+/g, "").toUpperCase(); };
     setDuplicada(!!f.numero && (dups || []).some((x: any) => norm(x.numero_factura) === norm(f.numero) && String(x.tipo_comprobante || "FC A").toUpperCase() === f.tipo.toUpperCase()));
+    // Sin factura: si ya hay una del mismo proveedor y día, el número sigue con (2), (3)…
+    if (f.tipo === TIPO_SIN_FACTURA && esNumeroSinFactura(f.numero)) {
+      const usados = new Set((dups || []).filter((x: any) => String(x.tipo_comprobante || "").toUpperCase() === f.tipo.toUpperCase()).map((x: any) => norm(x.numero_factura)));
+      const base = numeroSinFactura(f.fecha); let nuevo = base; for (let i = 2; usados.has(norm(nuevo)); i++) nuevo = `${base} (${i})`;
+      if (nuevo !== f.numero) { setFactura(prev => prev ? { ...prev, numero: nuevo } : prev); setDuplicada(false); }
+    }
     setProveedor(p); // después del chequeo de duplicada: el aviso sale junto con el proveedor
     setUsarSaldo(false);
     setFuentesSF(await traerSaldoFavor(sociedadId, p.id).catch(() => []));
@@ -169,7 +222,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
   const dias = diasTxt ?? (diasSugeridos != null ? String(diasSugeridos) : "");
   const vencePago = factura ? vencimientoPorDias(factura.fecha, dias, factura.vencimiento) : null;
   // IVA y percepciones (leída por QR el IVA viene en 0: IVA = neto × alícuota y lo que sobra son percepciones, ej. IIBB).
-  const impuestos = factura ? ivaYPercepciones({ total: factura.total, neto: num(netoTxt), iva: factura.iva, percepciones: factura.percepciones, ivaPorcentaje: factura.ivaPorcentaje }) : { iva: 0, percepciones: 0, percepcionEstimada: false };
+  const impuestos = factura && manual ? { iva: factura.iva, percepciones: factura.percepciones, percepcionEstimada: false } : factura ? ivaYPercepciones({ total: factura.total, neto: num(netoTxt), iva: factura.iva, percepciones: factura.percepciones, ivaPorcentaje: factura.ivaPorcentaje }) : { iva: 0, percepciones: 0, percepcionEstimada: false };
   const ivaFactura = impuestos.iva;
   const percepcionesFactura = impuestos.percepciones;
   const faltaEmail = !!proveedor && !String(proveedor.email || "").trim();
@@ -195,7 +248,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
     } finally { setGuardandoProv(false); }
   }
   const textoPago = `Pago: ${formaPago === "echeq" ? "eCheq" : "transferencia"}${dias.trim() ? ` a ${Math.round(num(dias))} días` : ""}`;
-  const listo = !!factura && !!proveedor && !esNota;
+  const listo = !!factura && !!proveedor && !esNota && (!manual || factura.total > 0);
   const esNC = !!factura && factura.tipo.startsWith("NC");
 
   // ── 4. Guardar ──
@@ -256,6 +309,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
         : [{ key: "fc", codigo: "", descripcion: "Factura (sin detalle de artículos)", cantidad: 1, precio_unitario: num(netoTxt), descuento_porcentaje: 0, iva_porcentaje: iva, unidad: "UN" }];
       const notas = [
         pagaVisa || cubreTodo ? "" : textoPago,
+        factura.tipo === TIPO_SIN_FACTURA ? "Sin factura del proveedor (comprobante manual)" : "",
         notaPago.trim() ? `Nota para Finanzas: ${notaPago.trim()}` : "",
         "Cargada con «Compras Lazza»",
       ].filter(Boolean).join("\n");
@@ -319,6 +373,11 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
               onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void leer(f); }} />
           </label>
         )}
+        {!factura && !leyendo && (
+          <button onClick={() => void empezarManual()} className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:border-orange-400 hover:bg-orange-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800">
+            <PenLine className="h-4 w-4 text-orange-500" /> Cargar a mano (sin archivo)
+          </button>
+        )}
         {!factura && noSeLeyo && (
           <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
             <AlertTriangle className="h-4 w-4" /> El sistema no pudo leer «{archivo?.name}» solo (sin QR ni texto).
@@ -330,17 +389,62 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
 
         {factura && (
           <div className="space-y-3">
+            {manual && (
+              <div className="space-y-2 rounded-lg bg-zinc-50 px-3 py-2 text-sm dark:bg-zinc-800/60">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{proveedor ? proveedor.razon_social : "Proveedor"}</span>
+                  {proveedor && <span className="text-xs text-zinc-500">CUIT {proveedor.cuit || "?"}</span>}
+                  <Autocompletar opciones={provsLista.map(p => ({ valor: p.id, texto: p.razon_social, detalle: p.cuit || undefined }))} placeholder={proveedor ? "Cambiar proveedor…" : "Escribí el proveedor…"} chico className="w-56"
+                    onElegir={id => { const p = provsLista.find(x => x.id === id); if (p) { const f = { ...factura, cuit: digitos(p.cuit) }; setFactura(f); void elegirProveedor(p, f); } }} />
+                  <button onClick={() => setCrearProv(true)} className="inline-flex items-center gap-1 rounded-md border border-zinc-300 px-2 py-0.5 text-xs dark:border-zinc-600"><UserPlus className="h-3 w-3" /> Proveedor nuevo</button>
+                  <button onClick={() => { reiniciar(); setArchivo(null); }} disabled={guardando} className="ml-auto text-xs text-zinc-500 underline">Otra factura</button>
+                </div>
+                <div className="flex flex-wrap items-end gap-2">
+                  <label className="text-[11px] text-zinc-500">Tipo
+                    <select value={factura.tipo} onChange={e => cambiarTipoManual(e.target.value)} className="mt-0.5 block w-36 rounded border border-zinc-300 bg-white px-1 py-0.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100">
+                      {["FC A", "FC B", "FC C", "NC A", "NC B", "NC C"].map(t => <option key={t}>{t}</option>)}
+                      <option value={TIPO_SIN_FACTURA}>Sin factura (manual)</option>
+                    </select></label>
+                  <label className="text-[11px] text-zinc-500">Número
+                    <input value={factura.numero} onChange={e => { setFactura({ ...factura, numero: e.target.value }); setDuplicada(false); }}
+                      onBlur={() => { if (proveedor && factura.numero.trim()) void elegirProveedor(proveedor, factura); }} placeholder="0001-00001234"
+                      className="mt-0.5 block w-36 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-sm font-semibold text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100" /></label>
+                  <label className="text-[11px] text-zinc-500">Fecha
+                    <input type="date" value={factura.fecha} onChange={e => cambiarManual({ fecha: e.target.value, ...(factura.tipo === TIPO_SIN_FACTURA && esNumeroSinFactura(factura.numero) ? { numero: numeroSinFactura(e.target.value) } : {}) })} className="mt-0.5 block rounded border border-zinc-300 bg-white px-1 py-0.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100" /></label>
+                  <label className="text-[11px] text-zinc-500">Moneda
+                    <select value={factura.moneda} onChange={e => setFactura({ ...factura, moneda: e.target.value === "USD" ? "USD" : "ARS" })} className="mt-0.5 block w-20 rounded border border-zinc-300 bg-white px-1 py-0.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100">
+                      <option>ARS</option><option>USD</option>
+                    </select></label>
+                </div>
+                <div className="flex flex-wrap items-end gap-2">
+                  <label className="text-[11px] text-zinc-500">Neto<input value={netoTxt} onChange={e => cambiarManual({ neto: e.target.value })} inputMode="decimal" placeholder="0,00" className="mt-0.5 block w-32 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-right text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100" /></label>
+                  <label className="text-[11px] text-zinc-500">IVA %
+                    <select value={String(factura.ivaPorcentaje)} onChange={e => cambiarManual({ pct: Number(e.target.value) })} className="mt-0.5 block w-20 rounded border border-zinc-300 bg-white px-1 py-0.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100">
+                      {["21", "10.5", "27", "0"].map(v => <option key={v} value={v}>{v.replace(".", ",")}</option>)}
+                    </select></label>
+                  <label className="text-[11px] text-zinc-500">IVA $<input value={ivaTxt} onChange={e => cambiarManual({ iva: e.target.value })} inputMode="decimal" placeholder="0,00" className="mt-0.5 block w-28 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-right text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100" /></label>
+                  <label className="text-[11px] text-zinc-500">Percepciones<input value={percTxt} onChange={e => cambiarManual({ perc: e.target.value })} inputMode="decimal" placeholder="0,00" className="mt-0.5 block w-28 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-right text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100" /></label>
+                  <label className="text-[11px] text-zinc-500">Total<input value={totalTxt} onChange={e => cambiarManual({ total: e.target.value })} inputMode="decimal" placeholder="0,00" className="mt-0.5 block w-32 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-right text-sm font-bold text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100" /></label>
+                </div>
+                <label className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+                  <FileUp className="h-3.5 w-3.5" /> PDF o foto (opcional): {archivo ? <b className="text-zinc-700 dark:text-zinc-200">{archivo.name}</b> : "sin adjuntar"}
+                  <input type="file" accept="application/pdf,image/png,image/jpeg,image/webp" className="text-xs" onChange={e => { const f = e.target.files?.[0]; if (f) setArchivo(f); }} />
+                </label>
+                {factura.tipo === TIPO_SIN_FACTURA && <p className="text-xs text-zinc-500">Sin factura del proveedor: se carga sin IVA (total = neto) y el número queda «{factura.numero || "SIN FACTURA"}».</p>}
+                {factura.total <= 0 && <p className="text-xs text-zinc-500">Completá el neto (o el total) para poder guardar.</p>}
+              </div>
+            )}
             {/* Encabezado */}
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-zinc-50 px-3 py-2 text-sm dark:bg-zinc-800/60">
+            {!manual && <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-zinc-50 px-3 py-2 text-sm dark:bg-zinc-800/60">
               <b>{factura.tipo}</b>
               <input value={factura.numero} onChange={e => setFactura({ ...factura, numero: e.target.value })} placeholder="Número" className="w-36 rounded border border-zinc-300 bg-white px-1.5 py-0.5 font-semibold dark:border-zinc-600 dark:bg-zinc-900" />
               <span className="text-zinc-500">{formatDate(factura.fecha || todayAR())}</span>
               <span className="font-medium">{proveedor?.razon_social || factura.razonSocialLeida || "Proveedor"}</span>
               <span className="text-xs text-zinc-500">CUIT {factura.cuit || "?"}</span>
               <button onClick={() => { reiniciar(); setArchivo(null); }} disabled={guardando} className="ml-auto text-xs text-zinc-500 underline">Otra factura</button>
-            </div>
+            </div>}
             {/* Augusto 19/10: ver la información de la factura (tipo, número, neto, IVA, percepciones, total). */}
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {!manual && <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               {([["Neto", num(netoTxt)], [`IVA${factura.ivaPorcentaje ? ` ${String(factura.ivaPorcentaje).replace(".", ",")} %` : ""}`, ivaFactura],
                 [`Percepciones${impuestos.percepcionEstimada ? " (calculadas)" : ""}`, percepcionesFactura], ["Total", factura.total]] as const).map(([t, v]) => (
                 <div key={t} className="rounded-lg border border-zinc-200 px-2 py-1 dark:border-zinc-700">
@@ -348,9 +452,9 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
                   <p className={`text-sm ${t === "Total" ? "font-bold" : "font-medium"}`}>{plata(v)}</p>
                 </div>
               ))}
-            </div>
+            </div>}
             {/* Artículos: opcionales. El sistema (sin IA) no los lee; con IA sí. */}
-            {origen === "ia" && factura.items.length > 0 ? (
+            {manual ? null : origen === "ia" && factura.items.length > 0 ? (
               <details className="rounded-lg border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-700">
                 <summary className="cursor-pointer text-zinc-600 dark:text-zinc-300">✨ Leída con IA · {factura.items.length} artículo(s)</summary>
                 <ul className="mt-1 max-h-48 space-y-0.5 overflow-y-auto">
@@ -374,7 +478,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
             {!proveedor && !esNota && buscandoProv && (
               <p className="flex items-center gap-2 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Buscando proveedor…</p>
             )}
-            {!proveedor && !esNota && !buscandoProv && (
+            {!manual && !proveedor && !esNota && !buscandoProv && (
               <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
                 <AlertTriangle className="h-4 w-4" /> {factura.cuit ? `El proveedor CUIT ${factura.cuit} no está cargado.` : "No se leyó el CUIT del proveedor."}
                 {factura.cuit && <button onClick={() => setCrearProv(true)} className="ml-auto inline-flex items-center gap-1 rounded-md bg-amber-500 px-2 py-1 text-xs font-medium text-white"><UserPlus className="h-3.5 w-3.5" /> Crear proveedor</button>}
