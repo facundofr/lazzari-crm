@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest } from "next/server";
 import { createSupabaseServer } from "@/lib/supabase/server";
+import { isValidEmail, normalizeEmail } from "@/lib/email";
 
 const VALID_ROLES = ["super_admin", "admin", "vendedor", "administrativo", "viewer"] as const;
 
@@ -22,7 +23,7 @@ export async function PATCH(request: NextRequest) {
   try {
     const context = await getAdminContext();
     if (context.error) return context.error;
-    const { id, full_name, role, prueba_compras_nueva, prueba_presupuestos_nuevo, prueba_remitos_nueva } = await request.json();
+    const { id, full_name, role, prueba_compras_nueva, prueba_presupuestos_nuevo, prueba_remitos_nueva, password, email: rawEmail } = await request.json();
     if (!id) return Response.json({ error: "Falta el usuario" }, { status: 400 });
     if (role && !VALID_ROLES.includes(role)) return Response.json({ error: "Rol inválido" }, { status: 400 });
     if (role === "super_admin" && context.profile!.role !== "super_admin") {
@@ -42,10 +43,31 @@ export async function PATCH(request: NextRequest) {
     if (typeof prueba_compras_nueva === "boolean") changes.prueba_compras_nueva = prueba_compras_nueva;
     if (typeof prueba_presupuestos_nuevo === "boolean") changes.prueba_presupuestos_nuevo = prueba_presupuestos_nuevo;
     if (typeof prueba_remitos_nueva === "boolean") changes.prueba_remitos_nueva = prueba_remitos_nueva;
-    if (!Object.keys(changes).length) return Response.json({ error: "No hay cambios" }, { status: 400 });
+    // Acceso: contraseña y mail (solo super admin, ya validado arriba). Nunca se guarda ni se devuelve la contraseña.
+    const authChanges: { password?: string; email?: string; email_confirm?: boolean } = {};
+    if (typeof password === "string" && password.length > 0) {
+      if (password.length < 8) return Response.json({ error: "La contraseña debe tener al menos 8 caracteres" }, { status: 400 });
+      authChanges.password = password;
+    }
+    if (typeof rawEmail === "string" && rawEmail.trim()) {
+      const nuevoEmail = normalizeEmail(rawEmail);
+      if (!isValidEmail(nuevoEmail)) return Response.json({ error: "El mail no tiene un formato válido" }, { status: 400 });
+      const { data: otro } = await context.admin!.from("profiles").select("id").eq("email", nuevoEmail).neq("id", id).limit(1);
+      if (otro && otro.length) return Response.json({ error: "Ya hay otro usuario con ese mail" }, { status: 409 });
+      authChanges.email = nuevoEmail;
+      authChanges.email_confirm = true;
+      changes.email = nuevoEmail;
+    }
+    if (!Object.keys(changes).length && !authChanges.password) return Response.json({ error: "No hay cambios" }, { status: 400 });
 
-    const { error } = await context.admin!.from("profiles").update(changes).eq("id", id);
-    if (error) throw error;
+    if (authChanges.password || authChanges.email) {
+      const { error: authError } = await context.admin!.auth.admin.updateUserById(id, authChanges);
+      if (authError) throw authError;
+    }
+    if (Object.keys(changes).length) {
+      const { error } = await context.admin!.from("profiles").update(changes).eq("id", id);
+      if (error) throw error;
+    }
     if (changes.full_name) {
       const { error: metadataError } = await context.admin!.auth.admin.updateUserById(id, { user_metadata: { full_name: changes.full_name as string } });
       if (metadataError) throw metadataError;

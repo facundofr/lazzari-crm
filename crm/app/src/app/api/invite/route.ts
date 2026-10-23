@@ -37,7 +37,9 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: "Service role key no configurada" }, { status: 500 });
     }
 
-    const { email: rawEmail, nombre, role, sociedad_ids } = await request.json();
+    const { email: rawEmail, nombre, role, sociedad_ids, password } = await request.json();
+    const conPassword = typeof password === "string" && password.length > 0;
+    if (conPassword && password.length < 8) return Response.json({ error: "La contraseña debe tener al menos 8 caracteres" }, { status: 400 });
     const email = normalizeEmail(rawEmail);
     if (!email) return Response.json({ error: "Email es obligatorio" }, { status: 400 });
     if (!isValidEmail(email)) return Response.json({ error: "El email no tiene un formato válido" }, { status: 400 });
@@ -71,16 +73,31 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: "Ya existe un usuario confirmado con ese email" }, { status: 409 });
     }
 
-    const { data: inviteData, error: linkError } = await supabaseAdmin.auth.admin.generateLink({
-      type: "invite",
-      email,
-      options: { data: { full_name: nombre.trim() } },
-    });
-    if (linkError) throw linkError;
-
-    const invitedUser = inviteData.user || existingUser;
-    const tokenHash = inviteData.properties?.hashed_token;
-    if (!invitedUser || !tokenHash) throw new Error("No se pudo generar la invitación");
+    // Con contraseña: el usuario queda creado y activo, sin mail de invitación.
+    let invitedUser: { id: string } | null = null;
+    let tokenHash: string | undefined;
+    if (conPassword) {
+      if (existingUser) {
+        const { data, error } = await supabaseAdmin.auth.admin.updateUserById(existingUser.id, { password, email_confirm: true, user_metadata: { full_name: nombre.trim() } });
+        if (error) throw error;
+        invitedUser = data.user;
+      } else {
+        const { data, error } = await supabaseAdmin.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { full_name: nombre.trim() } });
+        if (error) throw error;
+        invitedUser = data.user;
+      }
+      if (!invitedUser) throw new Error("No se pudo crear el usuario");
+    } else {
+      const { data: inviteData, error: linkError } = await supabaseAdmin.auth.admin.generateLink({
+        type: "invite",
+        email,
+        options: { data: { full_name: nombre.trim() } },
+      });
+      if (linkError) throw linkError;
+      invitedUser = inviteData.user || existingUser;
+      tokenHash = inviteData.properties?.hashed_token;
+      if (!invitedUser || !tokenHash) throw new Error("No se pudo generar la invitación");
+    }
 
     // Upsert instead of assuming the auth trigger has already finished. This also
     // repairs users left half-created by the previous mailer flow.
@@ -111,9 +128,13 @@ export async function POST(request: NextRequest) {
       if (socError) throw socError;
     }
 
+    if (conPassword) {
+      return Response.json({ success: true, invite_sent: false, created_with_password: true, user: { id: invitedUser.id, email } });
+    }
+
     const appOrigin = new URL(request.url).origin;
     const inviteUrl = new URL("/auth/confirm", appOrigin);
-    inviteUrl.searchParams.set("token_hash", tokenHash);
+    inviteUrl.searchParams.set("token_hash", tokenHash ?? "");
     inviteUrl.searchParams.set("type", "invite");
     inviteUrl.searchParams.set("next", "/auth/aceptar-invitacion");
 

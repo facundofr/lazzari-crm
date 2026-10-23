@@ -120,6 +120,12 @@ export default function ConfiguracionPage() {
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [inviteForm, setInviteForm] = useState({ email: "", nombre: "", role: "vendedor" as Role });
   const [inviteSaving, setInviteSaving] = useState(false);
+  const [invitePassword, setInvitePassword] = useState("");
+  // Acceso de un usuario existente: cambiar mail y/o contraseña (solo super admin).
+  const [accesoUser, setAccesoUser] = useState<User | null>(null);
+  const [accesoEmail, setAccesoEmail] = useState("");
+  const [accesoPassword, setAccesoPassword] = useState("");
+  const [accesoSaving, setAccesoSaving] = useState(false);
   const [sociedades, setSociedades] = useState<{ id: string; nombre: string }[]>([]);
   const [inviteSociedadIds, setInviteSociedadIds] = useState<string[]>([]);
 
@@ -219,6 +225,7 @@ export default function ConfiguracionPage() {
           nombre: inviteForm.nombre.trim(),
           role: inviteForm.role,
           sociedad_ids: inviteSociedadIds,
+          ...(invitePassword ? { password: invitePassword } : {}),
         }),
       });
       const json = await res.json();
@@ -226,6 +233,7 @@ export default function ConfiguracionPage() {
       setShowInviteModal(false);
       setInviteForm({ email: "", nombre: "", role: "vendedor" });
       setInviteSociedadIds([]);
+      setInvitePassword("");
       // Refresh users list
       const { data: profiles } = await supabase
         .from("profiles")
@@ -242,7 +250,7 @@ export default function ConfiguracionPage() {
             pruebaRemitosNueva: !!p.prueba_remitos_nueva,
         })));
       }
-      alert(json.invite_sent
+      alert(json.created_with_password ? "Usuario creado con la contraseña que pusiste. Ya puede entrar con su mail." : json.invite_sent
         ? (json.recovered ? "Acceso recuperado e invitación reenviada correctamente." : "Usuario invitado correctamente. Recibirá un email para definir su contraseña.")
         : (json.warning || "El acceso quedó creado, pero no se pudo enviar la invitación."));
     } catch (e: any) {
@@ -252,7 +260,7 @@ export default function ConfiguracionPage() {
     }
   }
 
-  async function updateSystemUser(id: string, changes: { full_name?: string; role?: Role; prueba_compras_nueva?: boolean; prueba_presupuestos_nuevo?: boolean; prueba_remitos_nueva?: boolean }) {
+  async function updateSystemUser(id: string, changes: { full_name?: string; email?: string; password?: string; role?: Role; prueba_compras_nueva?: boolean; prueba_presupuestos_nuevo?: boolean; prueba_remitos_nueva?: boolean }) {
     const response = await fetch("/api/users", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -260,6 +268,25 @@ export default function ConfiguracionPage() {
     });
     const json = await response.json();
     if (!response.ok) throw new Error(json.error || "No se pudo actualizar el usuario");
+  }
+
+  async function guardarAcceso() {
+    if (!accesoUser) return;
+    const emailNuevo = normalizeEmail(accesoEmail);
+    const cambiaMail = !!emailNuevo && emailNuevo !== normalizeEmail(accesoUser.email);
+    if (!cambiaMail && !accesoPassword) { setAccesoUser(null); return; }
+    if (accesoPassword && accesoPassword.length < 8) { alert("La contraseña debe tener al menos 8 caracteres."); return; }
+    setAccesoSaving(true);
+    try {
+      await updateSystemUser(accesoUser.id, { ...(cambiaMail ? { email: emailNuevo } : {}), ...(accesoPassword ? { password: accesoPassword } : {}) });
+      if (cambiaMail) setDbUsers((current) => current.map((u) => u.id === accesoUser.id ? { ...u, email: emailNuevo } : u));
+      alert([cambiaMail && "Mail cambiado: ahora entra con " + emailNuevo + ".", accesoPassword && "Contraseña cambiada."].filter(Boolean).join(" "));
+      setAccesoUser(null);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "No se pudo guardar el acceso");
+    } finally {
+      setAccesoSaving(false);
+    }
   }
 
   async function deleteSystemUser(row: User) {
@@ -800,9 +827,14 @@ export default function ConfiguracionPage() {
                   {
                     key: "actions", label: "", sortable: false,
                     render: (row) => canManageUsers && row.id !== profile?.id && (row.role !== "super_admin" || profile?.role === "super_admin") ? (
+                      <>
+                      <button onClick={() => { setAccesoUser(row); setAccesoEmail(row.email); setAccesoPassword(""); }} className="rounded-md p-2 text-zinc-400 hover:bg-orange-50 hover:text-orange-600 dark:hover:bg-orange-950/30" title="Cambiar mail o contraseña">
+                        <Key className="h-4 w-4" />
+                      </button>
                       <button onClick={() => void deleteSystemUser(row)} disabled={deletingUserId === row.id} className="rounded-md p-2 text-zinc-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:hover:bg-red-950/30" title="Eliminar acceso">
                         {deletingUserId === row.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                       </button>
+                      </>
                     ) : null,
                   },
                 ]}
@@ -1478,6 +1510,13 @@ export default function ConfiguracionPage() {
                   {(Object.entries(ROLE_LABELS) as [Role, string][]).map(([r, l]) => <option key={r} value={r}>{l}</option>)}
                 </select>
               </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Contraseña <span className="font-normal text-zinc-400">(opcional)</span></label>
+                <input value={invitePassword} onChange={(e) => setInvitePassword(e.target.value)} autoComplete="off"
+                  placeholder="Vacío = le llega un mail para que la elija"
+                  className="mt-1 h-8 w-full rounded-lg border border-zinc-200 px-3 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                <p className="mt-1 text-xs text-zinc-400">Si la escribís (mínimo 8), el usuario se crea ya activo y sin mail.</p>
+              </div>
               {sociedades.length > 0 && (
                 <div>
                   <label className="text-xs font-medium text-zinc-500">Sociedades</label>
@@ -1499,7 +1538,38 @@ export default function ConfiguracionPage() {
               <button onClick={() => setShowInviteModal(false)} className="h-8 rounded-lg border border-zinc-200 px-4 py-1 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300">Cancelar</button>
               <button onClick={handleInviteUser} disabled={inviteSaving || !inviteForm.email.trim() || !inviteForm.nombre.trim()}
                 className="flex h-8 items-center gap-2 rounded-lg bg-orange-500 px-4 py-1 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
-                {inviteSaving && <Loader2 className="h-4 w-4 animate-spin" />} Invitar
+                {inviteSaving && <Loader2 className="h-4 w-4 animate-spin" />} {invitePassword ? "Crear usuario" : "Invitar"}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+      {accesoUser && canManageUsers && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setAccesoUser(null)} />
+          <div className="fixed inset-4 z-50 m-auto h-fit max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-4 shadow-2xl dark:bg-zinc-900">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-base font-bold dark:text-white">Acceso de {accesoUser.name}</h2>
+              <button onClick={() => setAccesoUser(null)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="space-y-2.5">
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Mail con el que entra</label>
+                <input type="email" value={accesoEmail} onChange={(e) => setAccesoEmail(e.target.value)}
+                  className="mt-1 h-8 w-full rounded-lg border border-zinc-200 px-3 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Contraseña nueva <span className="font-normal text-zinc-400">(vacío = no se cambia)</span></label>
+                <input value={accesoPassword} onChange={(e) => setAccesoPassword(e.target.value)} autoComplete="off" placeholder="Mínimo 8 caracteres"
+                  className="mt-1 h-8 w-full rounded-lg border border-zinc-200 px-3 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              <p className="text-xs text-zinc-400">Si cambiás el mail, desde ese momento entra con el nuevo. La contraseña no se guarda en ningún lado: anotala y pasásela.</p>
+            </div>
+            <div className="mt-4 flex justify-end gap-3 border-t border-zinc-200 pt-3 dark:border-zinc-700">
+              <button onClick={() => setAccesoUser(null)} className="h-8 rounded-lg border border-zinc-200 px-4 py-1 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
+              <button onClick={() => void guardarAcceso()} disabled={accesoSaving}
+                className="flex h-8 items-center gap-2 rounded-lg bg-orange-500 px-4 py-1 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
+                {accesoSaving && <Loader2 className="h-4 w-4 animate-spin" />} Guardar
               </button>
             </div>
           </div>

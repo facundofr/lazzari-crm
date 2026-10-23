@@ -184,10 +184,21 @@ export function ProveedorFormModal({
   const [saving, setSaving] = useState(false);
   const [cargando, setCargando] = useState(false);
   const [cuitLoading, setCuitLoading] = useState(false);
+  // Proveedor persona sin CUIT: se carga con DNI (va en la misma columna). Solo cambia el formulario, no se guarda aparte.
+  const [tipoDoc, setTipoDoc] = useState<"cuit" | "dni">("cuit");
+  const esDni = tipoDoc === "dni";
   const [contactosExtra, setContactosExtra] = useState<ContactoExtra[]>([]);
   const [contactosExistentes, setContactosExistentes] = useState<ContactoExistente[]>([]);
   // Si al abrir el proveedor era transporte Y taller a la vez, se ofrece "Los dos" para no perder ninguna marca.
   const [ambosTiposAlCargar, setAmbosTiposAlCargar] = useState(false);
+
+  // Al abrir uno que ya existe: si el número no tiene 11 dígitos, se muestra como DNI.
+  useEffect(() => {
+    if (!open || cargando) return;
+    const n = form.cuit.replace(/\D/g, "").length;
+    setTipoDoc(n > 0 && n !== 11 ? "dni" : "cuit");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, proveedorId, cargando]);
 
   // Cada vez que se abre: alta (vacío + datos iniciales) o edición (se lee la fila completa y sus vendedores).
   useEffect(() => {
@@ -200,6 +211,7 @@ export function ProveedorFormModal({
     setModalFullscreen(false);
     if (!proveedorId) {
       setAmbosTiposAlCargar(false);
+      setTipoDoc("cuit");
       setForm({ ...emptyProveedorForm, ...(inicial || {}) });
       const cuitInicial = String(inicial?.cuit || "").replace(/\D/g, "");
       if (consultarArcaAlAbrir && cuitInicial.length === 11) void handleCuitLookup(cuitInicial);
@@ -394,12 +406,18 @@ export function ProveedorFormModal({
           {/* Datos fiscales */}
           <SeccionModal titulo="Datos fiscales" extra={<LeerDocumentoImpositivo compacto conBancarios cuitEsperado={form.cuit} onDatos={aplicarDocumentoImpositivo} />}>
             <div>
-              <label className={LABEL_CLS}>CUIT *</label>
+              <label className={LABEL_CLS}>
+                <span className="inline-flex overflow-hidden rounded border border-zinc-200 align-middle dark:border-zinc-700">
+                  {(["cuit", "dni"] as const).map((t) => (
+                    <button key={t} type="button" onClick={() => setTipoDoc(t)} className={`px-1.5 py-px text-[10px] font-semibold ${tipoDoc === t ? "bg-orange-500 text-white" : "bg-white text-zinc-500 dark:bg-zinc-800"}`}>{t.toUpperCase()}</button>
+                  ))}
+                </span>{" "}{esDni ? "DNI" : "CUIT"} *
+              </label>
               <div className="mt-0.5 flex gap-1">
-                <input value={form.cuit} onChange={(e) => setForm({ ...form, cuit: e.target.value })} onBlur={() => { if (form.cuit.replace(/\D/g, "").length === 11 && !form.razon_social) handleCuitLookup(); }} className="h-8 min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800" placeholder="XX-XXXXXXXX-X" />
-                <button type="button" onClick={() => handleCuitLookup()} disabled={cuitLoading} className="h-8 rounded-lg bg-blue-500 px-2.5 text-xs font-medium text-white transition-colors hover:bg-blue-600 disabled:opacity-50 whitespace-nowrap" title="Buscar en ARCA" aria-label="Buscar en ARCA">
+                <input value={form.cuit} onChange={(e) => setForm({ ...form, cuit: e.target.value })} onBlur={() => { if (!esDni && form.cuit.replace(/\D/g, "").length === 11 && !form.razon_social) handleCuitLookup(); }} className="h-8 min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800" placeholder={esDni ? "Solo números" : "XX-XXXXXXXX-X"} />
+                {!esDni && <button type="button" onClick={() => handleCuitLookup()} disabled={cuitLoading} className="h-8 rounded-lg bg-blue-500 px-2.5 text-xs font-medium text-white transition-colors hover:bg-blue-600 disabled:opacity-50 whitespace-nowrap" title="Buscar en ARCA" aria-label="Buscar en ARCA">
                   {cuitLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-                </button>
+                </button>}
               </div>
             </div>
             <div className="lg:col-span-2">
