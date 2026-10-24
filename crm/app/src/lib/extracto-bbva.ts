@@ -4,6 +4,7 @@
 // - cruzarExtracto: propone qué es cada línea (cobro, pago, cheque, impuesto, FCI…).
 //   "auto" = se aplica solo; el resto se le pregunta a Augusto. Nunca frena nada.
 import { clasificarMovimiento, type MovimientoClasificable } from "./tipos-movimiento";
+import { codigoDeConcepto, conCodigoBanco, familiaDeCodigo, sinCodigoBanco } from "./bbva-codigos";
 
 export type ClasificacionLinea =
   | "cobro" | "pago" | "impuesto" | "gasto_bancario" | "intereses" | "fci" | "entre_cuentas" | "tarjeta"
@@ -225,6 +226,7 @@ export function leerMovimientosBbva(hojas: unknown[][][], ancla?: { fecha: strin
     const cDet = enc.findIndex((c) => c === "detalle"), cOfi = enc.findIndex((c) => c === "oficina");
     // "Número Documento" (histórico) o "Nro de cheque" (del día): en los cheques es el N° del cheque.
     const cDoc = enc.findIndex((c) => c === "numero documento" || c === "nro de cheque");
+    const cCod = enc.findIndex((c) => c === "codigo");
     if (cCred < 0 || cDeb < 0) continue;
     filas.slice(iniEnc + 1).forEach((f, k) => {
       const fecha = leerFechaGuiones(f?.[0]);
@@ -239,6 +241,10 @@ export function leerMovimientosBbva(hojas: unknown[][][], ancla?: { fecha: strin
       // El N° de cheque es la identificación del cheque (Augusto 23/10): se suma al concepto para cruzarlo por número.
       const doc = cDoc >= 0 ? String(f?.[cDoc] ?? "").replace(/\D/g, "") : "";
       if (/^\d{7,8}$/.test(doc) && /^(CH\/CLEAR|CJE\. INTERNO|PAGO CHEQUE|CHEQUE)/i.test(concepto) && !concepto.trim().endsWith(doc)) concepto += ` N ${doc}`;
+      // Rechazo de cheque (código 019): el "Número Documento" es el N° del cheque rechazado (puede tener menos de 7 dígitos).
+      if (cCod >= 0 && String(f?.[cCod] ?? "").replace(/\D/g, "").padStart(3, "0") === "019" && /^\d{1,8}$/.test(doc) && !concepto.trim().endsWith(doc)) concepto += ` N ${doc}`;
+      // Código de operación del banco (tabla de Augusto, lib/bbva-codigos): se guarda al final de la descripción.
+      if (cCod >= 0) concepto = conCodigoBanco(concepto, f?.[cCod]);
       const l = { fecha, concepto, sucursal, importe: r2(importe), saldo: null as number | null };
       (esDia ? dia : hist).push({ ...l, clave: "", orden: k });
     });
@@ -394,6 +400,8 @@ export interface LineaCruce {
   /** Si ya la marcó como cobro/pago a cargar, se sigue buscando su movimiento. */
   clasificacion?: string | null;
   /** Factura de ARCA que paga esta salida (leída de "Mis comprobantes recibidos"; ver lib/arca-recibidos). */
+  /** Código de operación del banco (columna "Codigo"); si no viene aparte se saca del sufijo " #NNN" de la descripción. */
+  codigo?: string | null;
   factura_arca?: { tipo: string; punto_venta: number; numero: number; fecha: string; total: number; emisor: string; cuit: string; unica: boolean } | null;
 }
 
@@ -460,6 +468,11 @@ interface Contexto {
 
 const esCredito = (l: LineaCruce) => l.importe > 0;
 
+/** Saca el código del banco de la descripción y lo deja en `codigo`: desde acá en adelante el texto está limpio. Se puede aplicar dos veces. */
+export function normalizarLinea<T extends { concepto: string; codigo?: string | null }>(l: T): T & { codigo: string | null } {
+  return { ...l, codigo: l.codigo || codigoDeConcepto(l.concepto), concepto: sinCodigoBanco(l.concepto) };
+}
+
 /** Clasificación fija por el texto del concepto (impuestos, comisiones, FCI, cuentas propias, tarjetas). */
 function clasificarPorConcepto(l: LineaCruce, ctx: Contexto): Omit<Propuesta, "linea_id"> | null {
   const c = l.concepto.toUpperCase();
@@ -474,12 +487,27 @@ function clasificarPorConcepto(l: LineaCruce, ctx: Contexto): Omit<Propuesta, "l
     return { ...base, clasificacion: r.clasificacion, subtipo: r.subtipo || null, contra_cuenta_id: r.contra_cuenta_id || null, nota: r.nota || null, motivo: `Regla: "${r.texto}"` };
   }
 
+  // Por el CÓDIGO del banco (tabla de Augusto, lib/bbva-codigos): no depende del texto, que cambia según el Excel que se baje.
+  const fc = familiaDeCodigo(l.codigo);
+  if (fc === "iva") return fam({ ...base, clasificacion: "impuesto", subtipo: "iva", motivo: "IVA del banco (código 236)" });
+  if (fc === "ley_25413") return fam({ ...base, clasificacion: "impuesto", subtipo: "ley_25413", motivo: "Impuesto al cheque (código del banco)" });
+  if (fc === "sircreb") return fam({ ...base, clasificacion: "impuesto", subtipo: "sircreb", motivo: "SIRCREB (código 550)" });
+  if (fc === "comision") return fam({ ...base, clasificacion: "gasto_bancario", subtipo: "comision", motivo: "Comisión del banco (código del banco)" });
+  if (fc === "arca" && !credito) return { ...base, clasificacion: "impuesto" as const, subtipo: "afip", motivo: "Pago de servicios ARCA (código 137): el impuesto lo dice el mail del VEP" };
+  if (fc === "fci") return { clasificacion: "fci" as const, subtipo: null, auto: false, candidatos: [] as string[], motivo: "Inversión FCI (código 654)" };
+  if (fc === "entre_propias") return { clasificacion: "entre_cuentas" as const, subtipo: null, auto: false, candidatos: [] as string[], motivo: "Transferencia entre cuentas propias (código 263)" };
+  if (fc === "tarjeta") return { clasificacion: "tarjeta" as const, subtipo: null, auto: false, candidatos: [] as string[], motivo: "Pago de tarjeta (código del banco)" };
+
   // El Excel "Movimientos" abrevia los textos: "IVA TASA GRA", "LEY NRO 25.4 …", "IMPUESTO LEY dd/mm/aa …", "REG REC SIRC …" (códigos del banco 236, 609, 589 y 550).
   if (/IVA TASA (GENERAL|GRA)/.test(c)) return fam({ ...base, clasificacion: "impuesto", subtipo: "iva", motivo: "IVA del banco" });
   if (/25\.?413|LEY NRO 25\.4|^IMPUESTO LEY \d/.test(c)) return fam({ ...base, clasificacion: "impuesto", subtipo: "ley_25413", motivo: "Impuesto al cheque" });
   if (/SIRCREB|REG REC SIRC/.test(c)) return fam({ ...base, clasificacion: "impuesto", subtipo: "sircreb", motivo: "SIRCREB (Ingresos Brutos)" });
   if (/MANT(\.|ENIMIENTO)? ?MENS|CO\.MANT/.test(c)) return fam({ ...base, clasificacion: "gasto_bancario", subtipo: "mantenimiento", motivo: "Mantenimiento de cuenta" });
   if (/^COMI(SION|\s)|COMISION/.test(c)) return fam({ ...base, clasificacion: "gasto_bancario", subtipo: "comision", motivo: "Comisión del banco" });
+  // Repaso del historial (23/10): estas tres se confirmaron siempre igual, pero mueven plata en serio: se SUGIEREN (no se aplican solas).
+  if (!credito && /PAGO (DE )?SERVICI[A-Z]* (TARJETA )?17779347/.test(c)) return { clasificacion: "impuesto" as const, subtipo: "afip", auto: false, candidatos: [] as string[], motivo: "Pago de servicios con la tarjeta de débito 17779347: en el historial siempre fue un VEP de ARCA (confirmalo con el mail del VEP)" };
+  if (credito && /REINT.? TARJETA/.test(c)) return { clasificacion: "intereses" as const, subtipo: "reintegro", auto: false, candidatos: [] as string[], motivo: "Reintegro de la tarjeta de crédito" };
+  if (credito && /ADELANTO PAGO DE SERVICIO/.test(c)) return { clasificacion: "tarjeta" as const, subtipo: null, auto: false, candidatos: [] as string[], motivo: "Adelanto de pago de servicio de la tarjeta" };
   if (/INTERESES GANADOS/.test(c) && credito) return { ...base, clasificacion: "intereses", subtipo: "intereses", motivo: "Intereses" };
   if (/REINTEGRO PROMO/.test(c) && credito) return { ...base, clasificacion: "intereses", subtipo: "reintegro", motivo: "Reintegro de promoción" };
 
@@ -540,13 +568,14 @@ function esCandidatoCobroPago(l: LineaCruce, m: MovCruce): boolean {
  * - cheques: todos los de la sociedad.
  */
 export function cruzarExtracto(
-  lineas: LineaCruce[],
+  lineasEntrada: LineaCruce[],
   movimientos: MovCruce[],
   cheques: ChequeCruce[],
   cuentas: CuentaCruce[],
   reglas: ReglaCruce[] = [],
   chequesUsados: Set<string> = new Set(),
 ): Propuesta[] {
+  const lineas = lineasEntrada.map(normalizarLinea);
   const ctx: Contexto = { cuentas, reglas, chequesUsados: new Set(chequesUsados) };
   const out = new Map<string, Propuesta>();
   const ordenadas = [...lineas].sort((a, b) => a.fecha.localeCompare(b.fecha) || a.id.localeCompare(b.id));
@@ -596,21 +625,41 @@ export function cruzarExtracto(
       continue;
     }
 
-    // Cheque recibido devuelto: CHEQUE 48HS. DEVUELTO CAP F 00000074
-    const devuelto = c.match(/DEVUELTO.*?(\d{6,8})\s*$/);
+    // Rechazo de un cheque (DEVUELTO CAP F 00000074 · RECH.DEP.48H, código 019). Puede ser un cheque RECIBIDO (lo depositaste y volvió: reversa del cobro)
+    // o un cheque EMITIDO (uno tuyo que el banco rechazó): se distingue por el N° del cheque y su importe (Augusto 23/10). Va con subtipo "recibido" o "emitido".
+    const devuelto = c.match(/DEVUELTO.*?(\d{6,8})\s*$/) || (familiaDeCodigo(l.codigo) === "cheque_rechazo" && !esCredito(l) ? c.match(/ N (\d{1,8})\s*$/) : null);
     if (devuelto && !esCredito(l)) {
-      const ch = (recibidosPorNumero.get(numeroCheque(devuelto[1])) || []).find((x) => !usado("cheque_devuelto", x.id));
-      if (ch) usar("cheque_devuelto", ch.id);
-      out.set(l.id, {
-        linea_id: l.id, clasificacion: "cheque_devuelto", cheque_id: ch?.id || null, auto: Boolean(ch), candidatos: [],
-        motivo: ch ? `Cheque ${devuelto[1]} devuelto${ch.estado === "rechazado" ? " (ya rechazado en el CRM)" : ": rechazalo desde Cheques"}` : `Cheque ${devuelto[1]} devuelto, no está en el CRM`,
-        nota: ch && ch.estado !== "rechazado" ? "Falta rechazarlo desde Finanzas > Cheques" : null,
-      });
+      const num = numeroCheque(devuelto[1]);
+      const libres = (xs: ChequeCruce[] | undefined) => (xs || []).filter((x) => !usado("cheque_devuelto", x.id));
+      const igual = (x: ChequeCruce) => centavos(Number(x.monto)) === centavos(-l.importe);
+      const rec = libres(recibidosPorNumero.get(num)), emi = libres(emitidosPorNumero.get(num));
+      const recOk = rec.filter(igual), emiOk = emi.filter(igual);
+      if (recOk.length === 1 && emiOk.length === 0) {
+        const ch = recOk[0]; usar("cheque_devuelto", ch.id);
+        out.set(l.id, {
+          linea_id: l.id, clasificacion: "cheque_devuelto", subtipo: "recibido", cheque_id: ch.id, auto: true, candidatos: [],
+          motivo: `Cheque RECIBIDO ${devuelto[1]} rechazado (reversa del cobro)${ch.estado === "rechazado" ? " — ya rechazado en el CRM" : ": rechazalo desde Cheques"}`,
+          nota: ch.estado !== "rechazado" ? "Falta rechazarlo desde Finanzas > Cheques" : null,
+        });
+      } else if (emiOk.length === 1 && recOk.length === 0) {
+        const ch = emiOk[0]; usar("cheque_devuelto", ch.id);
+        out.set(l.id, {
+          linea_id: l.id, clasificacion: "cheque_devuelto", subtipo: "emitido", cheque_id: ch.id, auto: false, candidatos: [],
+          motivo: `Cheque PROPIO (emitido) ${devuelto[1]} rechazado por el banco: revisá la orden de pago y avisá al proveedor`,
+          nota: "Cheque propio rechazado: revisar la OP con la que se pagó",
+        });
+      } else {
+        const cands = [...rec, ...emi];
+        out.set(l.id, {
+          linea_id: l.id, clasificacion: "cheque_devuelto", cheque_id: null, auto: false, candidatos: cands.map((x) => x.id),
+          motivo: cands.length ? `Cheque ${devuelto[1]} rechazado: no sé si es recibido o emitido (${rec.length} recibidos y ${emi.length} emitidos con ese número; el importe no coincide con uno solo)` : `Cheque ${devuelto[1]} rechazado, no está en el CRM (ni como recibido ni como emitido)`,
+        });
+      }
       continue;
     }
 
     // Depósito de cheque acreditado: por importe contra los cheques recibidos.
-    if (/^DEPOSITO CHEQUE/.test(c) && esCredito(l)) {
+    if ((/^DEPOSITO CHEQUE/.test(c) || familiaDeCodigo(l.codigo) === "cheque_deposito") && esCredito(l)) {
       const cand = cheques.filter((ch) => ch.direccion !== "emitido"
         && ["en_cartera", "depositado", "cobrado", "rechazado"].includes(ch.estado)
         && centavos(Number(ch.monto)) === centavos(l.importe)

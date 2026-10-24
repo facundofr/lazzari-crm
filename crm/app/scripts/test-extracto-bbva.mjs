@@ -203,6 +203,58 @@ assert.deepEqual(tot, { "2026-10": { iva: -5921.82, ley_25413: 1829.52 }, "2026-
   assert.equal(tot["2026-10"].devolucion_ley_25413, 60662.95);
 }
 
+// Reglas sugeridas del repaso (23/10): VEP pagado con la tarjeta de débito, reintegros y adelantos de la tarjeta. Son sugerencias: no se aplican solas.
+{
+  const lin = (id, concepto, importe) => ({ id, fecha: "2026-10-21", concepto, importe, cuenta_id: null });
+  const r = cruzarExtracto([
+    lin("v1", "PAGO DE SERVICIOS TARJETA 17779347 OP3559", -3033210.96), lin("v2", "PAGO SERVICI 17779347 OP5532", -677120.73),
+    lin("r1", "REINT. TARJETA DE CREDITO", 67594.04), lin("a1", "ADELANTO PAGO DE SERVICIO", 105561.86),
+  ], [], [], [], [], new Set());
+  const g = (id) => (Array.isArray(r) ? r : [...r.values()]).find((p) => p.linea_id === id);
+  for (const id of ["v1", "v2"]) { assert.equal(g(id).clasificacion, "impuesto"); assert.equal(g(id).subtipo, "afip"); assert.equal(g(id).auto, false); }
+  assert.equal(g("r1").clasificacion, "intereses"); assert.equal(g("r1").auto, false);
+  assert.equal(g("a1").clasificacion, "tarjeta"); assert.equal(g("a1").auto, false);
+}
+
+// Lectura por CÓDIGO del banco (tabla de Augusto, lib/bbva-codigos, 23/10/2026): el sufijo " #NNN" decide aunque el texto de la línea cambie.
+{
+  const lin = (id, concepto, importe) => ({ id, fecha: "2026-10-20", concepto, importe, cuenta_id: null });
+  const g = (r, id) => (Array.isArray(r) ? r : [...r.values()]).find((p) => p.linea_id === id);
+  const r = cruzarExtracto([
+    lin("c1", "COM EMISION 01734001A5 #575", -5000), lin("c2", "RIESGO CONTI #037", -300), lin("t1", "PAGO ARGENCA 77126831598399 #219", -2000000), lin("t2", "PAGO VISA-IN 79099672253398 #515", -3000000),
+    lin("f1", "OPER. FDO.CO 023354551502CUT #654", 5000000), lin("e1", "TRANSFERENCI 400913395493 · CTA.ORIGEN: CA $ 091-339549/3 #263", 1000000),
+    lin("a1", "PAGO SERVICI 17779347 OP5532 #137", -677120.73), lin("i1", "IVA TASA GRA #236", -199.5), lin("s1", "REG REC SIRC 14/10/26 00024X · CTE 000000000983 #550", -37478.49),
+    lin("l1", "LEY NRO 25.4 20/10/26 00017 #609", 60662.95), lin("x1", "TRANSF CREDITO BANELCO #135", 60500),
+  ], [], [], [], [], new Set());
+  assert.equal(g(r, "c1").clasificacion, "gasto_bancario"); assert.equal(g(r, "c1").auto, true);
+  assert.equal(g(r, "c2").clasificacion, "gasto_bancario");
+  for (const id of ["t1", "t2"]) { assert.equal(g(r, id).clasificacion, "tarjeta"); assert.equal(g(r, id).auto, false); }
+  assert.equal(g(r, "f1").clasificacion, "fci"); assert.equal(g(r, "f1").auto, false);
+  assert.equal(g(r, "e1").clasificacion, "entre_cuentas");
+  assert.equal(g(r, "a1").clasificacion, "impuesto"); assert.equal(g(r, "a1").subtipo, "afip"); assert.equal(g(r, "a1").auto, true);
+  assert.equal(g(r, "i1").subtipo, "iva"); assert.equal(g(r, "s1").subtipo, "sircreb");
+  assert.equal(g(r, "l1").subtipo, "devolucion_ley_25413", "una entrada en Ley 25.413 es devolución");
+  assert.notEqual(g(r, "x1").auto, true, "el 135 es una transferencia: no se clasifica solo");
+}
+
+// Rechazo de cheque (código 019): puede ser RECIBIDO (reversa del cobro) o EMITIDO (cheque propio rechazado); se distingue por número e importe.
+{
+  const g = (r, id) => (Array.isArray(r) ? r : [...r.values()]).find((p) => p.linea_id === id);
+  const cheques = [
+    { id: "rec", numero: "00000131", monto: 10110492.35, direccion: "recibido", estado: "depositado", fecha_pago: "2026-10-16" },
+    { id: "emi", numero: "90017500", monto: 250000, direccion: "emitido", estado: "entregado", fecha_pago: "2026-10-10" },
+  ];
+  const lin = (id, concepto, importe) => ({ id, fecha: "2026-10-20", concepto, importe, cuenta_id: null });
+  const r = cruzarExtracto([
+    lin("rr", "RECH.DEP.48H 09191840 · BOLETA NRO.: 09191840 N 131 #019", -10110492.35),
+    lin("re", "RECH.DEP.48H 01234567 N 90017500 #019", -250000),
+    lin("rx", "RECH.DEP.48H 09191840 N 999 #019", -1000),
+  ], [], cheques, [], [], new Set());
+  assert.equal(g(r, "rr").clasificacion, "cheque_devuelto"); assert.equal(g(r, "rr").subtipo, "recibido"); assert.equal(g(r, "rr").cheque_id, "rec"); assert.equal(g(r, "rr").auto, true);
+  assert.equal(g(r, "re").clasificacion, "cheque_devuelto"); assert.equal(g(r, "re").subtipo, "emitido"); assert.equal(g(r, "re").cheque_id, "emi"); assert.equal(g(r, "re").auto, false, "un cheque propio rechazado nunca se confirma solo");
+  assert.equal(g(r, "rx").cheque_id, null); assert.equal(g(r, "rx").auto, false);
+}
+
 console.log("extracto-bbva OK");
 
 // Cheque propio del Excel "Movimientos": el N° viene de la columna "Número Documento" y queda al final del concepto (23/10/2026).

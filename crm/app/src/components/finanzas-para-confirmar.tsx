@@ -11,6 +11,7 @@ import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
 import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { codigoDeConcepto, conCodigoBanco, sinCodigoBanco } from "@/lib/bbva-codigos";
 import { montoCuentaDeOp } from "@/lib/saldo-cuentas";
 import { repartirCobro, facturasParaRegistrar } from "@/lib/cobro-reparto";
 import {
@@ -214,7 +215,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
       // El concepto suma lo que dice el resumen del banco (nombre y CUIT de la otra parte): así lo reconocen proveedor, cliente y reglas.
       lineas: pendientes.map((l) => {
         const extra = textoContraparte(l.contraparte);
-        return { id: l.id, fecha: String(l.fecha).slice(0, 10), concepto: extra ? `${l.descripcion} · ${extra}` : l.descripcion, importe: importeDe(l), cuenta_id: l.cuenta_id, clasificacion: l.clasificacion, factura_arca: l.contraparte?.factura ?? null };
+        return { id: l.id, fecha: String(l.fecha).slice(0, 10), concepto: conCodigoBanco(extra ? `${sinCodigoBanco(l.descripcion)} · ${extra}` : sinCodigoBanco(l.descripcion), codigoDeConcepto(l.descripcion)), importe: importeDe(l), cuenta_id: l.cuenta_id, clasificacion: l.clasificacion, factura_arca: l.contraparte?.factura ?? null };
       }),
       movimientos: datos.movimientos.filter((m) => !m.anulado && !yaCruzados.has(m.id)),
       cheques: datos.cheques, cuentas, reglas: datos.reglas, chequesUsados: usados,

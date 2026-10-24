@@ -8,7 +8,7 @@
 // Nunca traba: todo es sugerencia; si algo no cierra, se avisa en el renglón.
 // Prueba: scripts/test-finanzas-propuestas.ts (npx tsx scripts/test-finanzas-propuestas.ts)
 import {
-  cruzarExtracto, CLASIFICACION_LABEL, SUBTIPO_LABEL,
+  cruzarExtracto, normalizarLinea, CLASIFICACION_LABEL, SUBTIPO_LABEL,
   type ClasificacionLinea, type LineaCruce, type MovCruce, type ChequeCruce, type CuentaCruce, type ReglaCruce, type Propuesta,
 } from "./extracto-bbva";
 import { cruzarPago, mismoCliente, etiquetaFactura, type FacturaAbierta, type PagoExtraido } from "./agente-mail";
@@ -244,7 +244,7 @@ export function gastosFijosParaDebito(fijos: { id: string; descripcion: string; 
 }
 
 export function armarBandeja(d: DatosBandeja): ItemBandeja[] {
-  const lineas = d.lineas.filter((l) => !d.descartadas.has(l.id));
+  const lineas = d.lineas.filter((l) => !d.descartadas.has(l.id)).map(normalizarLinea);
   const propuestas = cruzarExtracto(lineas, d.movimientos, d.cheques, d.cuentas, d.reglas, d.chequesUsados);
   const porLinea = new Map(propuestas.map((p) => [p.linea_id, p]));
   const cuentaPorId = new Map(d.cuentas.map((c) => [c.id, c]));
