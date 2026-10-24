@@ -28,7 +28,7 @@ export const CLASIFICACION_LABEL: Record<ClasificacionLinea, string> = {
 
 export const SUBTIPO_LABEL: Record<string, string> = {
   iva: "IVA sobre comisiones",
-  ley_25413: "Impuesto al cheque (Ley 25.413)",
+  ley_25413: "Impuesto crédito Ganancias (Ley 25.413, impuesto al cheque)",
   sircreb: "SIRCREB (IIBB, pago a cuenta)",
   comision: "Comisiones",
   mantenimiento: "Mantenimiento de cuenta",
@@ -44,7 +44,7 @@ export const SUBTIPO_LABEL: Record<string, string> = {
   otro_impuesto: "Otro impuesto",
   // Una ENTRADA dentro de una familia de impuestos o comisiones es una devolución o una reversa del banco, nunca un costo (Augusto 23/10).
   devolucion_iva: "Devolución de IVA del banco",
-  devolucion_ley_25413: "Devolución del impuesto al cheque (Ley 25.413)",
+  devolucion_ley_25413: "Devolución de impuesto crédito Ganancias (Ley 25.413)",
   devolucion_sircreb: "Devolución o reversa de SIRCREB",
   devolucion_mantenimiento: "Devolución de mantenimiento de cuenta",
   devolucion_comision: "Devolución de comisión del banco",

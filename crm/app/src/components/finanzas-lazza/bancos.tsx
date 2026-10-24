@@ -15,6 +15,7 @@ import { supabase } from "@/lib/supabase/client";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { diasDesde, pesosDeObservaciones, resumenPrestamo, type CuotaPrestamo } from "@/lib/bancos-lazza";
 import { FinanzasLazzaCheques } from "./cheques";
+import { CargarEstadoCheques } from "./cheques-reportes";
 import FinanzasParaConfirmar from "@/components/finanzas-para-confirmar";
 
 const db = supabase as any;
@@ -67,6 +68,7 @@ export function FinanzasLazzaBancos({ sociedadId, pestanaInicial = "cuentas" }: 
   const [guardando, setGuardando] = useState(false);
   const [pestana, setPestana] = useState<"cuentas" | "prestamos" | "cheques" | "extracto">(pestanaInicial);
   const [marcandoCuota, setMarcandoCuota] = useState<string | null>(null);
+  const [versionCheques, setVersionCheques] = useState(0);
   const hoy = todayAR();
 
   const cargar = useCallback(() => {
@@ -129,11 +131,17 @@ export function FinanzasLazzaBancos({ sociedadId, pestanaInicial = "cuentas" }: 
         <button type="button" onClick={() => setPestana("cuentas")} className={botonPestana(pestana === "cuentas")}>Cuentas y tarjetas</button>
         <button type="button" onClick={() => setPestana("prestamos")} className={botonPestana(pestana === "prestamos")}>Préstamos ({datos.prestamos.length})</button>
         <button type="button" onClick={() => setPestana("cheques")} className={botonPestana(pestana === "cheques")}>Cheques</button>
-        <button type="button" onClick={() => setPestana("extracto")} className={botonPestana(pestana === "extracto")}>Extracto</button>
+        <button type="button" onClick={() => setPestana("extracto")} className={botonPestana(pestana === "extracto")}>Movimientos</button>
       </div>
 
       {/* Cheques (23/10, Augusto): la tarjeta Cheques salió del inicio y vive acá, con Martín F. adentro. */}
-      {pestana === "cheques" && <FinanzasLazzaCheques sociedadId={sociedadId} />}
+      {pestana === "cheques" && (
+        <div className="space-y-3">
+          {/* Estado de cheques (24/10, Augusto): los reportes de eCheq del banco se cargan acá. */}
+          <CargarEstadoCheques sociedadId={sociedadId} onAplicado={() => setVersionCheques((v) => v + 1)} />
+          <FinanzasLazzaCheques key={versionCheques} sociedadId={sociedadId} />
+        </div>
+      )}
 
       {/* Extracto (23/10, Augusto): subir el Excel "Movimientos" del BBVA y cerrar las líneas; la bandeja de siempre, en versión simple. */}
       {pestana === "extracto" && <FinanzasParaConfirmar simple />}

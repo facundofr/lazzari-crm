@@ -86,11 +86,17 @@ const importeDe = (l: Pick<LineaRow, "monto" | "tipo">) => (l.tipo === "credito"
 const sinNumeros = (s: string) => s.replace(/\d[\d/.:]*/g, " ").replace(/\s+/g, " ").trim();
 const errorTexto = (e: unknown) => (e instanceof Error ? e.message : (e as { message?: string })?.message || String(e));
 
-async function leerHojas(file: File): Promise<unknown[][][]> {
+export async function leerHojas(file: File): Promise<unknown[][][]> {
   const XLSX: any = await import("xlsx");
   const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
   return wb.SheetNames.map((n: string) => XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: false, defval: "" }));
 }
+
+const esListadoCheques = (hojas: unknown[][][]) => hojas.some((h) => { try { return leerListadoCheques(h).length > 0; } catch { return false; } });
+export const esMovimientos = (hojas: unknown[][][]) => {
+  try { return leerExtractoBbva(hojas[0] || []).lineas.length > 0; } catch { /* sigue */ }
+  try { return leerMovimientosBbva(hojas, null).lineas.length > 0; } catch { return false; }
+};
 
 /**
  * Lee un Excel del BBVA ("Detalle_mov_cuenta" o "Movimientos") y lo deja listo para guardar.
@@ -99,6 +105,8 @@ async function leerHojas(file: File): Promise<unknown[][][]> {
  */
 export async function leerArchivoExtracto(f: File, cuentas: CuentaRow[], clavesPorCuenta: Map<string, Set<string>>): Promise<ArchivoPreview> {
   const hojas = await leerHojas(f);
+  // Aviso (24/10, Augusto): si es el reporte de cheques, decir dónde va (no se guarda nada).
+  if (esListadoCheques(hojas) && !esMovimientos(hojas)) throw new Error("Este archivo parece el reporte de cheques (eCheq), no los Movimientos de la cuenta. Subilo en Bancos > Cheques.");
   let leido;
   try {
     leido = leerExtractoBbva(hojas[0] || []);
@@ -393,7 +401,9 @@ export default function ExtractoBbva({ onIrACheques }: { onIrACheques?: () => vo
     try {
       const listados: ChequeListado[][] = [];
       for (const f of Array.from(files)) {
-        for (const hoja of await leerHojas(f)) {
+        const hojas = await leerHojas(f);
+        if (!esListadoCheques(hojas) && esMovimientos(hojas)) { alert(`${f.name}: parece los Movimientos de la cuenta, no el reporte de cheques. Subilo en Bancos > Movimientos.`); continue; }
+        for (const hoja of hojas) {
           const l = leerListadoCheques(hoja);
           if (l.length) listados.push(l);
         }

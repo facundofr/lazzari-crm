@@ -30,7 +30,7 @@ export function grupoDe(g: { grupo?: string | null; categoria?: string | null })
 
 /** Formas de pago (las que ya usa la base + débito automático). */
 export const MEDIOS: Record<string, string> = {
-  transferencia: "Transferencia", efectivo: "Efectivo", tarjeta: "Tarjeta", cheque: "Cheque", vep: "VEP",
+  transferencia: "Transferencia", efectivo: "Efectivo", tarjeta: "Tarjeta", tarjeta_visa_1582: "Tarjeta Visa 1582", tarjeta_mastercard_4775: "Tarjeta Mastercard 4775", cheque: "Cheque", vep: "VEP",
   debito: "Débito en cuenta", debito_automatico: "🔁 Débito automático",
 };
 export const etiquetaMedio = (m: string | null | undefined) => MEDIOS[String(m || "")] || (m ? String(m) : "—");
