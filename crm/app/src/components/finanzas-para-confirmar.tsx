@@ -589,7 +589,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
       try {
         if (/\.pdf$/i.test(f.name)) avisos.push(await subirResumenPdf(f));
         else if (/\.csv$/i.test(f.name)) avisos.push(await subirArcaRecibidos(f));
-        else out.push(await leerArchivoExtracto(f, cuentas, clavesPorCuenta));
+        else out.push(await leerArchivoExtracto(f, cuentas, clavesPorCuenta, lineas.map((l) => ({ cuenta_id: l.cuenta_id, fecha: String(l.fecha).slice(0, 10), importe: l.tipo === "credito" ? Number(l.monto) : -Number(l.monto) }))));
       } catch (e) { errores.push(`${f.name}: ${errorTexto(e)}`); }
     }
     setArchivos(out);
@@ -818,6 +818,11 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
                 {a.leido.lineas.length ? ` · del ${formatDate(a.leido.lineas[0].fecha)} al ${formatDate(a.leido.saldoFecha || "")}` : ""}
                 {` · ${a.nuevas} líneas nuevas · saldo ${formatCurrency(a.leido.saldoFinal || 0)}`}
                 {a.leido.saltos > 0 ? <span className="font-semibold text-amber-600"> · ⚠️ en {a.leido.saltos} renglones el saldo no cierra</span> : <span className="text-emerald-600"> · saldos ✔</span>}
+                {a.control && (a.control.diferencias.length === 0
+                  ? a.control.diasComparados > 0 && <span className="text-emerald-600"> · {a.control.diasComparados} días ya cargados coinciden ✔</span>
+                  : <span className="block font-semibold text-amber-600">
+                      ⚠️ Control día por día: {a.control.diferencias.slice(0, 6).map((d) => `${formatDate(d.fecha)}${d.sobranEnBase.length ? `: el Excel no trae ${d.sobranEnBase.length} línea${d.sobranEnBase.length > 1 ? "s" : ""} que ya tengo guardada${d.sobranEnBase.length > 1 ? "s" : ""} (${formatCurrency(Math.abs(d.sobranEnBase.reduce((x, y) => x + y, 0)))} en total)` : ""}${d.faltanEnBase.length ? `${d.sobranEnBase.length ? " y" : ":"} trae ${d.faltanEnBase.length} línea${d.faltanEnBase.length > 1 ? "s" : ""} que no tengo (${formatCurrency(Math.abs(d.faltanEnBase.reduce((x, y) => x + y, 0)))} en total)` : ""}`).join(" · ")}{a.control.diferencias.length > 6 ? ` · y ${a.control.diferencias.length - 6} días más` : ""}. Puede ser un Excel incompleto o que el banco cambió algo; no se cambia nada solo.
+                    </span>)}
               </p>
             ))}
             <div className="flex gap-2 pt-1">

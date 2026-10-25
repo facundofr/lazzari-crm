@@ -16,6 +16,7 @@ import {
   type ExtractoLeido, type ChequeListado, type ClasificacionLinea, type MovCruce, type ChequeCruce, type ReglaCruce, type Propuesta,
   digitosCuenta,
 } from "@/lib/extracto-bbva";
+import { controlPorDia, limitarPorGuardadas, type ResultadoControl } from "@/lib/control-dia";
 import { montoCuentaDeOp } from "@/lib/saldo-cuentas";
 import { AlertTriangle, CheckCircle2, FileSpreadsheet, Loader2, RotateCcw, Upload, Wand2 } from "lucide-react";
 
@@ -69,6 +70,8 @@ export interface ArchivoPreview {
   /** Las que no están cargadas (ni por clave ni por fecha+importe+saldo): solo esas se mandan a guardar. */
   aGuardar: ExtractoLeido["lineas"];
   nuevas: number;
+  /** Control día por día contra lo ya guardado (solo si se le pasaron las líneas guardadas). */
+  control?: ResultadoControl;
   guardado?: string;
 }
 
@@ -103,7 +106,7 @@ export const esMovimientos = (hojas: unknown[][][]) => {
  * El "Movimientos" no trae saldo por línea: se calcula y se verifica contra el último saldo cargado (si no cierra, tira error).
  * También lo usa la bandeja "Para confirmar".
  */
-export async function leerArchivoExtracto(f: File, cuentas: CuentaRow[], clavesPorCuenta: Map<string, Set<string>>): Promise<ArchivoPreview> {
+export async function leerArchivoExtracto(f: File, cuentas: CuentaRow[], clavesPorCuenta: Map<string, Set<string>>, guardadas?: Array<{ cuenta_id: string; fecha: string; importe: number }>): Promise<ArchivoPreview> {
   const hojas = await leerHojas(f);
   // Aviso (24/10, Augusto): si es el reporte de cheques, decir dónde va (no se guarda nada).
   if (esListadoCheques(hojas) && !esMovimientos(hojas)) throw new Error("Este archivo parece el reporte de cheques (eCheq), no los Movimientos de la cuenta. Subilo en Bancos > Cheques.");
@@ -121,8 +124,15 @@ export async function leerArchivoExtracto(f: File, cuentas: CuentaRow[], clavesP
   const cuenta = cuentas.find((c) => digitosCuenta(c.numero) === leido.cuentaDigitos) || null;
   const desdeCorte = cuenta ? leido.lineas.filter((l) => l.fecha > cuenta.fecha_corte) : leido.lineas;
   const claves = cuenta ? clavesPorCuenta.get(cuenta.id) || new Set<string>() : new Set<string>();
-  const aGuardar = lineasNuevas(desdeCorte, claves);
-  return { nombre: f.name, leido, cuenta, desdeCorte, aGuardar, nuevas: aGuardar.length };
+  // Con las líneas ya guardadas a mano, también se cuenta por fecha + importe (el saldo y el texto de la base pueden venir de otro formato del banco).
+  const guardadasCuenta = cuenta && guardadas ? guardadas.filter((g) => g.cuenta_id === cuenta.id) : null;
+  const aGuardar = guardadasCuenta
+    ? limitarPorGuardadas(lineasNuevas(desdeCorte, claves), desdeCorte.map((l) => ({ fecha: l.fecha, importe: l.importe })), guardadasCuenta)
+    : lineasNuevas(desdeCorte, claves);
+  const control = cuenta && guardadas
+    ? controlPorDia(leido.lineas.map((l) => ({ fecha: l.fecha, importe: l.importe })), guardadas.filter((g) => g.cuenta_id === cuenta.id))
+    : undefined;
+  return { nombre: f.name, leido, cuenta, desdeCorte, aGuardar, nuevas: aGuardar.length, control };
 }
 
 /** Guarda las líneas nuevas del extracto (las repetidas se saltean) y el saldo según el banco. */
