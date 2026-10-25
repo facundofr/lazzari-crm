@@ -13,6 +13,7 @@ import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, todayAR } from "@/lib/utils";
 import { armarRetenciones, ivaDelMes, reporteBasico, type ReporteBasico } from "@/lib/finanzas-lazza";
 import { esCobroDeCliente } from "@/lib/tipos-movimiento";
+import { CargaDiaria } from "./carga-diaria";
 import { traerComprasDelMes, traerDatosReporte, traerDeudas, traerTcDelDia, traerVentasDelMes, rangoMes } from "./datos";
 
 const db = supabase as any;
@@ -217,6 +218,8 @@ export function FinanzasLazzaInicio({ sociedadId, onAbrir }: { sociedadId: strin
   // 4 filas completas de 4 (Augusto 20/10: "reorganizá eso así queda el espacio optimizado"); cada tarjeta mantiene el color de su grupo.
   return (
     <div className="space-y-3">
+      {/* 25/10, Augusto: si falta cargar algún extracto o reporte del banco, avisa apenas se abre Finanzas. */}
+      <CargaDiaria sociedadId={sociedadId} hoy={todayAR()} soloSiFalta onIr={() => onAbrir("bancos")} />
       {FILAS.map((fila) => {
         const lista = TARJETAS.filter((t) => fila.grupos.includes(t.grupo));
         return (

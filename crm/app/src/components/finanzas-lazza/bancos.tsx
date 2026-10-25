@@ -17,6 +17,7 @@ import { diasDesde, pesosDeObservaciones, resumenPrestamo, type CuotaPrestamo } 
 import { FinanzasLazzaCheques } from "./cheques";
 import { CargarEstadoCheques } from "./cheques-reportes";
 import { MovimientosPorTipo } from "./movimientos-por-tipo";
+import { CargaDiaria } from "./carga-diaria";
 import FinanzasParaConfirmar from "@/components/finanzas-para-confirmar";
 
 const db = supabase as any;
@@ -128,6 +129,9 @@ export function FinanzasLazzaBancos({ sociedadId, pestanaInicial = "cuentas" }: 
           <AlertTriangle className="h-4 w-4" /> Falta correr la migración de Bancos: todavía no se ven BAVSA, los préstamos de la familia ni los resúmenes de tarjeta.
         </p>
       )}
+
+      {/* 25/10, Augusto: ¿está todo al día? La última carga de cada extracto y de los reportes de cheques contra el último día hábil. */}
+      <CargaDiaria sociedadId={sociedadId} hoy={hoy} />
 
       <div className="flex w-fit rounded-lg border border-zinc-200 p-0.5 dark:border-zinc-700">
         <button type="button" onClick={() => setPestana("cuentas")} className={botonPestana(pestana === "cuentas")}>Cuentas y tarjetas</button>
