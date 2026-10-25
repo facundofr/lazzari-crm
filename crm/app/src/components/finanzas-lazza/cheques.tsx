@@ -14,6 +14,7 @@ import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { enFecha, estadoCheque, proximasSemanas, resumenPorEstado, type ChequeFL, type Total } from "@/lib/cheques-lazza";
 import { ChequesBanco } from "./cheques-banco";
 import { diferenciaConBanco } from "@/lib/cheques-estado-banco";
+import { CoberturaCheques } from "./cobertura-cheques-card";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -112,20 +113,17 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
   };
 
   const cols: Column<Cheque>[] = [
-    { key: "numero", label: "N°", sortable: true, sortValue: (c) => c.numero, render: (c) => <span className="font-mono text-xs">{c.numero}</span> },
-    { key: "dir", label: "Categoría", sortable: true, sortValue: (c) => `${c.direccion}${c.tipo}`, render: (c) => (
-      <span className="text-xs">{c.direccion === "emitido" ? "Emitido" : "Recibido"}<span className="block text-[10px] text-zinc-400">{c.tipo}</span></span>
-    ) },
-    { key: "quien", label: "De / Para", sortable: true, sortValue: (c) => conQuien(c), render: (c) => (
-      <span className="text-sm">{conQuien(c) || "—"}{c.cubre_tercero && <span className="ml-1 rounded bg-violet-50 px-1 text-[10px] font-semibold text-violet-700 dark:bg-violet-950/40 dark:text-violet-300">Martín F.</span>}</span>
-    ) },
-    { key: "banco", label: "Banco", sortable: true, sortValue: (c) => c.banco, render: (c) => <span className="text-xs">{c.banco || "—"}</span> },
     { key: "emision", label: "Emisión", sortable: true, sortValue: (c) => c.emision || "", render: (c) => (c.emision ? formatDate(c.emision) : "—") },
     { key: "pago", label: "Pago", sortable: true, sortValue: (c) => c.pago, render: (c) => {
       const pend = ["entregado", "pendiente", "en_cartera"].includes(c.estado);
       return <span className={`whitespace-nowrap ${pend && c.pago && c.pago <= hoy ? "font-semibold text-red-600" : ""}`}>{c.pago ? formatDate(c.pago) : "—"}{pend && c.pago && c.pago <= hoy && <span className="block text-[10px]">en fecha</span>}</span>;
     } },
+    { key: "numero", label: "N°", sortable: true, sortValue: (c) => c.numero, render: (c) => <span className="font-mono text-xs">{c.numero}</span> },
+    { key: "quien", label: "De / Para", sortable: true, sortValue: (c) => conQuien(c), render: (c) => (
+      <span className="text-sm">{conQuien(c) || "—"}{c.cubre_tercero && <span className="ml-1 rounded bg-violet-50 px-1 text-[10px] font-semibold text-violet-700 dark:bg-violet-950/40 dark:text-violet-300">Martín F.</span>}</span>
+    ) },
     { key: "monto", label: "Monto", sortable: true, sortValue: (c) => Number(c.monto), className: "text-right", render: (c) => <span className="whitespace-nowrap font-mono font-semibold">{formatCurrency(Number(c.monto), c.moneda === "USD" ? "USD" : "ARS")}</span> },
+    { key: "banco", label: "Banco", sortable: true, sortValue: (c) => c.banco, render: (c) => <span className="text-xs">{c.banco || "—"}</span> },
     { key: "estado", label: "Estado", sortable: true, sortValue: (c) => estadoCheque(c).label, render: (c) => { const e = estadoCheque(c); return <span className={`whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-semibold ${TONO[e.tono]}`}>{e.label}</span>; } },
     { key: "segunBanco", label: "Según el banco", sortable: true, sortValue: (c) => c.estadoBanco, render: (c) => {
       if (!c.estadoBanco) return <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>;
@@ -177,6 +175,9 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
               <p className="text-xs text-zinc-500">{fecha.cobrar.cantidad} cheque{fecha.cobrar.cantidad === 1 ? "" : "s"} en cartera que ya se puede{fecha.cobrar.cantidad === 1 ? "" : "n"} depositar</p>
             </button>
           </div>
+
+          {/* ¿Alcanza la plata de la cuenta? (25/10, Augusto): saldo del último extracto contra los cheques que el banco puede debitar */}
+          <CoberturaCheques sociedadId={sociedadId} hoy={hoy} cheques={todos.map((c) => ({ numero: c.numero, direccion: c.direccion, estado: c.estado, fecha_pago: c.fecha_pago, monto: c.monto, moneda: c.moneda, estadoBanco: c.estadoBanco }))} />
 
           {/* Resumen por estado */}
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
