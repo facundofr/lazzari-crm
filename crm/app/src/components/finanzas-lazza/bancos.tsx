@@ -16,6 +16,7 @@ import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { diasDesde, pesosDeObservaciones, resumenPrestamo, type CuotaPrestamo } from "@/lib/bancos-lazza";
 import { FinanzasLazzaCheques } from "./cheques";
 import { CargarEstadoCheques } from "./cheques-reportes";
+import { MovimientosPorTipo } from "./movimientos-por-tipo";
 import FinanzasParaConfirmar from "@/components/finanzas-para-confirmar";
 
 const db = supabase as any;
@@ -69,6 +70,7 @@ export function FinanzasLazzaBancos({ sociedadId, pestanaInicial = "cuentas" }: 
   const [pestana, setPestana] = useState<"cuentas" | "prestamos" | "cheques" | "extracto">(pestanaInicial);
   const [marcandoCuota, setMarcandoCuota] = useState<string | null>(null);
   const [versionCheques, setVersionCheques] = useState(0);
+  const [vistaMov, setVistaMov] = useState<"confirmar" | "tipo">("confirmar");
   const hoy = todayAR();
 
   const cargar = useCallback(() => {
@@ -144,7 +146,16 @@ export function FinanzasLazzaBancos({ sociedadId, pestanaInicial = "cuentas" }: 
       )}
 
       {/* Extracto (23/10, Augusto): subir el Excel "Movimientos" del BBVA y cerrar las líneas; la bandeja de siempre, en versión simple. */}
-      {pestana === "extracto" && <FinanzasParaConfirmar simple />}
+      {pestana === "extracto" && (
+        <div className="space-y-3">
+          {/* 24/10, Augusto: "Ver por tipo" muestra todas las líneas del banco agrupadas (solo lectura). */}
+          <div className="flex w-fit rounded-lg border border-zinc-200 p-0.5 text-sm dark:border-zinc-700">
+            <button type="button" onClick={() => setVistaMov("confirmar")} className={botonPestana(vistaMov === "confirmar")}>Para confirmar</button>
+            <button type="button" onClick={() => setVistaMov("tipo")} className={botonPestana(vistaMov === "tipo")}>Ver por tipo</button>
+          </div>
+          {vistaMov === "confirmar" ? <FinanzasParaConfirmar simple /> : <MovimientosPorTipo sociedadId={sociedadId} />}
+        </div>
+      )}
 
       {pestana === "cuentas" && (
         <>
