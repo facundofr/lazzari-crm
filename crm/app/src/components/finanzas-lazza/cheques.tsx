@@ -13,6 +13,7 @@ import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { enFecha, estadoCheque, proximasSemanas, resumenPorEstado, type ChequeFL, type Total } from "@/lib/cheques-lazza";
 import { ChequesBanco } from "./cheques-banco";
+import { diferenciaConBanco } from "@/lib/cheques-estado-banco";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -21,6 +22,8 @@ const sinAcentos = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toL
 interface Cheque extends ChequeFL {
   banco: string; cuit: string; tipo: string; emision: string | null; pago: string;
   origen: string; destino: string; fechaEndoso: string | null; fechaDeposito: string | null; observaciones: string;
+  /** Estado según el banco (reportes eCheq), tal cual; vacío si todavía no se cargó. */
+  estadoBanco: string;
 }
 
 const TONO: Record<string, string> = {
@@ -36,7 +39,7 @@ const montos = (t: Total) => <>{formatCurrency(t.ARS)}{t.USD > 0 && <span classN
 
 async function traerCheques(sociedadId: string): Promise<Cheque[]> {
   const rows = await traerTodo<any>(() => db.from("echeqs")
-    .select("id, numero, banco_emisor, cuit_emisor, monto, moneda, fecha_emision, fecha_pago, estado, origen_nombre, destino_nombre, fecha_endoso, fecha_deposito, observaciones, tipo_cheque, direccion, cubre_tercero")
+    .select("id, numero, banco_emisor, cuit_emisor, monto, moneda, fecha_emision, fecha_pago, estado, origen_nombre, destino_nombre, fecha_endoso, fecha_deposito, observaciones, tipo_cheque, direccion, cubre_tercero, estado_banco")
     .eq("sociedad_id", sociedadId).order("fecha_pago", { ascending: false }).order("id"));
   return rows.map((r) => ({
     id: r.id, numero: String(r.numero ?? ""), direccion: r.direccion === "emitido" ? "emitido" : "recibido", estado: r.estado || "",
@@ -45,7 +48,7 @@ async function traerCheques(sociedadId: string): Promise<Cheque[]> {
     banco: r.banco_emisor || "", cuit: r.cuit_emisor || "", tipo: r.tipo_cheque === "fisico" ? "Físico" : "eCheq",
     emision: r.fecha_emision ? String(r.fecha_emision).slice(0, 10) : null, pago: r.fecha_pago ? String(r.fecha_pago).slice(0, 10) : "",
     origen: r.origen_nombre || "", destino: r.destino_nombre || "", fechaEndoso: r.fecha_endoso || null, fechaDeposito: r.fecha_deposito || null,
-    observaciones: r.observaciones || "",
+    observaciones: r.observaciones || "", estadoBanco: r.estado_banco || "",
   }));
 }
 
@@ -59,6 +62,7 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
   const [categoria, setCategoria] = useState<"" | "emitido" | "recibido">("");
   const [estado, setEstado] = useState("");
   const [tipo, setTipo] = useState("");
+  const [segunBanco, setSegunBanco] = useState<"" | "diferencia" | "con" | "sin">("");
   const [soloEnFecha, setSoloEnFecha] = useState(false);
   const [texto, setTexto] = useState("");
   const [desde, setDesde] = useState("");
@@ -87,14 +91,17 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
     if (categoria && c.direccion !== categoria) return false;
     if (estado && estadoCheque(c).clave !== estado) return false;
     if (tipo && c.tipo !== tipo) return false;
+    if (segunBanco === "diferencia" && !diferenciaConBanco(c.direccion, c.estado, c.estadoBanco)) return false;
+    if (segunBanco === "con" && !c.estadoBanco) return false;
+    if (segunBanco === "sin" && c.estadoBanco) return false;
     if (soloEnFecha && !(["entregado", "pendiente", "en_cartera"].includes(c.estado) && c.pago && c.pago <= hoy)) return false;
     if (desde && c.pago < desde) return false;
     if (hasta && c.pago > hasta) return false;
     if (q && !sinAcentos(`${c.numero} ${c.banco} ${c.cuit} ${c.origen} ${c.destino} ${c.cubre_tercero || ""} ${c.monto}`).includes(q)) return false;
     return true;
-  }), [todos, categoria, estado, tipo, soloEnFecha, desde, hasta, q, hoy]);
+  }), [todos, categoria, estado, tipo, segunBanco, soloEnFecha, desde, hasta, q, hoy]);
 
-  const limpiar = () => { setCategoria(""); setEstado(""); setTipo(""); setSoloEnFecha(false); setTexto(""); setDesde(""); setHasta(""); };
+  const limpiar = () => { setCategoria(""); setEstado(""); setTipo(""); setSegunBanco(""); setSoloEnFecha(false); setTexto(""); setDesde(""); setHasta(""); };
   const filtrar = (f: { categoria?: "" | "emitido" | "recibido"; estado?: string; enFecha?: boolean; desde?: string; hasta?: string }) => {
     limpiar();
     if (f.categoria !== undefined) setCategoria(f.categoria);
@@ -120,6 +127,11 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
     } },
     { key: "monto", label: "Monto", sortable: true, sortValue: (c) => Number(c.monto), className: "text-right", render: (c) => <span className="whitespace-nowrap font-mono font-semibold">{formatCurrency(Number(c.monto), c.moneda === "USD" ? "USD" : "ARS")}</span> },
     { key: "estado", label: "Estado", sortable: true, sortValue: (c) => estadoCheque(c).label, render: (c) => { const e = estadoCheque(c); return <span className={`whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-semibold ${TONO[e.tono]}`}>{e.label}</span>; } },
+    { key: "segunBanco", label: "Según el banco", sortable: true, sortValue: (c) => c.estadoBanco, render: (c) => {
+      if (!c.estadoBanco) return <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>;
+      const dif = diferenciaConBanco(c.direccion, c.estado, c.estadoBanco);
+      return <span title={dif || undefined} className={`whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-semibold ${dif ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>{dif ? "⚠️ " : ""}{c.estadoBanco}</span>;
+    } },
   ];
 
   const totalVisibles = useMemo(() => {
@@ -225,10 +237,13 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
             <select value={tipo} onChange={(e) => setTipo(e.target.value)} className={control}>
               <option value="">eCheq y físicos</option><option value="eCheq">eCheq</option><option value="Físico">Físicos</option>
             </select>
+            <select value={segunBanco} onChange={(e) => setSegunBanco(e.target.value as typeof segunBanco)} className={control}>
+              <option value="">Estado del banco: todos</option><option value="diferencia">Con diferencia con el banco</option><option value="con">Con estado del banco</option><option value="sin">Sin estado del banco</option>
+            </select>
             <input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} title="Fecha de pago desde" className={control} />
             <input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} title="Fecha de pago hasta" className={control} />
             {soloEnFecha && <span className="rounded bg-red-50 px-2 py-0.5 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">Solo en fecha</span>}
-            {(categoria || estado || tipo || soloEnFecha || texto || desde || hasta) && <button type="button" onClick={limpiar} className="text-xs text-orange-600 hover:underline">Limpiar</button>}
+            {(categoria || estado || tipo || segunBanco || soloEnFecha || texto || desde || hasta) && <button type="button" onClick={limpiar} className="text-xs text-orange-600 hover:underline">Limpiar</button>}
           </div>
           <div className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
             <DataTable columns={cols} data={visibles} onRowClick={setAbierto} emptyMessage="No hay cheques con ese filtro" />
@@ -253,6 +268,7 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
             <dl className="space-y-1.5 text-sm">
               {([
                 ["Estado", <span key="e" className={`rounded px-1.5 py-0.5 text-xs font-semibold ${TONO[estadoCheque(abierto).tono]}`}>{estadoCheque(abierto).label}</span>],
+                ...(abierto.estadoBanco ? [["Según el banco", <span key="sb">{abierto.estadoBanco}{diferenciaConBanco(abierto.direccion, abierto.estado, abierto.estadoBanco) && <span className="mt-0.5 block text-xs font-medium text-amber-700 dark:text-amber-300">⚠️ {diferenciaConBanco(abierto.direccion, abierto.estado, abierto.estadoBanco)} No se cambió nada solo.</span>}</span>]] : []),
                 ["Monto", <b key="m" className="font-mono">{formatCurrency(Number(abierto.monto), abierto.moneda === "USD" ? "USD" : "ARS")}</b>],
                 ["De dónde vino", abierto.direccion === "emitido" ? "Lo emitimos nosotros" : abierto.origen || "—"],
                 ["A dónde fue", abierto.destino || (abierto.direccion === "recibido" && abierto.estado === "en_cartera" ? "Sigue en cartera" : "—")],
