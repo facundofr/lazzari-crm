@@ -3,21 +3,23 @@
 // Bancos y Finanzas (inicio) > "¿Está todo al día?" (25/10/2026, Augusto): la última carga de cada fuente del banco contra lo que corresponde.
 // Todos los días hábiles: CC EPP y reportes de cheques (emitidos y recibidos). Hasta 7 días: CC INDU, cajas de ahorro y FCI (si nunca se cargaron, no se muestran).
 // Es un aviso: no bloquea nada. Con `soloSiFalta` (inicio de Finanzas) aparece únicamente cuando falta cargar algo. Lógica en lib/carga-diaria (prueba: scripts/test-carga-diaria.ts).
+// La fecha de cada cuenta es la más reciente entre su último movimiento y la última vez que se subió su extracto (registro "extracto_cargado"):
+// una cuenta sin movimientos (ej. la INDU) queda al día con solo subir el Excel y apretar Guardar.
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { digitosCuenta } from "@/lib/extracto-bbva";
-import { estadoCarga, estadoCargaSemanal, type EstadoCarga } from "@/lib/carga-diaria";
+import { estadoCarga, estadoCargaSemanal, fechaArgentina, masReciente, type EstadoCarga } from "@/lib/carga-diaria";
 import { formatDate } from "@/lib/utils";
 
 interface CuentaMin { nombre: string; tipo: string; numero: string | null; saldo_banco_fecha: string | null }
-interface Fuente { clave: string; nombre: string; ultima: string | null; detalle: string; diaria: boolean }
+interface Fuente { clave: string; nombre: string; ultima: string | null; texto: string; diaria: boolean }
 
 const TIPOS_CON_EXTRACTO = new Set(["cuenta_corriente", "caja_ahorro", "fci"]);
 const CC_EPP = digitosCuenta("091-312483/1");
 
 export function CargaDiaria({ sociedadId, hoy, soloSiFalta = false, onIr }: { sociedadId: string; hoy: string; soloSiFalta?: boolean; onIr?: () => void }) {
-  const [datos, setDatos] = useState<{ cuentas: CuentaMin[]; emitido: string | null; recibido: string | null } | null>(null);
+  const [datos, setDatos] = useState<{ cuentas: CuentaMin[]; cargas: Record<string, string>; emitido: string | null; recibido: string | null } | null>(null);
 
   useEffect(() => {
     let vivo = true;
@@ -25,13 +27,21 @@ export function CargaDiaria({ sociedadId, hoy, soloSiFalta = false, onIr }: { so
       const db = supabase as any;
       const ultima = async (direccion: string) => {
         const { data } = await db.from("echeqs").select("estado_banco_at").eq("sociedad_id", sociedadId).eq("direccion", direccion).not("estado_banco_at", "is", null).order("estado_banco_at", { ascending: false }).limit(1);
-        return (data?.[0]?.estado_banco_at as string | undefined) || null;
+        const t = data?.[0]?.estado_banco_at as string | undefined;
+        return t ? fechaArgentina(t) : null;
       };
-      const [cs, emitido, recibido] = await Promise.all([
+      const [cs, regs, emitido, recibido] = await Promise.all([
         db.from("cuentas_financieras").select("nombre, tipo, numero, saldo_banco_fecha, orden").eq("sociedad_id", sociedadId).eq("activa", true).order("orden"),
+        db.from("finanzas_registro").select("created_at, resultado").eq("sociedad_id", sociedadId).eq("accion", "extracto_cargado").order("created_at", { ascending: false }).limit(500),
         ultima("emitido"), ultima("recibido"),
       ]);
-      if (vivo) setDatos({ cuentas: (cs.data || []) as CuentaMin[], emitido, recibido });
+      // Última vez que se subió el extracto de cada cuenta (por nombre de la cuenta, como lo anota Para confirmar).
+      const cargas: Record<string, string> = {};
+      for (const r of (regs.data || []) as Array<{ created_at: string; resultado: { cuenta?: string } | null }>) {
+        const cuenta = r.resultado?.cuenta;
+        if (cuenta && !cargas[cuenta]) cargas[cuenta] = fechaArgentina(r.created_at);
+      }
+      if (vivo) setDatos({ cuentas: (cs.data || []) as CuentaMin[], cargas, emitido, recibido });
     })().catch(() => { if (vivo) setDatos(null); });
     return () => { vivo = false; };
   }, [sociedadId]);
@@ -39,11 +49,15 @@ export function CargaDiaria({ sociedadId, hoy, soloSiFalta = false, onIr }: { so
   const evaluadas = useMemo(() => {
     if (!datos) return [];
     const fuentes: Fuente[] = [
-      ...datos.cuentas.filter((c) => TIPOS_CON_EXTRACTO.has(c.tipo) && c.numero).map((c) => ({
-        clave: `c-${c.nombre}`, nombre: c.nombre, ultima: c.saldo_banco_fecha, detalle: "movimientos hasta", diaria: digitosCuenta(c.numero) === CC_EPP,
-      })),
-      { clave: "ch-e", nombre: "Cheques emitidos", ultima: datos.emitido, detalle: "reporte de eCheq del", diaria: true },
-      { clave: "ch-r", nombre: "Cheques recibidos", ultima: datos.recibido, detalle: "reporte de eCheq del", diaria: true },
+      ...datos.cuentas.filter((c) => TIPOS_CON_EXTRACTO.has(c.tipo) && c.numero).map((c) => {
+        const mov = c.saldo_banco_fecha ? String(c.saldo_banco_fecha).slice(0, 10) : null, carga = datos.cargas[c.nombre] || null;
+        const texto = carga && (!mov || carga > mov)
+          ? `subido el ${formatDate(carga)}${mov ? ` (movimientos hasta ${formatDate(mov)})` : ""}`
+          : mov ? `movimientos hasta ${formatDate(mov)}` : "";
+        return { clave: `c-${c.nombre}`, nombre: c.nombre, ultima: masReciente(mov, carga), texto, diaria: digitosCuenta(c.numero) === CC_EPP };
+      }),
+      { clave: "ch-e", nombre: "Cheques emitidos", ultima: datos.emitido, texto: datos.emitido ? `reporte de eCheq del ${formatDate(datos.emitido)}` : "", diaria: true },
+      { clave: "ch-r", nombre: "Cheques recibidos", ultima: datos.recibido, texto: datos.recibido ? `reporte de eCheq del ${formatDate(datos.recibido)}` : "", diaria: true },
     ];
     return fuentes
       .map((f) => ({ f, e: f.diaria ? estadoCarga(f.ultima, hoy) : estadoCargaSemanal(f.ultima, hoy) }))
@@ -76,7 +90,7 @@ export function CargaDiaria({ sociedadId, hoy, soloSiFalta = false, onIr }: { so
             <span key={f.clave} className={`rounded-lg border px-2.5 py-1 text-xs ${color[e.estado]}`}
               title={f.diaria ? "Se carga todos los días hábiles" : "Se carga una vez por semana (o cuando haya movimiento)"}>
               <b>{f.nombre}</b>{" · "}
-              {e.estado === "sin_datos" ? "sin cargar" : <>{f.detalle} {formatDate(String(f.ultima).slice(0, 10))}{e.estado === "atrasada" && e.dias !== null ? ` (hace ${e.dias} d)` : ""}</>}
+              {e.estado === "sin_datos" ? "sin cargar" : <>{f.texto}{e.estado === "atrasada" && e.dias !== null ? ` · hace ${e.dias} d` : ""}</>}
             </span>
           ))}
         </div>

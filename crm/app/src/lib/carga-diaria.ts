@@ -7,6 +7,17 @@ const masDias = (f: string, d: number) => new Date(Date.parse(`${f}T12:00:00Z`) 
 const diaSemana = (f: string) => new Date(`${f}T12:00:00Z`).getUTCDay(); // 0 domingo … 6 sábado
 const diasEntre = (desde: string, hasta: string) => Math.round((Date.parse(`${hasta}T12:00:00Z`) - Date.parse(`${desde.slice(0, 10)}T12:00:00Z`)) / 86_400_000);
 
+/** Fecha (AAAA-MM-DD) en Argentina de un instante guardado en UTC: lo que se sube a las 22 hs del 25 es del 25, no del 26. */
+export function fechaArgentina(instante: string): string {
+  return new Date(instante).toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" });
+}
+
+/** La más reciente de dos fechas AAAA-MM-DD (ignora las vacías). */
+export function masReciente(a: string | null | undefined, b: string | null | undefined): string | null {
+  const x = a ? String(a).slice(0, 10) : "", y = b ? String(b).slice(0, 10) : "";
+  return (x > y ? x : y) || null;
+}
+
 /** Último día hábil (lunes a viernes) hasta `hoy` incluido: si hoy es sábado o domingo, el viernes. */
 export function ultimoDiaHabil(hoy: string): string {
   let f = hoy;
