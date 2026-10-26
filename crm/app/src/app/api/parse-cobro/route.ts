@@ -3,6 +3,9 @@ import { registrarUsoIA } from "@/lib/ia-uso";
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
 
+// Opus 5.5 piensa antes de responder: más tiempo para leer el archivo.
+export const maxDuration = 120;
+
 const EXTRACTION_PROMPT = `Sos un experto en lectura de comprobantes bancarios argentinos.
 
 Te voy a pasar una o varias imágenes/PDFs de comprobantes de pago (transferencias bancarias, depósitos, recibos de cobro, cheques, echeqs, retenciones, etc.). Tu tarea es extraer TODOS los pagos individuales que aparecen y devolver un JSON con esta estructura:
@@ -153,8 +156,10 @@ export async function POST(request: NextRequest) {
     });
 
     const stream = client.messages.stream({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 4000,
+      // Augusto 26/10/2026: Opus 5.5 con esfuerzo alto (leía mal OP sin punto de venta, ej. "FC 65").
+      model: "claude-opus-5-5",
+      max_tokens: 16000,
+      output_config: { effort: "high" },
       system: EXTRACTION_PROMPT,
       messages: [{ role: "user", content: contentBlocks }],
     });

@@ -3,6 +3,9 @@ import { registrarUsoIA } from "@/lib/ia-uso";
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
 
+// Opus 5.5 piensa antes de responder: más tiempo para leer el archivo.
+export const maxDuration = 300;
+
 const EXTRACTION_PROMPT = `Sos un experto en extracción de datos de listas de precios industriales.
 
 Te voy a pasar un PDF de una lista de precios de un proveedor industrial (válvulas, caños, bombas, instrumentación, etc.).
@@ -110,8 +113,9 @@ export async function POST(request: NextRequest) {
 
     // Use streaming to avoid SDK timeout check for large max_tokens
     const stream = client.messages.stream({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 32000,
+      // Augusto 26/10/2026: Opus 5.5 (piensa antes de responder: más lugar para listas largas).
+      model: "claude-opus-5-5",
+      max_tokens: 64000,
       system: EXTRACTION_PROMPT,
       messages: [
         {

@@ -4,9 +4,13 @@ import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
 import { normalizarDatosImpositivos } from "@/lib/documento-impositivo";
 
+// Opus 5.5 piensa antes de responder: más tiempo para leer el archivo.
+export const maxDuration = 60;
+
 // Lee un papel impositivo (constancia ARCA, exención de IVA, exclusión de Ganancias / IIBB).
 // Si el modelo principal no responde, se usa el de respaldo.
-const MODELOS = [process.env.DOCUMENTO_IMPOSITIVO_MODEL || "claude-sonnet-4-5", "claude-haiku-4-5-20251001"];
+// Augusto 26/10/2026: Opus 5.5; si no responde, Sonnet 5.5.
+const MODELOS = ["claude-opus-5-5", "claude-sonnet-5-5"];
 
 const EXTRACTION_PROMPT = `Sos un experto en documentación impositiva argentina (ARCA, ex AFIP, y rentas provinciales).
 
@@ -87,7 +91,7 @@ export async function POST(request: NextRequest) {
       try {
         const response = await client.messages.create({
           model,
-          max_tokens: 2000,
+          max_tokens: 8000,
           system: EXTRACTION_PROMPT,
           messages: [{ role: "user", content: contentBlocks }],
         });

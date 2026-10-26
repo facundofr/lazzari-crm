@@ -4,9 +4,13 @@ import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
 import { normalizarVep } from "@/lib/vep";
 
+// Opus 5.5 piensa antes de responder: más tiempo para leer el archivo.
+export const maxDuration = 60;
+
 // Lee un VEP o comprobante de pago de impuestos (ARCA, rentas, municipio) para la pestaña Gastos.
 // Solo completa la ventana: Augusto revisa y guarda (nunca guarda solo).
-const MODELOS = [process.env.DOCUMENTO_IMPOSITIVO_MODEL || "claude-sonnet-4-5", "claude-haiku-4-5-20251001"];
+// Augusto 26/10/2026: Opus 5.5; si no responde, Sonnet 5.5.
+const MODELOS = ["claude-opus-5-5", "claude-sonnet-5-5"];
 
 const PROMPT = `Sos un experto en impuestos argentinos. Te paso un VEP (Volante Electrónico de Pago) de ARCA/AFIP, un comprobante de pago de impuestos,
 una boleta de Ingresos Brutos / Convenio Multilateral (SIFERE), una tasa municipal (Seguridad e Higiene) o un comprobante de aportes (autónomos, monotributo).
@@ -56,7 +60,7 @@ export async function POST(request: NextRequest) {
       try {
         const response = await client.messages.create({
           model,
-          max_tokens: 1000,
+          max_tokens: 8000,
           system: PROMPT,
           messages: [{ role: "user", content: contentBlocks }],
         });
