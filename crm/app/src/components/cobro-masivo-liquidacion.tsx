@@ -8,6 +8,7 @@ import { parseDecimalInput, toDecimalInput } from "@/lib/decimal-input";
 import { buildOrdenPagoPlan, type OpParsed } from "@/lib/orden-pago-plan";
 import { fechaMedioCobro, avisoFechaCobroFutura } from "@/lib/fecha-cobro";
 import { repartirCobro, avisoDiferenciaCobro, facturasParaRegistrar } from "@/lib/cobro-reparto";
+import { fuentesSaldoFavorCliente, repartirSaldoFavorCliente, faltaSegunOrden, type FuenteSaldoFavorCliente } from "@/lib/saldo-favor-cliente";
 import { guardarRevisar } from "@/components/dejar-revisar";
 import { ZonaArchivos } from "@/components/ui/zona-archivos";
 
@@ -125,6 +126,27 @@ export default function CobroMasivoLiquidacion({
   const [opConOtras, setOpConOtras] = useState<OpParsed | null>(null);
   const requestKeyRef = useRef("");
 
+  // ── Saldo a favor del cliente (Augusto 26/10: "que el sistema también mire la cuenta corriente") ──
+  // Pagos de más, facturas pagadas y después anuladas, ajustes de crédito. Nunca se tilda solo.
+  const [fuentesSF, setFuentesSF] = useState<FuenteSaldoFavorCliente[]>([]);
+  const [usarSF, setUsarSF] = useState(false);
+  const [faltaOP, setFaltaOP] = useState<Record<string, number>>({});
+  // Si el cobro falla después de aplicar el saldo a favor, no se vuelve a aplicar al reintentar.
+  const sfAplicadoRef = useRef(false);
+  useEffect(() => {
+    let vivo = true;
+    (supabase as any).from("movimientos").select("id, monto, fecha, descripcion, anulado, factura_id, ajuste_sentido, moneda")
+      .eq("sociedad_id", sociedadId).eq("cliente_id", clienteId).eq("tipo", "ajuste").eq("ajuste_sentido", "credito")
+      .is("factura_id", null).eq("moneda", moneda).order("fecha")
+      .then(async ({ data, error: e }: any) => {
+        if (!vivo || e || !data?.length) return;
+        const ids = data.map((r: any) => r.id);
+        const { data: aps } = await (supabase as any).from("cobro_aplicaciones").select("movimiento_id").in("movimiento_id", ids);
+        if (vivo) setFuentesSF(fuentesSaldoFavorCliente(data, new Set((aps || []).map((a: any) => a.movimiento_id))));
+      });
+    return () => { vivo = false; };
+  }, [sociedadId, clienteId, moneda]);
+
   // ── Tipo de cambio (solo para facturas USD) ──
   const isUSD = moneda === "USD";
   const [cotizacion, setCotizacion] = useState("");
@@ -152,7 +174,17 @@ export default function CobroMasivoLiquidacion({
   const totalNeto = useMemo(() => facturas.reduce((s, f) => s + (f.subtotal || 0), 0), [facturas]);
   const totalIva = useMemo(() => facturas.reduce((s, f) => s + (f.iva || 0), 0), [facturas]);
   const totalGeneral = useMemo(() => facturas.reduce((s, f) => s + f.total, 0), [facturas]);
-  const totalSaldo = useMemo(() => facturas.reduce((s, f) => s + f.saldo, 0), [facturas]);
+  const totalSaldoBruto = useMemo(() => facturas.reduce((s, f) => s + f.saldo, 0), [facturas]);
+  const totalSF = r2(fuentesSF.reduce((s, f) => s + f.monto, 0));
+  const aplicacionesSF = useMemo(() => usarSF
+    ? repartirSaldoFavorCliente(fuentesSF, facturas.map((f) => ({ id: f.id, numero: f.numero, fecha: f.fecha, saldo: f.saldo })), faltaOP)
+    : [], [usarSF, fuentesSF, facturas, faltaOP]);
+  const totalSFAplicado = r2(aplicacionesSF.reduce((s, a) => s + a.monto, 0));
+  // Saldo de cada factura después de aplicar el saldo a favor: es lo que tiene que cubrir el cobro.
+  const facturasCobro = useMemo(() => facturas.map((f) => ({
+    ...f, saldo: r2(f.saldo - aplicacionesSF.filter((a) => a.factura_id === f.id).reduce((s, a) => s + a.monto, 0)),
+  })), [facturas, aplicacionesSF]);
+  const totalSaldo = r2(totalSaldoBruto - totalSFAplicado);
   const totalMedios = useMemo(() => medios.reduce((s, m) => s + num(m.monto), 0), [medios]);
   const totalRetenciones = useMemo(() => retenciones.reduce((s, r) => s + num(r.monto), 0), [retenciones]);
   // Retenciones siempre en la moneda de cobro (ARS si USD, moneda original si ARS)
@@ -166,8 +198,8 @@ export default function CobroMasivoLiquidacion({
   const reparto = useMemo(() => {
     const aplicadoARS = totalMedios + totalRetenciones;
     const aplicado = isUSD ? (cotizNum > 0 ? aplicadoARS / cotizNum : 0) : aplicadoARS;
-    return repartirCobro(facturas.map((f) => ({ id: f.id, numero: f.numero, fecha: f.fecha, saldo: f.saldo })), aplicado);
-  }, [facturas, totalMedios, totalRetenciones, isUSD, cotizNum]);
+    return repartirCobro(facturasCobro.map((f) => ({ id: f.id, numero: f.numero, fecha: f.fecha, saldo: f.saldo })), aplicado);
+  }, [facturasCobro, totalMedios, totalRetenciones, isUSD, cotizNum]);
   const [dejarEnRevisar, setDejarEnRevisar] = useState(true);
   // Si falta plata: dejar el saldo en la factura más nueva ("factura") o pasar la diferencia a la cuenta corriente ("cc").
   // La opción "cc" es solo para facturas en pesos (en dólares el cobro va en pesos y la cuenta no cierra igual).
@@ -251,6 +283,7 @@ export default function CobroMasivoLiquidacion({
         };
       });
       setOpConOtras(plan.otras.length && !ordenPagoAvisos ? ordenLeida : null);
+      setFaltaOP(faltaSegunOrden(facturas.map((f) => ({ id: f.id, numero: f.numero, fecha: f.fecha, saldo: f.saldo })), plan.incluidas));
       // Una transferencia o un cheque suelto no trae detalle de facturas: ese aviso es solo para órdenes de pago.
       const esOrden = !!parsed.orden_pago_cliente || (parsed.facturas_pagadas || []).length > 0;
       const avisosPlan = esOrden ? plan.avisos : plan.avisos.filter((a) => !a.startsWith("La IA no encontró el detalle de facturas"));
@@ -343,6 +376,21 @@ export default function CobroMasivoLiquidacion({
 
       if (!requestKeyRef.current) requestKeyRef.current = crypto.randomUUID();
 
+      // Primero el saldo a favor (si se tildó): así la base ve el saldo real de cada factura al registrar el cobro.
+      if (aplicacionesSF.length && !sfAplicadoRef.current) {
+        const { error: sfErr } = await (supabase as any).rpc("aplicar_saldo_favor_cliente", {
+          p_sociedad_id: sociedadId, p_cliente_id: clienteId,
+          p_aplicaciones: aplicacionesSF.map((a) => ({ movimiento_id: a.movimiento_id, factura_id: a.factura_id, monto: a.monto })),
+        });
+        if (sfErr) {
+          if (/aplicar_saldo_favor_cliente/.test(String(sfErr.message || "")) && /function|funci/i.test(String(sfErr.message || ""))) {
+            throw new Error("Falta correr la migración 20261026160000 (saldo a favor del cliente). Destildá \"Aplicar\" para cobrar sin usarlo.");
+          }
+          throw new Error(`No se pudo aplicar el saldo a favor: ${sfErr.message}. No se guardó nada.`);
+        }
+        sfAplicadoRef.current = true;
+      }
+
       // Una unica RPC confirma movimientos, aplicaciones y cheques en cartera.
       const base = {
         p_cliente_id: clienteId,
@@ -364,7 +412,9 @@ export default function CobroMasivoLiquidacion({
         if (usarDiferenciaCC && /registrar_cobro_masivo_diferencia_cc/.test(String(rpcErr.message || ""))) {
           throw new Error("Falta correr la migración 20261012110000 (diferencia a la cuenta corriente). Mientras tanto elegí \"Saldo en la factura más nueva\".");
         }
-        throw new Error(rpcErr.message);
+        throw new Error(sfAplicadoRef.current && aplicacionesSF.length
+          ? `${rpcErr.message}. El saldo a favor (${fc(totalSFAplicado, m)}) ya quedó aplicado: volvé a confirmar para registrar el cobro.`
+          : rpcErr.message);
       }
 
       const movCount = data?.movimientos_count || mediosPayload.length + retencionesPayload.length;
@@ -394,7 +444,8 @@ export default function CobroMasivoLiquidacion({
         });
         notaRevisar = errRevisar ? `\n\nNo se pudo anotar en Revisar: ${errRevisar}` : "\n\nQuedó anotado en Finanzas > Hoy > Revisar.";
       }
-      alert(`Cobro registrado: ${movCount} movimiento${movCount > 1 ? "s" : ""} para ${facturas.length} factura${facturas.length > 1 ? "s" : ""}${notaRevisar}`);
+      const notaSF = aplicacionesSF.length ? `\n\nSaldo a favor aplicado: ${aplicacionesSF.map((a) => `${fc(a.monto, m)} a la ${a.numero}`).join("; ")}.` : "";
+      alert(`Cobro registrado: ${movCount} movimiento${movCount > 1 ? "s" : ""} para ${facturas.length} factura${facturas.length > 1 ? "s" : ""}${notaSF}${notaRevisar}`);
       onSuccess();
     } catch (err: any) {
       setError(err.message || "Error al registrar el cobro");
@@ -459,12 +510,39 @@ export default function CobroMasivoLiquidacion({
                     <td className="px-3 py-2 text-right font-mono">{fc(totalNeto, m)}</td>
                     <td className="px-3 py-2 text-right font-mono">{fc(totalIva, m)}</td>
                     <td className="px-3 py-2 text-right font-mono">{fc(totalGeneral, m)}</td>
-                    <td className="px-3 py-2 text-right font-mono text-orange-600">{fc(totalSaldo, m)}</td>
+                    <td className="px-3 py-2 text-right font-mono text-orange-600">{fc(totalSaldoBruto, m)}</td>
                   </tr>
                 </tfoot>
               </table>
             </div>
           </section>
+
+          {/* ── 1b. Saldo a favor del cliente (cuenta corriente) ── */}
+          {totalSF > 0 && (() => {
+            const faltaTotal = r2(Object.values(faltaOP).reduce((s, n) => s + n, 0));
+            const coincide = faltaTotal > 0 && Math.abs(faltaTotal - totalSF) < 0.01;
+            return (
+              <section className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
+                <label className="flex flex-wrap items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={usarSF} onChange={(e) => setUsarSF(e.target.checked)} className="h-4 w-4 accent-emerald-600" />
+                  <span>El cliente tiene <b className="font-mono">{fc(totalSF, m)}</b> a favor en su cuenta corriente. <b>Aplicar a este cobro</b></span>
+                </label>
+                <ul className="mt-1 ml-6 list-disc text-[11px] text-emerald-700/80 dark:text-emerald-400/80">
+                  {fuentesSF.map((f) => <li key={f.id}>{fc(f.monto, m)} — {f.descripcion.replace(/\s*\[[^\]]*\]\s*$/, "")}</li>)}
+                </ul>
+                {faltaTotal > 0 && !usarSF && (
+                  <p className="mt-1 ml-6 font-medium">
+                    {coincide
+                      ? `La orden de pago descuenta ${fc(faltaTotal, m)}: es justo el saldo a favor. Tildá "Aplicar" si corresponde.`
+                      : `La orden de pago paga ${fc(faltaTotal, m)} menos que el saldo de las facturas. Si es por el saldo a favor, tildá "Aplicar".`}
+                  </p>
+                )}
+                {usarSF && aplicacionesSF.length > 0 && (
+                  <p className="mt-1 ml-6 font-medium">Se aplica {aplicacionesSF.map((a) => `${fc(a.monto, m)} a la ${a.numero}`).join("; ")}{totalSFAplicado < totalSF ? ` (quedan ${fc(r2(totalSF - totalSFAplicado), m)} a favor)` : ""}.</p>
+                )}
+              </section>
+            );
+          })()}
 
           {/* ── 2. Orden de pago (opcional) ── */}
           <section>
@@ -696,7 +774,10 @@ export default function CobroMasivoLiquidacion({
           <section className="border-t border-zinc-200 dark:border-zinc-700 pt-4">
             <h3 className="text-xs font-bold uppercase tracking-wider text-orange-600 mb-3">Resumen</h3>
             <div className="max-w-md ml-auto space-y-1 text-sm">
-              <div className="flex justify-between"><span>Total facturas (saldo)</span><span className="font-mono">{fc(totalSaldo, m)}</span></div>
+              <div className="flex justify-between"><span>Total facturas (saldo)</span><span className="font-mono">{fc(totalSaldoBruto, m)}</span></div>
+              {totalSFAplicado > 0 && (
+                <div className="flex justify-between text-emerald-700 dark:text-emerald-400"><span>(-) Saldo a favor aplicado</span><span className="font-mono">{fc(totalSFAplicado, m)}</span></div>
+              )}
               {isUSD && cotizNum > 0 && (
                 <div className="flex justify-between text-zinc-500"><span>Conversión a ARS (× {cotizNum.toFixed(2)})</span><span className="font-mono">{fc(totalSaldoARS, "ARS")}</span></div>
               )}
