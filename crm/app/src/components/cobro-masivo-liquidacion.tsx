@@ -261,7 +261,7 @@ export default function CobroMasivoLiquidacion({
       }
       if (parsedRetenciones.length) setRetenciones((current) => [...current, ...parsedRetenciones]);
       if (parsed.orden_pago_cliente) setOpReferencia(String(parsed.orden_pago_cliente));
-      if (!parsedMedios.length && !parsedRetenciones.length) throw new Error("La IA no encontró medios de pago ni retenciones en el archivo.");
+      if (!parsedMedios.length && !parsedRetenciones.length) throw new Error(["La IA no encontró medios de pago ni retenciones en el archivo.", ...otrasLineas, ...avisosPlan].join(" "));
       setOpParseMessage([`IA completó ${parsedMedios.length} medio${parsedMedios.length === 1 ? "" : "s"} y ${parsedRetenciones.length} retención${parsedRetenciones.length === 1 ? "" : "es"}. Revisá los datos antes de confirmar.`, ...otrasLineas, ...avisosPlan].join(" "));
     } catch (parseError) {
       setOpParseMessage(parseError instanceof Error ? parseError.message : "No se pudo aplicar la orden de pago");

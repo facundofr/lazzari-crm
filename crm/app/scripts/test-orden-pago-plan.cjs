@@ -64,4 +64,28 @@ const sinDetalle = buildOrdenPagoPlan({ pagos: termo.pagos }, [{ id: "fa7", nume
 assert.equal(sinDetalle.medios[0].monto, 1422660.67);
 assert.ok(sinDetalle.avisos.some(a => a.includes("no encontró el detalle")));
 
+// Caso real: OP Del Sol 0001-00018722 trae las facturas sin punto de venta ("FC 65").
+const delSol = {
+  orden_pago_cliente: "0001-00018722",
+  facturas_pagadas: [
+    { tipo: "FC", punto_venta: 1, numero: 65, comprobante: "FC 65", importe_pagado: 253387.55 },
+    { tipo: "FC", punto_venta: null, numero: 67, comprobante: "FC 67", importe_pagado: 1206073.43 },
+    { tipo: "FC", comprobante: "FC 68", importe_pagado: 1836717.86 },
+  ],
+  pagos: [
+    { tipo: "echeq", monto: 3241696.55, fecha: "2026-12-30", referencia: "4074", banco: "Galicia" },
+    { tipo: "retencion_ganancias", monto: 54482.29, certificado: "11760" },
+  ],
+};
+const docsDelSol = [{ id: "65", numero: "FA 0015-00000065" }, { id: "67", numero: "FA 0015-00000067" }, { id: "68", numero: "FA 0015-00000068" }];
+const sol = buildOrdenPagoPlan(delSol, docsDelSol);
+assert.equal(sol.incluidas.length, 3);
+assert.equal(sol.otras.length, 0);
+assert.equal(sol.medios[0].monto, 3241696.55);
+assert.equal(sol.retenciones[0].monto, 54482.29);
+// Si dos facturas del formulario tienen el mismo número (otro punto de venta), no se adivina.
+const dup = buildOrdenPagoPlan({ facturas_pagadas: [{ comprobante: "FC 65", importe_pagado: 100 }], pagos: [{ tipo: "transferencia", monto: 100 }] },
+  [{ id: "a", numero: "FA 0015-00000065" }, { id: "b", numero: "FA 0016-00000065" }]);
+assert.equal(dup.incluidas.length, 0);
+
 console.log("OK: orden de pago repartida por factura (caso Termo Córdoba).");

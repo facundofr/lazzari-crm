@@ -108,22 +108,37 @@ export function buildOrdenPagoPlan(parsed: OpParsed, docs: PlanDoc[]): OrdenPago
   const mediosOp = pagos.filter(p => !esRetencion(String(p.tipo || "").toLowerCase()));
 
   const docPorClave = new Map<string, PlanDoc>();
+  // Algunas OP traen la factura sin punto de venta ("FC 65"): se busca por número solo
+  // si en el formulario hay una única factura con ese número.
+  const docsPorNumero = new Map<number, PlanDoc[]>();
   for (const d of docs) {
     const k = comprobanteKey(null, null, d.numero);
-    if (k) docPorClave.set(k, d);
+    if (!k) continue;
+    docPorClave.set(k, d);
+    const n = Number(k.split("-")[1]);
+    docsPorNumero.set(n, [...(docsPorNumero.get(n) || []), d]);
   }
+  const unicoPorNumero = (n: number) => { const ds = docsPorNumero.get(n) || []; return ds.length === 1 ? ds[0] : null; };
 
   // Facturas de la OP con su importe (las NC restan).
   type Linea = { clave: string; comprobante: string; importeC: number; doc: PlanDoc | null };
   const lineas: Linea[] = [];
   for (const f of parsed.facturas_pagadas || []) {
-    const clave = comprobanteKey(f.punto_venta, f.numero, f.comprobante);
     const importe = toNumber(f.importe_pagado);
-    if (!clave || !importe) continue;
+    if (!importe) continue;
+    let clave = comprobanteKey(f.punto_venta, f.numero, f.comprobante);
+    const numeroSolo = clave ? Number(clave.split("-")[1])
+      : Number(f.numero) > 0 ? Number(f.numero) : Number((String(f.comprobante || "").match(/\d+/g) || []).pop() || 0);
+    const doc = (clave && docPorClave.get(clave)) || (numeroSolo > 0 ? unicoPorNumero(numeroSolo) : null);
+    if (doc) clave = comprobanteKey(null, null, doc.numero);
+    if (!clave) {
+      if (!(numeroSolo > 0)) continue;
+      clave = `0-${numeroSolo}`;
+    }
     const signo = String(f.tipo || "").toUpperCase().startsWith("NC") ? -1 : 1;
     const [pv, num] = clave.split("-").map(Number);
-    const comprobante = `${f.tipo ? `${String(f.tipo).toUpperCase()} ` : ""}${String(pv).padStart(4, "0")}-${String(num).padStart(8, "0")}`;
-    lineas.push({ clave, comprobante, importeC: signo * cents(Math.abs(importe)), doc: docPorClave.get(clave) || null });
+    const comprobante = `${f.tipo ? `${String(f.tipo).toUpperCase()} ` : ""}${pv ? `${String(pv).padStart(4, "0")}-` : ""}${String(num).padStart(8, "0")}`;
+    lineas.push({ clave, comprobante, importeC: signo * cents(Math.abs(importe)), doc });
   }
 
   const referencia = String(parsed.orden_pago_cliente || "");
