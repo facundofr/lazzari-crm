@@ -5,18 +5,20 @@
 // Es un aviso: no bloquea nada. Con `soloSiFalta` (inicio de Finanzas) aparece únicamente cuando falta cargar algo. Lógica en lib/carga-diaria (prueba: scripts/test-carga-diaria.ts).
 // La fecha de cada cuenta es la más reciente entre su último movimiento y la última vez que se subió su extracto (registro "extracto_cargado"):
 // una cuenta sin movimientos (ej. la INDU) queda al día con solo subir el Excel y apretar Guardar.
+// 26/10/2026 — Finanzas simple (Augusto): el Excel "Movimientos" de cada cuenta se sube UNA VEZ POR MES (al cierre) y los reportes de eCheq
+// todos los días hábiles. La fecha de una cuenta es solo la de la última vez que se SUBIÓ (la hoja "del día" bajada el domingo trae fecha del lunes
+// y hacía decir "al día" sin carga). Los cheques cuentan también la última carga anotada en el registro ("cheques_cargados"), aunque no cambie ningún estado.
+// El FCI ya no se avisa (el saldo del banco no se muestra por ahora).
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
-import { digitosCuenta } from "@/lib/extracto-bbva";
-import { estadoCarga, estadoCargaSemanal, fechaArgentina, masReciente, type EstadoCarga } from "@/lib/carga-diaria";
+import { estadoCarga, estadoCargaMensual, fechaArgentina, masReciente, direccionesDeCarga, type EstadoCarga } from "@/lib/carga-diaria";
 import { formatDate } from "@/lib/utils";
 
 interface CuentaMin { nombre: string; tipo: string; numero: string | null; saldo_banco_fecha: string | null }
 interface Fuente { clave: string; nombre: string; ultima: string | null; texto: string; diaria: boolean }
 
-const TIPOS_CON_EXTRACTO = new Set(["cuenta_corriente", "caja_ahorro", "fci"]);
-const CC_EPP = digitosCuenta("091-312483/1");
+const TIPOS_CON_EXTRACTO = new Set(["cuenta_corriente", "caja_ahorro"]);
 
 export function CargaDiaria({ sociedadId, hoy, soloSiFalta = false, onIr }: { sociedadId: string; hoy: string; soloSiFalta?: boolean; onIr?: () => void }) {
   const [datos, setDatos] = useState<{ cuentas: CuentaMin[]; cargas: Record<string, string>; emitido: string | null; recibido: string | null } | null>(null);
@@ -30,11 +32,19 @@ export function CargaDiaria({ sociedadId, hoy, soloSiFalta = false, onIr }: { so
         const t = data?.[0]?.estado_banco_at as string | undefined;
         return t ? fechaArgentina(t) : null;
       };
-      const [cs, regs, emitido, recibido] = await Promise.all([
+      const [cs, regs, regsCheques, emitidoBanco, recibidoBanco] = await Promise.all([
         db.from("cuentas_financieras").select("nombre, tipo, numero, saldo_banco_fecha, orden").eq("sociedad_id", sociedadId).eq("activa", true).order("orden"),
         db.from("finanzas_registro").select("created_at, resultado").eq("sociedad_id", sociedadId).eq("accion", "extracto_cargado").order("created_at", { ascending: false }).limit(500),
+        db.from("finanzas_registro").select("created_at, resultado").eq("sociedad_id", sociedadId).eq("accion", "cheques_cargados").order("created_at", { ascending: false }).limit(200),
         ultima("emitido"), ultima("recibido"),
       ]);
+      // Última carga de reportes de cada lado, aunque no haya cambiado ningún estado (sin la migración opcional 20261025120000).
+      let emitido: string | null = emitidoBanco, recibido: string | null = recibidoBanco;
+      for (const r of (regsCheques.data || []) as Array<{ created_at: string; resultado: { direcciones?: unknown; reportes?: unknown } | null }>) {
+        const dirs = direccionesDeCarga(r.resultado), f = fechaArgentina(r.created_at);
+        if (dirs.has("emitido")) emitido = masReciente(emitido, f);
+        if (dirs.has("recibido")) recibido = masReciente(recibido, f);
+      }
       // Última vez que se subió el extracto de cada cuenta (por nombre de la cuenta, como lo anota Para confirmar).
       const cargas: Record<string, string> = {};
       for (const r of (regs.data || []) as Array<{ created_at: string; resultado: { cuenta?: string } | null }>) {
@@ -50,18 +60,15 @@ export function CargaDiaria({ sociedadId, hoy, soloSiFalta = false, onIr }: { so
     if (!datos) return [];
     const fuentes: Fuente[] = [
       ...datos.cuentas.filter((c) => TIPOS_CON_EXTRACTO.has(c.tipo) && c.numero).map((c) => {
-        const mov = c.saldo_banco_fecha ? String(c.saldo_banco_fecha).slice(0, 10) : null, carga = datos.cargas[c.nombre] || null;
-        const texto = carga && (!mov || carga > mov)
-          ? `subido el ${formatDate(carga)}${mov ? ` (movimientos hasta ${formatDate(mov)})` : ""}`
-          : mov ? `movimientos hasta ${formatDate(mov)}` : "";
-        return { clave: `c-${c.nombre}`, nombre: c.nombre, ultima: masReciente(mov, carga), texto, diaria: digitosCuenta(c.numero) === CC_EPP };
+        const carga = datos.cargas[c.nombre] || null;
+        return { clave: `c-${c.nombre}`, nombre: c.nombre, ultima: carga, texto: carga ? `subido el ${formatDate(carga)}` : "", diaria: false };
       }),
       { clave: "ch-e", nombre: "Cheques emitidos", ultima: datos.emitido, texto: datos.emitido ? `reporte de eCheq del ${formatDate(datos.emitido)}` : "", diaria: true },
       { clave: "ch-r", nombre: "Cheques recibidos", ultima: datos.recibido, texto: datos.recibido ? `reporte de eCheq del ${formatDate(datos.recibido)}` : "", diaria: true },
     ];
     return fuentes
-      .map((f) => ({ f, e: f.diaria ? estadoCarga(f.ultima, hoy) : estadoCargaSemanal(f.ultima, hoy) }))
-      // Lo que no se carga a diario y nunca se cargó no se muestra (ej. la caja de ahorro en dólares).
+      .map((f) => ({ f, e: f.diaria ? estadoCarga(f.ultima, hoy) : estadoCargaMensual(f.ultima, hoy) }))
+      // Las cuentas que nunca se subieron no se muestran (ej. la caja de ahorro en dólares).
       .filter((x) => x.f.diaria || x.e.estado !== "sin_datos");
   }, [datos, hoy]);
 
@@ -88,7 +95,7 @@ export function CargaDiaria({ sociedadId, hoy, soloSiFalta = false, onIr }: { so
         <div className="mt-2 flex flex-wrap gap-2">
           {evaluadas.map(({ f, e }) => (
             <span key={f.clave} className={`rounded-lg border px-2.5 py-1 text-xs ${color[e.estado]}`}
-              title={f.diaria ? "Se carga todos los días hábiles" : "Se carga una vez por semana (o cuando haya movimiento)"}>
+              title={f.diaria ? "Se carga todos los días hábiles" : "Se carga una vez por mes, al cierre (el banco da los últimos 60 días)"}>
               <b>{f.nombre}</b>{" · "}
               {e.estado === "sin_datos" ? "sin cargar" : <>{f.texto}{e.estado === "atrasada" && e.dias !== null ? ` · hace ${e.dias} d` : ""}</>}
             </span>

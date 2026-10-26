@@ -49,13 +49,34 @@ export function resumenPorEstado(cheques: ChequeFL[]): Array<{ clave: string; la
 export function enFecha(cheques: ChequeFL[], hoy: string): { pagar: Total; cobrar: Total } {
   const r = { pagar: vacio(), cobrar: vacio() };
   for (const ch of cheques) {
-    if (!chequePendiente(ch) || !ch.fecha_pago || String(ch.fecha_pago).slice(0, 10) > hoy) continue;
+    if (!estaEnFecha(ch, hoy)) continue;
     sumar(ch.direccion === "emitido" ? r.pagar : r.cobrar, ch);
   }
   return { pagar: redondear(r.pagar), cobrar: redondear(r.cobrar) };
 }
 
 const masDias = (f: string, d: number) => new Date(Date.parse(`${f}T12:00:00Z`) + d * 86_400_000).toISOString().slice(0, 10);
+
+/**
+ * En fecha (26/10/2026, Augusto): pendiente, con la fecha de pago ya llegada y hasta 30 días después (regla de los cheques:
+ * que no se haya debitado en la fecha no es atraso; a los 30 días el cheque vence).
+ */
+export function estaEnFecha(ch: ChequeFL, hoy: string): boolean {
+  if (!chequePendiente(ch) || !ch.fecha_pago) return false;
+  const f = String(ch.fecha_pago).slice(0, 10);
+  return f <= hoy && f >= masDias(hoy, -30);
+}
+
+/** Próxima semana (26/10/2026, Augusto): los pendientes con fecha de pago de mañana a 7 días. */
+export function proximaSemana(cheques: ChequeFL[], hoy: string): { desde: string; hasta: string; pagar: Total; cobrar: Total } {
+  const r = { desde: masDias(hoy, 1), hasta: masDias(hoy, 7), pagar: vacio(), cobrar: vacio() };
+  for (const ch of cheques) {
+    if (!chequePendiente(ch) || !ch.fecha_pago) continue;
+    const f = String(ch.fecha_pago).slice(0, 10);
+    if (f >= r.desde && f <= r.hasta) sumar(ch.direccion === "emitido" ? r.pagar : r.cobrar, ch);
+  }
+  return { ...r, pagar: redondear(r.pagar), cobrar: redondear(r.cobrar) };
+}
 
 /**
  * Las próximas 4 semanas (sin lo que ya está en fecha): la 1ª va de mañana al domingo, las otras de lunes a domingo.

@@ -231,7 +231,7 @@ assert.deepEqual(tot, { "2026-10": { iva: -5921.82, ley_25413: 1829.52 }, "2026-
   for (const id of ["t1", "t2"]) { assert.equal(g(r, id).clasificacion, "tarjeta"); assert.equal(g(r, id).auto, false); }
   assert.equal(g(r, "f1").clasificacion, "fci"); assert.equal(g(r, "f1").auto, false);
   assert.equal(g(r, "e1").clasificacion, "entre_cuentas");
-  assert.equal(g(r, "a1").clasificacion, "impuesto"); assert.equal(g(r, "a1").subtipo, "afip"); assert.equal(g(r, "a1").auto, true);
+  assert.equal(g(r, "a1").clasificacion, "impuesto"); assert.equal(g(r, "a1").subtipo, "afip"); assert.equal(g(r, "a1").auto, false, "26/10: el 137 se sugiere, no va solo");
   assert.equal(g(r, "i1").subtipo, "iva"); assert.equal(g(r, "s1").subtipo, "sircreb");
   assert.equal(g(r, "l1").subtipo, "devolucion_ley_25413", "una entrada en Ley 25.413 es devolución");
   assert.notEqual(g(r, "x1").auto, true, "el 135 es una transferencia: no se clasifica solo");
@@ -250,9 +250,24 @@ assert.deepEqual(tot, { "2026-10": { iva: -5921.82, ley_25413: 1829.52 }, "2026-
     lin("re", "RECH.DEP.48H 01234567 N 90017500 #019", -250000),
     lin("rx", "RECH.DEP.48H 09191840 N 999 #019", -1000),
   ], [], cheques, [], [], new Set());
-  assert.equal(g(r, "rr").clasificacion, "cheque_devuelto"); assert.equal(g(r, "rr").subtipo, "recibido"); assert.equal(g(r, "rr").cheque_id, "rec"); assert.equal(g(r, "rr").auto, true);
+  assert.equal(g(r, "rr").clasificacion, "cheque_devuelto"); assert.equal(g(r, "rr").subtipo, "recibido"); assert.equal(g(r, "rr").cheque_id, "rec");
+  assert.equal(g(r, "rr").auto, false, "26/10: si el CRM todavía no lo tiene rechazado (falta el reporte de eCheq), no se confirma solo");
   assert.equal(g(r, "re").clasificacion, "cheque_devuelto"); assert.equal(g(r, "re").subtipo, "emitido"); assert.equal(g(r, "re").cheque_id, "emi"); assert.equal(g(r, "re").auto, false, "un cheque propio rechazado nunca se confirma solo");
   assert.equal(g(r, "rx").cheque_id, null); assert.equal(g(r, "rx").auto, false);
+}
+
+// 26/10/2026 (Finanzas simple): el depósito de un cheque no se ata a un cheque rechazado ni a uno de hace más de 60 días.
+{
+  const cheques = [
+    { id: "viejo", numero: "1", monto: 5000, direccion: "recibido", estado: "en_cartera", fecha_pago: "2026-06-01" },
+    { id: "rech", numero: "2", monto: 6000, direccion: "recibido", estado: "rechazado", fecha_pago: "2026-10-15" },
+    { id: "ok", numero: "3", monto: 7000, direccion: "recibido", estado: "cobrado", fecha_pago: "2026-10-18" },
+  ];
+  const lin = (id, importe) => ({ id, fecha: "2026-10-20", concepto: "DEPOSITO CHEQUE 48HS #082", importe, cuenta_id: null });
+  const r = Object.fromEntries(cruzarExtracto([lin("a", 5000), lin("b", 6000), lin("c", 7000)], [], cheques, [], [], new Set()).map((x) => [x.linea_id, x]));
+  assert.deepEqual([r.a.cheque_id, r.a.auto], [null, false], "cheque de hace más de 60 días: no");
+  assert.deepEqual([r.b.cheque_id, r.b.auto], [null, false], "cheque rechazado: no");
+  assert.deepEqual([r.c.cheque_id, r.c.auto], ["ok", true], "cheque que el banco ya pagó: se confirma solo");
 }
 
 console.log("extracto-bbva OK");

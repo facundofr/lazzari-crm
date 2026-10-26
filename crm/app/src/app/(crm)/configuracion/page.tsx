@@ -16,6 +16,7 @@ import { useUser } from "@/lib/auth-context";
 import { ArcaStatusCard } from "@/components/arca-status-card";
 import { FechasChequeConfig } from "@/components/fechas-cheque-config";
 import { UsoIAConfig } from "@/components/uso-ia-config";
+import { AgenteMailInterruptor } from "@/components/agente-mail-interruptor";
 
 type ComisionTipo = "porcentaje_venta" | "porcentaje_margen" | "monto_fijo";
 type ComisionAplicaA = "todos" | "vendedor_especifico";
@@ -961,11 +962,13 @@ export default function ConfiguracionPage() {
         {tab === "integraciones" && (
           <div className="space-y-2.5">
           <ArcaStatusCard />
+          {/* 26/10/2026, Augusto: el agente de correo se apaga y se prende desde acá (solo super admin). */}
+          {profile?.role === "super_admin" && <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3"><AgenteMailInterruptor /></div>}
           <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
             {([
               { name: "AFIP — Remitos electronicos", desc: "COT para remitos con codigo de autorizacion", icon: Key, estado: "no", note: "Requiere certificado digital", pie: "Próximamente" },
-              { name: "Banco — Cuenta corriente", desc: "Movimientos del banco subiendo el extracto (Excel del BBVA)", icon: Database, estado: "archivo", note: "Cruce automático con cobros, pagos y cheques", link: { href: "/finanzas?tab=extractos", label: "Ir a Extractos →" } },
-              { name: "Banco — E-cheques", desc: "eCheqs emitidos y recibidos subiendo la planilla del banco", icon: Database, estado: "archivo", note: "Completa los que faltan y marca los debitados", link: { href: "/finanzas?tab=echeqs", label: "Ir a Cheques →" } },
+              { name: "Banco — Cuenta corriente", desc: "Movimientos del banco subiendo el Excel \"Movimientos\" del BBVA", icon: Database, estado: "archivo", note: "Impuestos, comisiones, tarjeta, FCI y cheques; las transferencias las carga una persona", link: { href: "/finanzas?seccion=bancos", label: "Ir a Bancos →" } },
+              { name: "Banco — E-cheques", desc: "Reportes de eCheq del banco (emitidos y recibidos)", icon: Database, estado: "archivo", note: "Actualizan el estado de los cheques: pagado, rechazado o anulado", link: { href: "/finanzas?seccion=bancos", label: "Ir a Bancos →" } },
               {
                 name: "Email — Envio de PR", desc: "Presupuestos y facturas por mail (Resend)", icon: Mail,
                 estado: emailEstado.configurado === null ? "cargando" : emailEstado.configurado ? "si" : "no",

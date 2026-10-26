@@ -11,6 +11,9 @@ import { formatCurrency, formatDate } from "@/lib/utils";
 import { leerArchivoExtracto, guardarArchivoExtracto, type CuentaRow, type ArchivoPreview } from "@/components/extracto-bbva";
 import { Bot, Loader2, Paperclip, Send, Trash2, X } from "lucide-react";
 
+/** 26/10/2026 (Augusto): una sola puerta para el banco; el asistente (hoy oculto) no carga Excel. */
+const CON_EXCEL = false;
+
 interface Mensaje { role: "user" | "assistant"; content: string; botones?: { pestana: string; texto: string }[]; archivo?: ArchivoPreview & { estado?: string } }
 
 const SUGERENCIAS = [
@@ -192,7 +195,7 @@ export default function AsistenteFinanzas({ onIrATab }: { onIrATab?: (tab: strin
       <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3 text-sm">
         {!mensajes.length && (
           <div className="space-y-2">
-            <p className="text-zinc-600 dark:text-zinc-300">Preguntame lo que quieras de la plata de <b>{sociedadActiva?.nombre}</b>: saldos, pagos, cobranzas, impuestos del banco, correos. También podés adjuntarme el Excel del banco con el clip.</p>
+            <p className="text-zinc-600 dark:text-zinc-300">Preguntame lo que quieras de la plata de <b>{sociedadActiva?.nombre}</b>: pagos, cobranzas, cheques, impuestos del banco.</p>
             {SUGERENCIAS.map((s) => (
               <button key={s} onClick={() => void preguntar(s)} className="block w-full rounded-lg border border-violet-200 px-3 py-2 text-left text-violet-800 hover:bg-violet-50 dark:border-violet-900 dark:text-violet-200 dark:hover:bg-violet-950/40">{s}</button>
             ))}
@@ -218,8 +221,9 @@ export default function AsistenteFinanzas({ onIrATab }: { onIrATab?: (tab: strin
       </div>
 
       <form onSubmit={(e) => { e.preventDefault(); void preguntar(texto); }} className="flex items-end gap-2 border-t border-zinc-200 p-3 dark:border-zinc-800">
-        <button type="button" title="Adjuntar el Excel del banco" onClick={() => archivoRef.current?.click()} className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"><Paperclip className="h-5 w-5" /></button>
-        <input ref={archivoRef} type="file" accept=".xls,.xlsx" multiple className="hidden" onChange={(e) => { void adjuntar(e.target.files); e.target.value = ""; }} />
+        {/* 26/10/2026 (Finanzas simple): el asistente es solo para preguntas; el Excel del banco se sube solo en Bancos > Movimientos. */}
+        {CON_EXCEL && <button type="button" title="Adjuntar el Excel del banco" onClick={() => archivoRef.current?.click()} className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"><Paperclip className="h-5 w-5" /></button>}
+        {CON_EXCEL && <input ref={archivoRef} type="file" accept=".xls,.xlsx" multiple className="hidden" onChange={(e) => { void adjuntar(e.target.files); e.target.value = ""; }} />}
         <textarea value={texto} onChange={(e) => setTexto(e.target.value)} rows={2} placeholder="Escribí tu pregunta…"
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void preguntar(texto); } }}
           className="min-h-[2.5rem] flex-1 resize-none rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" />

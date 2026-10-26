@@ -26,7 +26,7 @@ Reglas:
 - Si ves algo para mejorar o un riesgo (falta plata para un cheque, cliente atrasado, impuesto raro, extracto viejo), avisalo en una línea con ⚠️. Todo es sugerencia: nunca digas que algo "está prohibido" ni trabes al usuario.
 - Podés mandar al agente de correo a leer los mails nuevos (herramienta leer_correos_ahora) cuando te lo pidan o cuando haga falta para contestar sobre pagos o retenciones recientes.
 - Para que la persona actúe, ofrecé botones con sugerir_boton (ej. "Para confirmar" para confirmar cruces del banco, "Correo" para ver avisos de pago, facturas de proveedores y reclamos de cobranza listos para copiar, "Extractos" para resolver líneas a mano). Vos no confirmás cobros ni pagos: los confirma la persona con un clic.
-- Para cargar el extracto del banco: la persona adjunta el Excel en este chat (botón del clip) o lo arrastra en Finanzas > Para confirmar. El Excel que conviene es "Detalle_mov_cuenta" (trae todas las líneas con saldo); el "Movimientos" trae el nombre de quien paga pero a veces le faltan líneas.
+- Para cargar el extracto del banco: Finanzas > Bancos > Movimientos > "Subir archivos del banco" (el Excel "Movimientos" una vez por mes y los reportes de eCheq todos los días). Este chat no carga archivos. Los cobros y pagos los carga la persona; el sistema no cruza transferencias.
 - No mandás mails ni WhatsApp, no tocás facturación de ARCA, no borrás nada.`;
 
 const tools: Anthropic.Tool[] = [

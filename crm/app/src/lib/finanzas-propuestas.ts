@@ -12,6 +12,7 @@ import {
   type ClasificacionLinea, type LineaCruce, type MovCruce, type ChequeCruce, type CuentaCruce, type ReglaCruce, type Propuesta,
 } from "./extracto-bbva";
 import { cruzarPago, mismoCliente, etiquetaFactura, type FacturaAbierta, type PagoExtraido } from "./agente-mail";
+import { familiaDeCodigo } from "./bbva-codigos";
 import { esNotaCredito } from "./reportes-comprobantes";
 
 export type Confianza = "alta" | "media" | "baja";
@@ -61,6 +62,8 @@ export interface ItemBandeja {
   pagoProveedor?: { proveedor_id: string | null; proveedor_nombre: string; factura: NonNullable<LineaCruce["factura_arca"]> };
   /** Clasificación que se puede recordar como regla al confirmar. */
   regla?: { texto: string; clasificacion: ClasificacionLinea; subtipo?: string | null; contra_cuenta_id?: string | null };
+  /** Cheques posibles para una línea de cheque (depósito, débito o rechazo) que no se confirma sola: la persona elige uno. */
+  opcionesCheque?: { id: string; texto: string }[];
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -229,6 +232,93 @@ export interface DatosBandeja {
   gastosFijosDebito?: { id: string; descripcion: string; categoria: string; referencias: string[] }[];
   /** Facturas de compra cargadas (para no proponer pagar por ARCA una que ya está en Compras). */
   facturasCompra?: { proveedor_id: string | null; punto_venta: number; numero: number; estado: string }[];
+  /**
+   * Finanzas simple (Augusto 26/10/2026): "lo que quiero que tomes del extracto es todo menos los cobros a clientes y pagos a proveedores".
+   * Las transferencias no aparecen (no se proponen ni se cruzan), sin IA, sin cobros armados ni pagos por monto. Lo demás sigue igual.
+   */
+  sinCruces?: boolean;
+  /** Gastos del mes atados a un gasto fijo cuyo pago todavía no está cruzado con el banco (débito automático sin duplicar). */
+  gastosDeFijos?: { id: string; gasto_fijo_id: string; fecha: string; descripcion: string; monto: number }[];
+}
+
+/** Transferencia (cobro o pago de terceros) según el código del banco; las líneas viejas sin código, por el texto. */
+export function esTransferencia(l: { concepto: string; codigo?: string | null }): boolean {
+  const fc = familiaDeCodigo(l.codigo || null);
+  if (fc) return fc === "transferencia";
+  return /TRANSF|PAGO A PROVEEDORES|COBRO DE PROVEEDORES/i.test(l.concepto);
+}
+
+const mesLargo = (fecha: string) => new Date(`${fecha.slice(0, 7)}-15T12:00:00Z`).toLocaleDateString("es-AR", { month: "long", year: "numeric", timeZone: "UTC" });
+
+/**
+ * Finanzas simple: qué hacer con una línea (null = es una transferencia y no se muestra).
+ * Reglas fijas del banco seguras → alta (bloque). Sugerencias fijas (137, tarjeta o FCI sin identificar, entre cuentas) → media ("Sí, es eso").
+ * Cheques que no cierran solos → para vos, con los cheques posibles. Débitos automáticos → pagan el gasto del mes ya cargado, sin cargar otro.
+ */
+function itemSinCruces(
+  l: LineaCruce & { codigo: string | null }, p: Propuesta | undefined, d: DatosBandeja, gastosUsados: Set<string>,
+  nombreCuenta: (id: string | null | undefined) => string | null,
+): ItemBandeja | null {
+  const base = { linea_id: l.id, fecha: l.fecha, concepto: l.concepto, importe: l.importe, cuenta_id: l.cuenta_id, detalle: [] as string[], avisos: [] as string[] };
+  const esCobroPago = p?.clasificacion === "cobro" || p?.clasificacion === "pago";
+  const otra = nombreCuenta(p?.contra_cuenta_id);
+  if (p?.auto && p.clasificacion && !esCobroPago) {
+    return {
+      ...base, tipo: "cruce", confianza: "alta", origen: p.motivo.startsWith("Regla") ? "regla" : "extracto",
+      titulo: `${etiquetaClasificacion(p.clasificacion, p.subtipo)}${otra ? ` → ${otra}` : ""}`,
+      detalle: [p.motivo], avisos: p.nota ? [p.nota] : [],
+      cruce: { clasificacion: p.clasificacion, subtipo: p.subtipo, cheque_id: p.cheque_id, contra_cuenta_id: p.contra_cuenta_id, nota: p.nota },
+    };
+  }
+  if (p?.clasificacion && ["cheque_emitido", "cheque_acreditado", "cheque_devuelto"].includes(p.clasificacion)) {
+    const chPorId = new Map(d.cheques.map((c) => [c.id, c]));
+    const ids = [...new Set([p.cheque_id, ...p.candidatos].filter(Boolean) as string[])];
+    const opciones = ids.flatMap((id) => {
+      const c = chPorId.get(id);
+      if (!c) return [];
+      const pago = c.fecha_pago ? ` · pago ${String(c.fecha_pago).slice(0, 10).split("-").reverse().join("/")}` : "";
+      return [{ id: c.id, texto: `N° ${c.numero} · ${fmt(Number(c.monto))}${pago} · ${c.estado}` }];
+    });
+    return {
+      ...base, tipo: "sin_resolver", confianza: "baja", origen: "extracto", titulo: etiquetaClasificacion(p.clasificacion, p.subtipo),
+      detalle: [p.motivo], avisos: p.nota ? [p.nota] : [],
+      ...(opciones.length ? { opcionesCheque: opciones, cruce: { clasificacion: p.clasificacion, subtipo: p.subtipo || null } } : {}),
+    };
+  }
+  if (p?.clasificacion && !esCobroPago) {
+    return {
+      ...base, tipo: "cruce", confianza: "media", origen: "extracto",
+      titulo: `¿${etiquetaClasificacion(p.clasificacion, p.subtipo)}${otra ? ` → ${otra}` : ""}?`,
+      detalle: [p.motivo], avisos: [],
+      cruce: { clasificacion: p.clasificacion, subtipo: p.subtipo, contra_cuenta_id: p.contra_cuenta_id, nota: p.nota },
+    };
+  }
+  if (esTransferencia(l)) return null;
+  const credito = l.importe > 0;
+  if (!credito) {
+    const texto = String(l.concepto || "").toUpperCase();
+    const fijo = (d.gastosFijosDebito || []).find((g) => g.referencias.some((r) => texto.includes(r)));
+    if (fijo) {
+      const g = (d.gastosDeFijos || []).find((x) => x.gasto_fijo_id === fijo.id && x.fecha.slice(0, 7) === l.fecha.slice(0, 7) && !gastosUsados.has(x.id));
+      if (g) {
+        gastosUsados.add(g.id);
+        return {
+          ...base, tipo: "pago_gasto", confianza: "media", origen: "gastos", titulo: `Débito automático: ${g.descripcion}`,
+          detalle: [`Paga el gasto de ${mesLargo(l.fecha)} que ya está cargado (${fmt(g.monto)}); no se carga otro`],
+          avisos: cent(g.monto) !== cent(-l.importe) ? [`El gasto dice ${fmt(g.monto)} y el banco debitó ${fmt(l.importe)}: corregí el monto en Gastos si hace falta.`] : [],
+          gasto: { id: g.id, descripcion: g.descripcion },
+        };
+      }
+      return {
+        ...base, tipo: "sin_resolver", confianza: "baja", origen: "gastos", titulo: `Débito automático: ${fijo.descripcion}`,
+        detalle: [`El gasto de ${mesLargo(l.fecha)} no está cargado (o ya está pagado). Cargalo en Finanzas > Gastos y vuelve a aparecer acá para confirmarlo.`], avisos: [],
+      };
+    }
+  }
+  return {
+    ...base, tipo: "sin_resolver", confianza: "baja", origen: "extracto",
+    titulo: credito ? "Entrada sin identificar" : "Salida sin identificar", detalle: [p?.motivo || "Ninguna regla la reconoce"], avisos: [],
+  };
 }
 
 /** Referencias de un gasto fijo para reconocer su débito automático: tiras de 6+ caracteres con dígitos. */
@@ -275,6 +365,16 @@ export function armarBandeja(d: DatosBandeja): ItemBandeja[] {
   }
 
   const base = (l: LineaCruce) => ({ linea_id: l.id, fecha: l.fecha, concepto: l.concepto, importe: l.importe, cuenta_id: l.cuenta_id, detalle: [] as string[], avisos: [] as string[] });
+
+  if (d.sinCruces) {
+    const nombreCuenta = (id: string | null | undefined) => (id ? cuentaPorId.get(id)?.nombre || null : null);
+    for (const l of [...lineas].sort((a, b) => a.fecha.localeCompare(b.fecha))) {
+      const it = itemSinCruces(l, porLinea.get(l.id), d, gastosUsados, nombreCuenta);
+      if (it) out.push(it);
+    }
+    const pesoS: Record<Confianza, number> = { alta: 0, media: 1, baja: 2 };
+    return out.sort((a, b) => pesoS[a.confianza] - pesoS[b.confianza] || b.fecha.localeCompare(a.fecha) || Math.abs(b.importe) - Math.abs(a.importe));
+  }
 
   // Las automáticas primero: así sus movimientos y cheques no se ofrecen a otras líneas.
   const orden = [...lineas].sort((a, b) => Number(Boolean(porLinea.get(b.id)?.auto)) - Number(Boolean(porLinea.get(a.id)?.auto)) || a.fecha.localeCompare(b.fecha));

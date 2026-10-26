@@ -511,7 +511,21 @@ const emptyMovForm = {
   proveedor_id: "",
 };
 
-export default function FinanzasPage() {
+// 26/10/2026, Augusto: "Yo quiero usar solo finanzas". Finanzas vieja queda CERRADA (no borrada): la dirección muestra un aviso
+// con el link a Finanzas. La pantalla de antes sigue entera acá abajo (FinanzasViejaPage); para volver a abrirla, que el default la muestre.
+export default function FinanzasViejaCerrada() {
+  return (
+    <div className="mx-auto max-w-xl p-6">
+      <div className="rounded-xl border border-zinc-200 bg-white p-5 text-sm dark:border-zinc-800 dark:bg-zinc-900">
+        <p className="text-base font-semibold text-zinc-900 dark:text-white">Finanzas vieja está cerrada</p>
+        <p className="mt-1 text-zinc-600 dark:text-zinc-300">Todo se hace en Finanzas. Los archivos del banco se suben en Finanzas &gt; Bancos.</p>
+        <a href="/finanzas" className="mt-3 inline-block rounded-lg bg-orange-500 px-3 py-1.5 font-medium text-white hover:bg-orange-600">Ir a Finanzas</a>
+      </div>
+    </div>
+  );
+}
+
+function FinanzasViejaPage() {
   const { sociedadActiva, profile } = useUser();
   // Finanzas en 5 grupos (Hoy / Cobrar / Pagar / Cheques / Deudas); recuerda lo último abierto en esta compu.
   const [inicioFinanzas] = useState(leerPestanaInicial);

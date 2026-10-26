@@ -27,6 +27,9 @@ const errorTexto = (e: unknown) => (e instanceof Error ? e.message : (e as { mes
 const mon = (m: unknown): "ARS" | "USD" => (m === "USD" ? "USD" : "ARS");
 const TIPO_CUENTA: Record<string, string> = { cuenta_corriente: "Cuenta corriente", caja_ahorro: "Caja de ahorro", fci: "Inversión", efectivo: "Efectivo", tarjeta_credito: "Tarjeta" };
 
+// 26/10/2026 (Augusto): "No quiero ver el saldo del banco en el CRM por el momento". Se oculta (se sigue guardando) en las cuentas del BBVA y su FCI; BAVSA (caución) sigue igual.
+const SALDO_OCULTO = new Set(["cuenta_corriente", "caja_ahorro", "fci"]);
+
 interface Cuenta { id: string; nombre: string; tipo: string; banco: string | null; numero: string | null; moneda: "ARS" | "USD"; saldo_banco: number | null; saldo_banco_fecha: string | null; saldo_inicial: number | null; fecha_corte: string; observaciones: string | null; orden: number }
 interface Prestamo {
   id: string; nombre: string; entidad: string; paga_nombre: string | null; moneda: "ARS" | "USD"; capital_total: number | null; sentido: "debo" | "me_deben"; notas: string | null;
@@ -162,7 +165,8 @@ export function FinanzasLazzaBancos({ sociedadId, pestanaInicial = "cuentas" }: 
       {pestana === "cheques" && (
         <div className="space-y-3">
           {/* Estado de cheques (24/10, Augusto): los reportes de eCheq del banco se cargan acá. */}
-          <CargarEstadoCheques sociedadId={sociedadId} onAplicado={() => setVersionCheques((v) => v + 1)} />
+          {/* 26/10/2026 (una sola puerta): los reportes se suben junto con los Excel en Movimientos > "Subir archivos del banco". */}
+          {false && <CargarEstadoCheques sociedadId={sociedadId} onAplicado={() => setVersionCheques((v) => v + 1)} />}
           <FinanzasLazzaCheques key={versionCheques} sociedadId={sociedadId} />
         </div>
       )}
@@ -183,15 +187,27 @@ export function FinanzasLazzaBancos({ sociedadId, pestanaInicial = "cuentas" }: 
         <>
           {/* Cuentas: una tarjeta por cuenta; la primera es el total */}
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+            {/* 26/10/2026: el total suma los saldos del banco, que no se muestran por ahora. */}
+            {!SALDO_OCULTO.size && (
             <div className="rounded-xl border border-violet-200 bg-violet-50 p-3 dark:border-violet-900 dark:bg-violet-950/30">
               <p className="flex items-center gap-1.5 text-xs font-semibold uppercase text-violet-700 dark:text-violet-300"><Landmark className="h-4 w-4" /> Total en cuentas</p>
               <p className="mt-1 font-mono text-lg font-bold text-zinc-900 dark:text-white">{formatCurrency(totales.ARS)}</p>
               {totales.USD ? <p className="font-mono text-sm font-semibold text-zinc-700 dark:text-zinc-200">+ {formatCurrency(totales.USD, "USD")}</p> : null}
             </div>
+            )}
             {cuentas.map((c) => {
               const dias = diasDesde(c.saldo_banco_fecha, hoy);
               const viejo = dias !== null && dias > 3;
               const esBavsa = /bavsa/i.test(c.nombre);
+              if (SALDO_OCULTO.has(c.tipo) && !esBavsa) {
+                return (
+                  <div key={c.id} className={tarjeta}>
+                    <p className="truncate font-medium text-zinc-800 dark:text-zinc-100" title={c.nombre}>{c.nombre}</p>
+                    <p className="truncate text-[11px] text-zinc-400">{TIPO_CUENTA[c.tipo] || c.tipo}{c.numero ? ` · ${c.numero}` : ""}{c.moneda === "USD" ? " · US$" : ""}</p>
+                    <p className="mt-1 text-xs text-zinc-500">El saldo se mira en el home banking.</p>
+                  </div>
+                );
+              }
               return (
                 <div key={c.id} className={tarjeta}>
                   <p className="truncate font-medium text-zinc-800 dark:text-zinc-100" title={c.nombre}>{c.nombre}</p>

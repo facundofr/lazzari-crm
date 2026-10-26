@@ -38,3 +38,59 @@ export function estadoCargaSemanal(ultima: string | null | undefined, hoy: strin
   const dias = diasEntre(String(ultima), hoy);
   return { estado: dias <= maxDias ? "al_dia" : "atrasada", dias };
 }
+
+// ─── 26/10/2026 — Finanzas simple (Augusto): el Excel "Movimientos" una vez por mes (al cierre); los reportes de eCheq todos los días hábiles ───
+
+/** Último día del mes anterior a `hoy` (AAAA-MM-DD). */
+export function cierreMesAnterior(hoy: string): string {
+  return masDias(`${hoy.slice(0, 7)}-01`, -1);
+}
+
+/** Para lo que se carga una vez por mes, al cierre: al día = la última carga es del último día del mes anterior o después (el banco da 60 días). */
+export function estadoCargaMensual(ultima: string | null | undefined, hoy: string): { estado: EstadoCarga; dias: number | null } {
+  if (!ultima) return { estado: "sin_datos", dias: null };
+  const f = String(ultima).slice(0, 10);
+  return { estado: f >= cierreMesAnterior(hoy) ? "al_dia" : "atrasada", dias: diasEntre(f, hoy) };
+}
+
+/**
+ * Dirección de los cheques de una carga anotada en el registro ("cheques_cargados"). Las nuevas traen `direcciones`;
+ * las viejas solo los nombres de los archivos ("25-10-2026-eCheqs-emitidos.xls"): emitidos, anulados, cedidos, denegados-salida y caducados-salida son de cheques propios.
+ */
+export function direccionesDeCarga(resultado: { direcciones?: unknown; reportes?: unknown } | null | undefined): Set<"emitido" | "recibido"> {
+  const out = new Set<"emitido" | "recibido">();
+  const dirs = Array.isArray(resultado?.direcciones) ? resultado!.direcciones : null;
+  if (dirs) { for (const d of dirs) if (d === "emitido" || d === "recibido") out.add(d); return out; }
+  for (const n of Array.isArray(resultado?.reportes) ? resultado!.reportes : []) {
+    const t = String(n || "").toLowerCase();
+    if (!/echeq/.test(t)) continue;
+    out.add(/emitidos|anulados|cedidos|-salida/.test(t) ? "emitido" : "recibido");
+  }
+  return out;
+}
+
+/**
+ * Dos Excel de la misma cuenta en una misma subida: se usa el más nuevo (último día que trae; si empatan, el bajado después; si no, el que trae más líneas).
+ * Devuelve los índices que se usan y un aviso por cada cuenta con archivos de más. Los archivos sin cuenta se dejan (ya avisan solos).
+ */
+export function elegirExcelMasNuevos(archivos: { nombre: string; cuentaId: string | null; saldoFecha: string | null; lineas: number; modificado: number }[]): { usar: number[]; avisos: string[] } {
+  const porCuenta = new Map<string, number[]>();
+  const usar: number[] = [];
+  archivos.forEach((a, k) => {
+    if (!a.cuentaId) usar.push(k);
+    else porCuenta.set(a.cuentaId, [...(porCuenta.get(a.cuentaId) || []), k]);
+  });
+  const avisos: string[] = [];
+  for (const ks of porCuenta.values()) {
+    const orden = [...ks].sort((x, y) => {
+      const a = archivos[x], b = archivos[y];
+      return String(b.saldoFecha || "").localeCompare(String(a.saldoFecha || "")) || b.modificado - a.modificado || b.lineas - a.lineas;
+    });
+    usar.push(orden[0]);
+    if (orden.length > 1) {
+      const otros = orden.slice(1).map((k) => archivos[k].nombre);
+      avisos.push(`${otros.join(", ")} y ${archivos[orden[0]].nombre} son de la misma cuenta: se usa el más nuevo (${archivos[orden[0]].nombre}); ${otros.length > 1 ? "los otros no se cargan" : "el otro no se carga"}.`);
+    }
+  }
+  return { usar: usar.sort((a, b) => a - b), avisos };
+}

@@ -161,7 +161,17 @@ function sociedadDelTexto(texto: string): string | null {
 // ── Corrida ──────────────────────────────────────────────────────────────────
 export type ResultadoCorrida = { ok: boolean; nuevos: number; faltan: number; costo_usd: number; topeado: boolean; resumen: string; error?: string };
 
+/** Interruptor del agente (26/10/2026, Augusto: "desconectemos el agente"). Fila `agente_mail_activo` de `configuracion` (sin sociedad); sin la fila, apagado. */
+export const CLAVE_AGENTE_MAIL = "agente_mail_activo";
+export async function agenteMailActivo(db: any): Promise<boolean> {
+  const { data } = await db.from("configuracion").select("value").eq("key", CLAVE_AGENTE_MAIL).is("sociedad_id", null).maybeSingle();
+  return data?.value === true;
+}
+
 export async function correrAgenteMail(db: any, origen: "cron" | "manual"): Promise<ResultadoCorrida> {
+  if (!(await agenteMailActivo(db))) {
+    return { ok: true, nuevos: 0, faltan: 0, costo_usd: 0, topeado: false, resumen: "El agente de correo está apagado (se prende en Configuración > Integraciones)." };
+  }
   const inicio = Date.now();
   const { data: corrida } = await db.from("agente_mail_corridas").insert({ origen }).select("id").single();
   const total: Uso = { costo: 0, entrada: 0, salida: 0 };

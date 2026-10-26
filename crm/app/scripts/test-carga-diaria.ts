@@ -1,6 +1,6 @@
 // Prueba rápida: npx tsx scripts/test-carga-diaria.ts
 import assert from "node:assert/strict";
-import { ultimoDiaHabil, estadoCarga, estadoCargaSemanal, fechaArgentina, masReciente } from "../src/lib/carga-diaria";
+import { ultimoDiaHabil, estadoCarga, estadoCargaSemanal, fechaArgentina, masReciente, cierreMesAnterior, estadoCargaMensual, direccionesDeCarga, elegirExcelMasNuevos } from "../src/lib/carga-diaria";
 
 // 2026-10-23 es viernes, 24 sábado, 25 domingo, 26 lunes
 assert.equal(ultimoDiaHabil("2026-10-23"), "2026-10-23");
@@ -38,5 +38,36 @@ assert.equal(masReciente(null, undefined), null);
 assert.equal(estadoCargaSemanal(masReciente("2026-10-15", "2026-10-25"), "2026-10-25").estado, "al_dia");
 // CC EPP subida el lunes 26 con movimientos solo hasta el viernes 23: al día por la carga del lunes
 assert.equal(estadoCarga(masReciente("2026-10-23", "2026-10-26"), "2026-10-26").estado, "al_dia");
+
+// 26/10/2026 — Movimientos una vez por mes, al cierre
+assert.equal(cierreMesAnterior("2026-11-01"), "2026-10-31");
+assert.equal(cierreMesAnterior("2026-03-15"), "2026-02-28");
+assert.equal(estadoCargaMensual("2026-10-31", "2026-11-01").estado, "al_dia");
+assert.equal(estadoCargaMensual("2026-10-30", "2026-11-01").estado, "atrasada", "el 1/11 hay que cerrar octubre");
+assert.equal(estadoCargaMensual("2026-10-25", "2026-10-26").estado, "al_dia");
+assert.equal(estadoCargaMensual("2026-09-29", "2026-10-26").estado, "atrasada");
+assert.equal(estadoCargaMensual(null, "2026-10-26").estado, "sin_datos");
+// Dirección de una carga de cheques (las viejas, por el nombre del archivo)
+assert.deepEqual([...direccionesDeCarga({ direcciones: ["emitido"] })], ["emitido"]);
+assert.deepEqual([...direccionesDeCarga({ reportes: ["25-10-2026-eCheqs-aceptados.xls", "25-10-2026-eCheqs-deposito.xls"] })], ["recibido"]);
+assert.deepEqual([...direccionesDeCarga({ reportes: ["25-10-2026-eCheqs-emitidos.xls", "25-10-2026-eCheqs-denegados-salida.xls"] })], ["emitido"]);
+assert.equal(direccionesDeCarga(null).size, 0);
+// Dos Excel de la misma cuenta: el más nuevo
+{
+  const r = elegirExcelMasNuevos([
+    { nombre: "Movimientos (28).xls", cuentaId: "epp", saldoFecha: "2026-10-25", lineas: 700, modificado: 1 },
+    { nombre: "Movimientos (30).xls", cuentaId: "indu", saldoFecha: "2026-10-15", lineas: 6, modificado: 3 },
+    { nombre: "Movimientos (29).xls", cuentaId: "epp", saldoFecha: "2026-10-26", lineas: 690, modificado: 2 },
+    { nombre: "raro.xls", cuentaId: null, saldoFecha: null, lineas: 3, modificado: 4 },
+  ]);
+  assert.deepEqual(r.usar, [1, 2, 3]);
+  assert.equal(r.avisos.length, 1);
+  assert.ok(r.avisos[0].includes("se usa el más nuevo (Movimientos (29).xls)"));
+  // Mismo último día: el bajado después
+  assert.deepEqual(elegirExcelMasNuevos([
+    { nombre: "a", cuentaId: "x", saldoFecha: "2026-10-26", lineas: 5, modificado: 10 },
+    { nombre: "b", cuentaId: "x", saldoFecha: "2026-10-26", lineas: 4, modificado: 20 },
+  ]).usar, [1]);
+}
 
 console.log("test-carga-diaria OK");

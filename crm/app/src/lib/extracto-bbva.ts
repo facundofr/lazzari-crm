@@ -500,7 +500,8 @@ function clasificarPorConcepto(l: LineaCruce, ctx: Contexto): Omit<Propuesta, "l
   if (fc === "ley_25413") return fam({ ...base, clasificacion: "impuesto", subtipo: "ley_25413", motivo: "Impuesto al cheque (código del banco)" });
   if (fc === "sircreb") return fam({ ...base, clasificacion: "impuesto", subtipo: "sircreb", motivo: "SIRCREB (código 550)" });
   if (fc === "comision") return fam({ ...base, clasificacion: "gasto_bancario", subtipo: "comision", motivo: "Comisión del banco (código del banco)" });
-  if (fc === "arca" && !credito) return { ...base, clasificacion: "impuesto" as const, subtipo: "afip", motivo: "Pago de servicios ARCA (código 137): el impuesto lo dice el mail del VEP" };
+  // 26/10/2026 (Finanzas simple, decidido el 23/10): el código 137 se SUGIERE como ARCA (no se aplica solo): puede ser otro servicio.
+  if (fc === "arca" && !credito) return { ...base, auto: false, clasificacion: "impuesto" as const, subtipo: "afip", motivo: "Pago de servicios (código 137): ¿es un VEP de ARCA? (el impuesto lo dice el mail del VEP)" };
   if (fc === "fci") return { clasificacion: "fci" as const, subtipo: null, auto: false, candidatos: [] as string[], motivo: "Inversión FCI (código 654)" };
   if (fc === "entre_propias") return { clasificacion: "entre_cuentas" as const, subtipo: null, auto: false, candidatos: [] as string[], motivo: "Transferencia entre cuentas propias (código 263)" };
   if (fc === "tarjeta") return { clasificacion: "tarjeta" as const, subtipo: null, auto: false, candidatos: [] as string[], motivo: "Pago de tarjeta (código del banco)" };
@@ -643,10 +644,11 @@ export function cruzarExtracto(
       const recOk = rec.filter(igual), emiOk = emi.filter(igual);
       if (recOk.length === 1 && emiOk.length === 0) {
         const ch = recOk[0]; usar("cheque_devuelto", ch.id);
+        // 26/10/2026: se confirma sola solo si el cheque ya está rechazado en el CRM (lo rechaza el reporte de eCheq al subirlo).
         out.set(l.id, {
-          linea_id: l.id, clasificacion: "cheque_devuelto", subtipo: "recibido", cheque_id: ch.id, auto: true, candidatos: [],
-          motivo: `Cheque RECIBIDO ${devuelto[1]} rechazado (reversa del cobro)${ch.estado === "rechazado" ? " — ya rechazado en el CRM" : ": rechazalo desde Cheques"}`,
-          nota: ch.estado !== "rechazado" ? "Falta rechazarlo desde Finanzas > Cheques" : null,
+          linea_id: l.id, clasificacion: "cheque_devuelto", subtipo: "recibido", cheque_id: ch.id, auto: ch.estado === "rechazado", candidatos: [],
+          motivo: `Cheque RECIBIDO ${devuelto[1]} rechazado (reversa del cobro)${ch.estado === "rechazado" ? " — ya rechazado en el CRM" : ": subí el reporte de eCheq de rechazados y se rechaza en el CRM"}`,
+          nota: ch.estado !== "rechazado" ? "Falta el reporte de eCheq de rechazados (ahí se rechaza en el CRM)" : null,
         });
       } else if (emiOk.length === 1 && recOk.length === 0) {
         const ch = emiOk[0]; usar("cheque_devuelto", ch.id);
@@ -667,10 +669,11 @@ export function cruzarExtracto(
 
     // Depósito de cheque acreditado: por importe contra los cheques recibidos.
     if ((/^DEPOSITO CHEQUE/.test(c) || familiaDeCodigo(l.codigo) === "cheque_deposito") && esCredito(l)) {
+      // 26/10/2026: ni rechazados ni cheques viejos (fecha de pago de hasta 60 días antes del depósito).
       const cand = cheques.filter((ch) => ch.direccion !== "emitido"
-        && ["en_cartera", "depositado", "cobrado", "rechazado"].includes(ch.estado)
+        && ["en_cartera", "depositado", "cobrado"].includes(ch.estado)
         && centavos(Number(ch.monto)) === centavos(l.importe)
-        && (!ch.fecha_pago || ch.fecha_pago <= sumarDias(l.fecha, 3))
+        && (!ch.fecha_pago || (ch.fecha_pago <= sumarDias(l.fecha, 3) && ch.fecha_pago >= sumarDias(l.fecha, -60)))
         && !usado("cheque_acreditado", ch.id));
       if (cand.length === 1) usar("cheque_acreditado", cand[0].id);
       out.set(l.id, {

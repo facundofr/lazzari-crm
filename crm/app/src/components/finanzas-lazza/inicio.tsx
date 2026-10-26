@@ -142,19 +142,15 @@ function loaders(sociedadId: string, periodo: string, hoy: string): (() => Promi
         movimientos: { valor: `${hoyCount.count ?? 0} hoy`, sub: "ver historial" },
       };
     },
-    // Bancos: lo mismo que el total de la pantalla Bancos (cuentas, FCI y efectivo en pesos; saldo según banco o, si no hay, al corte).
+    // Bancos. 26/10/2026 (Augusto): el saldo del banco no se muestra por ahora; la tarjeta queda con los cheques propios de la semana.
     async () => {
-      const { data, error } = await db.from("cuentas_financieras").select("tipo, moneda, activa, saldo_banco, saldo_inicial").eq("sociedad_id", sociedadId);
-      if (error) throw error;
-      const ars = (data || []).filter((c: any) => c.activa !== false && c.moneda !== "USD" && ["cuenta_corriente", "caja_ahorro", "fci", "efectivo"].includes(c.tipo))
-        .reduce((s: number, c: any) => s + Number(c.saldo_banco ?? c.saldo_inicial ?? 0), 0);
       // Cheques propios a debitar en los próximos 7 días (23/10: la tarjeta Cheques se fue a Bancos y este dato viene con ella).
       const hasta7 = new Date(Date.parse(`${hoy}T12:00:00Z`) + 7 * 86_400_000).toISOString().slice(0, 10);
       const ch = await db.from("echeqs").select("id, monto").eq("sociedad_id", sociedadId).eq("direccion", "emitido")
         .in("estado", ["pendiente", "entregado"]).gte("fecha_pago", hoy).lte("fecha_pago", hasta7);
       const filas: any[] = ch.error ? [] : ch.data || [];
       const aDebitar = filas.reduce((s: number, c: any) => s + Number(c.monto || 0), 0);
-      return { bancos: { valor: millones(ars), sub: filas.length ? `según banco · ${filas.length} cheques esta semana (${millones(aDebitar)} a debitar)` : "según banco", tono: filas.length ? "naranja" : undefined } };
+      return { bancos: { valor: filas.length ? millones(aDebitar) : "—", sub: filas.length ? `${filas.length} cheques propios a debitar en los próximos 7 días` : "sin cheques propios esta semana", tono: filas.length ? "naranja" : undefined } };
     },
   ];
 }

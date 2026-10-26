@@ -84,12 +84,8 @@ export default function PendientesPage() {
     };
     const tareas: Promise<Atraso | null>[] = [];
     if (puede(role, "finanzas")) {
-      tareas.push((async () => {
-        const { data: cuentas } = await db.from("cuentas_financieras").select("id").eq("sociedad_id", sociedadId);
-        const ids = ((cuentas as { id: string }[]) || []).map((c) => c.id);
-        const n = ids.length ? await contar(db.from("extracto_movimientos").select("id", { count: "exact", head: true }).in("cuenta_id", ids).eq("estado", "pendiente")) : 0;
-        return { id: "extracto", label: "Líneas del extracto sin cruzar", count: n, href: "/finanzas-vieja?tab=extractos" };
-      })());
+      // 26/10/2026 (Finanzas simple): las transferencias del banco quedan sin cruzar a propósito (cobros y pagos los carga Augusto),
+      // así que "Líneas del extracto sin cruzar" ya no es un atraso y se sacó. El banco se mira en Finanzas > Bancos.
       tareas.push(contar(db.from("facturas_compra").select("id", { count: "exact", head: true }).eq("sociedad_id", sociedadId)
         .not("estado", "in", "(anulada,pagada)").lt("fecha_vencimiento", hoy))
         .then((n) => ({ id: "fc", label: "Facturas de compra vencidas sin pagar", count: n, href: "/finanzas?seccion=pagar" })));
@@ -199,9 +195,8 @@ export default function PendientesPage() {
             </div>
             {revisar.length > 0 && (
               <div className="mt-2">
-                <Link href="/finanzas-vieja?tab=revisar" className="text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:underline">
-                  Anotado en Finanzas → Revisar ({revisar.length}) →
-                </Link>
+                {/* 26/10/2026: Finanzas vieja (donde estaba Revisar) se cerró; las notas se siguen mostrando acá. */}
+                <p className="text-xs font-medium text-zinc-600 dark:text-zinc-300">Anotado para revisar ({revisar.length})</p>
                 <ul className="mt-1 space-y-0.5">
                   {revisar.map((r) => (
                     <li key={r.id} className="text-xs text-zinc-600 dark:text-zinc-400 truncate">• {r.titulo}</li>

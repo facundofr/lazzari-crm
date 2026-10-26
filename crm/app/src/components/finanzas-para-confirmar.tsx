@@ -6,6 +6,9 @@
 // se lo pregunta a la IA. Una persona confirma con un clic (o "Confirmar los seguros" en bloque). Todo queda en el Registro.
 // Nunca traba: lo que no cierra avisa en ámbar y se puede confirmar igual, corregir o descartar.
 // La lógica está en lib/finanzas-propuestas.ts (prueba: scripts/test-finanzas-propuestas.ts).
+// 26/10/2026 — Finanzas simple (Augusto), en la versión `simple` (Bancos): las transferencias no se tocan (cobros y pagos los carga él),
+// sin IA ni mails; los reportes de eCheq actualizan el estado de los cheques (actualizar_cheques_segun_banco); el saldo del banco no se muestra;
+// dos Excel de la misma cuenta → el más nuevo; una línea ya confirmada no se vuelve a confirmar (solo_pendiente).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
@@ -25,6 +28,8 @@ import { leerArcaRecibidos, facturaDelPago, numeroFactura } from "@/lib/arca-rec
 import { gastosFijosParaDebito, cuitEnTexto } from "@/lib/finanzas-propuestas";
 import { leerArchivoExtracto, guardarArchivoExtracto, corregirTextosExtracto, leerHojas, type CuentaRow, type ArchivoPreview } from "@/components/extracto-bbva";
 import { leerReporteEcheq, type EcheqReporte } from "@/lib/echeq-reportes";
+import { cambiosDeLaCarga, type ChequeCrmMin } from "@/lib/cheques-estado-banco";
+import { elegirExcelMasNuevos } from "@/lib/carga-diaria";
 import { armarItemsEcheq, aplicarReportesEcheq } from "@/components/finanzas-lazza/cheques-reportes";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, History, Loader2, Sparkles, Upload, X } from "lucide-react";
 
@@ -63,6 +68,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
     pagosMail: PagoMail[]; gastos: GastoSinPago[]; gastosFijos: { descripcion: string; monto: number; moneda: string; cuit: string | null }[];
     gastosFijosDebito: { id: string; descripcion: string; categoria: string; referencias: string[] }[];
     facturasCompra: { proveedor_id: string | null; punto_venta: number; numero: number; estado: string }[];
+    gastosDeFijos: { id: string; gasto_fijo_id: string; fecha: string; descripcion: string; monto: number }[];
   } | null>(null);
   const [ia, setIa] = useState<Map<string, SugerenciaIA>>(new Map());
   const [descartadas, setDescartadas] = useState<Set<string>>(new Set());
@@ -111,9 +117,9 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
             .select("id, cuenta_id, fecha, descripcion, monto, tipo, estado, clave, clasificacion, cheque_id, match_movimiento_id")
             .in("cuenta_id", ids).order("fecha").order("id"))) : Promise.resolve([]),
         traerTodo<MovRow>(() => db.from("movimientos")
-          .select("id, fecha, monto, moneda, tipo, cliente_id, proveedor_id, anulado, descripcion, nota_credito_compra_id, ajuste_sentido, orden_pago_id")
+          .select("id, fecha, monto, moneda, tipo, cliente_id, proveedor_id, anulado, descripcion, nota_credito_compra_id, ajuste_sentido, orden_pago_id, gasto_manual_id")
           .eq("sociedad_id", sociedadId).gte("fecha", desdeMovs).order("fecha").order("id")),
-        traerTodo<ChequeCruce>(() => db.from("echeqs").select("id, numero, monto, direccion, estado, fecha_pago, tipo_cheque, destino_nombre, origen_nombre").eq("sociedad_id", sociedadId).order("id")),
+        traerTodo<ChequeCruce>(() => db.from("echeqs").select("id, cheq_id, numero, monto, direccion, estado, fecha_pago, tipo_cheque, destino_nombre, origen_nombre").eq("sociedad_id", sociedadId).order("id")),
         db.from("extracto_reglas").select("texto, sentido, clasificacion, subtipo, contra_cuenta_id, nota").eq("sociedad_id", sociedadId).eq("activa", true),
         traerTodo<Tercero>(() => db.from("clientes").select("id, razon_social, cuit").eq("sociedad_id", sociedadId).order("id")),
         traerTodo<Tercero>(() => db.from("proveedores").select("id, razon_social, cuit").eq("sociedad_id", sociedadId).order("id")),
@@ -121,7 +127,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
           .eq("sociedad_id", sociedadId).in("estado", ["emitida", "parcial", "vencida", "pagada"]).gte("fecha", "2026-01-01").order("id")),
         traerTodo<{ factura_id: string; monto: number }>(() => db.from("cobro_aplicaciones").select("factura_id, monto, facturas!inner(sociedad_id)").eq("facturas.sociedad_id", sociedadId).order("id")).catch(() => []),
         db.from("agente_mail_procesados").select("id, fecha_mail, asunto, datos").eq("sociedad_id", sociedadId).eq("categoria", "pago_retencion").gte("fecha_mail", desdeMovs).limit(500),
-        db.from("gastos_manuales").select("id, fecha, descripcion, monto, moneda, proveedores(cuit)").eq("sociedad_id", sociedadId).gte("fecha", desdeMovs).limit(1000),
+        db.from("gastos_manuales").select("id, fecha, descripcion, monto, moneda, gasto_fijo_id, proveedores(cuit)").eq("sociedad_id", sociedadId).gte("fecha", desdeMovs).limit(1000),
         db.from("gastos_fijos").select("id, descripcion, categoria, notas, monto, moneda, activo, proveedores(cuit)").eq("sociedad_id", sociedadId).eq("activo", true),
         db.from("finanzas_propuestas").select("linea_id, origen, datos, confianza, estado").eq("sociedad_id", sociedadId),
         db.from("finanzas_registro").select("id, created_at, accion, tipo, origen, confianza, resumen, usuario_id, resultado").eq("sociedad_id", sociedadId).order("created_at", { ascending: false }).limit(300),
@@ -151,9 +157,12 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
       // Gastos sin pago: los que no tienen movimiento atado (se consulta aparte para no traer todos los movimientos viejos).
       const gastosIds = (gm.data || []).map((g: any) => g.id);
       const conPago = new Set<string>(pagados as Set<string>);
+      // Gastos con su pago ya cruzado con una línea del banco (para no ofrecer dos veces el mismo débito automático).
+      const cruzadas = new Set(ls.map((l) => l.match_movimiento_id).filter(Boolean) as string[]);
+      const pagoCruzado = new Set<string>();
       for (let i = 0; i < gastosIds.length; i += 200) {
-        const { data: mg } = await db.from("movimientos").select("gasto_manual_id").eq("sociedad_id", sociedadId).eq("anulado", false).in("gasto_manual_id", gastosIds.slice(i, i + 200));
-        for (const m of mg || []) conPago.add(m.gasto_manual_id);
+        const { data: mg } = await db.from("movimientos").select("id, gasto_manual_id").eq("sociedad_id", sociedadId).eq("anulado", false).in("gasto_manual_id", gastosIds.slice(i, i + 200));
+        for (const m of mg || []) { conPago.add(m.gasto_manual_id); if (cruzadas.has(m.id)) pagoCruzado.add(m.gasto_manual_id); }
       }
 
       setCuentas(lista);
@@ -184,6 +193,9 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
           const m = String(f.numero_factura || "").match(/(\d+)\D+(\d+)\s*$/);
           return { proveedor_id: f.proveedor_id, punto_venta: m ? Number(m[1]) : 0, numero: m ? Number(m[2]) : 0, estado: f.estado };
         }),
+        gastosDeFijos: ((gm.data || []) as any[]).filter((g) => g.gasto_fijo_id && !pagoCruzado.has(g.id)).map((g) => ({
+          id: g.id, gasto_fijo_id: g.gasto_fijo_id, fecha: String(g.fecha).slice(0, 10), descripcion: g.descripcion, monto: Number(g.monto),
+        })),
       });
       const mapaIa = new Map<string, SugerenciaIA>();
       const desc = new Set<string>();
@@ -224,10 +236,11 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
       movimientos: datos.movimientos.filter((m) => !m.anulado && !yaCruzados.has(m.id)),
       cheques: datos.cheques, cuentas, reglas: datos.reglas, chequesUsados: usados,
       facturas: datos.facturas, clientes: datos.clientes, proveedores: datos.proveedores,
-      pagosMail: datos.pagosMail, gastos: datos.gastos, ia, descartadas,
+      pagosMail: datos.pagosMail, gastos: datos.gastos, ia: simple ? new Map() : ia, descartadas,
       gastosFijosDebito: datos.gastosFijosDebito, facturasCompra: datos.facturasCompra,
+      sinCruces: simple, gastosDeFijos: datos.gastosDeFijos,
     });
-  }, [datos, lineas, pendientes, cuentas, ia, descartadas]);
+  }, [datos, lineas, pendientes, cuentas, ia, descartadas, simple]);
 
   const resumen = useMemo(() => resumenBandeja(items), [items]);
   const porConfianza = useMemo(() => ({
@@ -308,7 +321,8 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
     }
   }, [sociedadId, datos, faltaMigracion, cuentas, cuentaNombre, sociedadActiva?.nombre, profile?.id]);
 
-  const paraIA = useMemo(() => lineasParaIA(items, ia), [items, ia]);
+  // Finanzas simple (26/10/2026): la IA sale de la bandeja; solo la versión completa le pregunta.
+  const paraIA = useMemo(() => (simple ? [] : lineasParaIA(items, ia)), [items, ia, simple]);
   useEffect(() => {
     if (!cargando && paraIA.length && !iaTrabajando) void preguntarIA(paraIA);
   }, [cargando, paraIA, iaTrabajando, preguntarIA]);
@@ -340,11 +354,15 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
     });
   }
 
-  async function aplicarCruces(cruces: Record<string, unknown>[]) {
+  /** Aplica los cruces sin pisar una línea que ya confirmó otra persona u otra pestaña (solo_pendiente). Devuelve cuántas se saltearon por eso. */
+  async function aplicarCruces(cruces: Record<string, unknown>[]): Promise<number> {
+    let salteadas = 0;
     for (let i = 0; i < cruces.length; i += 150) {
-      const { error: e } = await (supabase as any).rpc("aplicar_cruces_extracto", { p_sociedad_id: sociedadId, p_cruces: cruces.slice(i, i + 150) });
+      const { data, error: e } = await (supabase as any).rpc("aplicar_cruces_extracto", { p_sociedad_id: sociedadId, p_cruces: cruces.slice(i, i + 150).map((c) => ({ ...c, solo_pendiente: true })) });
       if (e) throw e;
+      salteadas += Array.isArray(data?.salteadas) ? data.salteadas.length : 0;
     }
+    return salteadas;
   }
 
   async function aprenderRegla(item: ItemBandeja, clasificacion: ClasificacionLinea, subtipo: string | null, texto: string | null) {
@@ -453,19 +471,20 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
     if (!validos.length) return;
     if (preguntar) {
       const cobros = validos.filter((i) => i.cobro).length, gastos = validos.filter((i) => i.gasto).length;
-      const texto = `Se van a confirmar ${validos.length} renglones${cobros ? ` (${cobros} cobros nuevos` : ""}${cobros && gastos ? `, ${gastos} pagos de gastos` : gastos ? ` (${gastos} pagos de gastos` : ""}${cobros || gastos ? ")" : ""}.\n\nTodo queda en el Registro y se puede deshacer desde Extractos.\n\n¿Seguimos?`;
+      const texto = `Se van a confirmar ${validos.length} renglones${cobros ? ` (${cobros} cobros nuevos` : ""}${cobros && gastos ? `, ${gastos} pagos de gastos` : gastos ? ` (${gastos} pagos de gastos` : ""}${cobros || gastos ? ")" : ""}.\n\nTodo queda en el Registro.\n\n¿Seguimos?`;
       if (!confirm(texto)) return;
     }
     setOcupado(validos.length === 1 ? validos[0].linea_id : "bloque");
     setAviso(null);
     let ok = 0;
+    let yaConfirmadas = 0;
     const errores: string[] = [];
     // Los cruces simples van juntos (más rápido); cobros y gastos de a uno.
     const simples = validos.filter((i) => i.cruce && !i.cobro && !i.gasto && !i.gastoFijo && !i.pagoProveedor);
     const resto = validos.filter((i) => i.cobro || i.gasto || i.gastoFijo || i.pagoProveedor);
     try {
       if (simples.length) {
-        await aplicarCruces(simples.map((i) => ({ linea_id: i.linea_id, ...i.cruce, nota: notaDe(i) })));
+        yaConfirmadas = await aplicarCruces(simples.map((i) => ({ linea_id: i.linea_id, ...i.cruce, nota: notaDe(i) })));
         for (const i of simples) {
           if (i.regla) await aprenderRegla(i, i.regla.clasificacion, i.regla.subtipo || null, i.regla.texto);
         }
@@ -476,7 +495,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
           resumen: `${formatDate(i.fecha)} ${formatCurrency(i.importe)} · ${i.concepto} → ${i.titulo}`, propuesta: i, resultado: { cruce: i.cruce },
         })));
         if (e) console.error("Registro:", e);
-        ok += simples.length;
+        ok += simples.length - yaConfirmadas;
       }
     } catch (e) {
       errores.push(`Cruces: ${errorTexto(e)}`);
@@ -489,8 +508,24 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
       }
     }
     setOcupado(null);
-    setAviso(`${ok} confirmados.${errores.length ? `\n⚠️ ${errores.length} no se pudieron guardar:\n${errores.join("\n")}` : ""}`);
+    setAviso(`${ok} confirmados.${yaConfirmadas ? `\n${yaConfirmadas} ya las había confirmado otra persona (u otra pestaña): no se tocaron.` : ""}${errores.length ? `\n⚠️ ${errores.length} no se pudieron guardar:\n${errores.join("\n")}` : ""}`);
     await cargar();
+  }
+
+  /** Línea de cheque que no cierra sola: la persona elige el cheque (depósito, débito o rechazo). */
+  async function elegirCheque(item: ItemBandeja, chequeId: string) {
+    if (!item.cruce) return;
+    setOcupado(item.linea_id);
+    try {
+      const salteadas = await aplicarCruces([{ linea_id: item.linea_id, clasificacion: item.cruce.clasificacion, subtipo: item.cruce.subtipo || null, cheque_id: chequeId, nota: notaDe({ ...item, cruce: { ...item.cruce, cheque_id: chequeId } }) }]);
+      if (salteadas) setAviso("Esa línea ya la había confirmado otra persona (u otra pestaña): no se tocó.");
+      else await anotar(item, "confirmada", { cheque_id: chequeId });
+      await cargar();
+    } catch (e) {
+      alert(`No se pudo guardar: ${errorTexto(e)}`);
+    } finally {
+      setOcupado(null);
+    }
   }
 
   async function descartar(item: ItemBandeja) {
@@ -517,7 +552,12 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
     if (!c) { alert("Elegí qué es."); return; }
     setOcupado(item.linea_id);
     try {
-      await aplicarCruces([{ linea_id: item.linea_id, clasificacion: c, nota: notaDe(item, c, correccion.nota.trim() || null) }]);
+      if (await aplicarCruces([{ linea_id: item.linea_id, clasificacion: c, nota: notaDe(item, c, correccion.nota.trim() || null) }])) {
+        alert("Esa línea ya la había confirmado otra persona (u otra pestaña): no se tocó.");
+        setCorrigiendo(null);
+        await cargar();
+        return;
+      }
       if (correccion.recordar) {
         const texto = (await import("@/lib/finanzas-propuestas")).textoParaRegla(item.concepto);
         await aprenderRegla(item, c, null, texto);
@@ -587,6 +627,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
     setOcupado("subir");
     setAviso(null);
     const out: ArchivoPreview[] = [];
+    const modificado: number[] = [];
     const reps: EcheqReporte[] = [];
     const errores: string[] = [];
     const avisos: string[] = [];
@@ -598,11 +639,16 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
           // Reporte de eCheq (trae CheqID): va con los cheques. Si no, es el Excel "Movimientos" de alguna cuenta.
           const rep = leerReporteEcheq((await leerHojas(f))[0] || [], f.name);
           if (rep.direccion) reps.push(rep);
-          else out.push(await leerArchivoExtracto(f, cuentas, clavesPorCuenta, lineas.map((l) => ({ cuenta_id: l.cuenta_id, fecha: String(l.fecha).slice(0, 10), importe: l.tipo === "credito" ? Number(l.monto) : -Number(l.monto), id: l.id, descripcion: l.descripcion }))));
+          else { out.push(await leerArchivoExtracto(f, cuentas, clavesPorCuenta, lineas.map((l) => ({ cuenta_id: l.cuenta_id, fecha: String(l.fecha).slice(0, 10), importe: l.tipo === "credito" ? Number(l.monto) : -Number(l.monto), id: l.id, descripcion: l.descripcion })))); modificado.push(f.lastModified || 0); }
         }
       } catch (e) { errores.push(`${f.name}: ${errorTexto(e)}`); }
     }
-    setArchivos(out);
+    // 26/10/2026: dos Excel de la misma cuenta en la misma subida → se usa el más nuevo (cada uno se comparaba contra la base de antes y entraban las dos versiones).
+    const eleccion = elegirExcelMasNuevos(out.map((a, k) => ({
+      nombre: a.nombre, cuentaId: a.cuenta?.id || null, saldoFecha: a.leido.saldoFecha, lineas: a.leido.lineas.length, modificado: modificado[k] || 0,
+    })));
+    avisos.push(...eleccion.avisos);
+    setArchivos(out.filter((_, k) => eleccion.usar.includes(k)));
     setReportesEcheq(reps);
     setOcupado(null);
     if (avisos.length || errores.length) setAviso([...avisos, ...errores.map((e) => `⚠️ ${e}`)].join("\n"));
@@ -691,9 +737,15 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
       try {
         const { items } = armarItemsEcheq(reportesEcheq);
         const r = await aplicarReportesEcheq(sociedadId, items);
+        // 26/10/2026 (Augusto): lo definitivo del banco (pagado, rechazado, anulado) actualiza el estado del CRM.
+        const { data: cb, error: eCb } = await (supabase as any).rpc("actualizar_cheques_segun_banco", { p_sociedad_id: sociedadId, p_probar: false });
+        if (eCb) msgs.push(/actualizar_cheques_segun_banco|schema cache|does not exist/i.test(String(eCb.message || "")) ? "⚠️ Falta correr la migración 20261026130000_finanzas_simple.sql: el estado de los cheques no se actualizó." : `⚠️ Cheques según el banco: ${errorTexto(eCb)}`);
+        else for (const c of (cb?.cambios || []) as Array<{ numero: string; monto: number; direccion: string; contraparte: string; de: string; a: string; aviso: string | null }>) {
+          msgs.push(`Cheque ${c.numero}${c.contraparte ? ` (${c.contraparte})` : ""} ${formatCurrency(Number(c.monto))}: ${c.de} → ${c.a}${c.aviso ? `. ${c.aviso}` : ""}`);
+        }
         msgs.push(`Cheques (${reportesEcheq.length} reportes): ${r.vinculados} identificados por primera vez · ${r.actualizados} con estado del banco nuevo · ${r.sin_cambio} sin cambios${r.no_estan_total ? ` · ${r.no_estan_total} no están en el CRM (no se tocan)` : ""}${r.conflictos_total ? ` · ⚠️ ${r.conflictos_total} para revisar (Bancos > Cheques)` : ""}${r.diferencias.length ? ` · ⚠️ ${r.diferencias.length} donde el banco y el CRM no coinciden` : ""}`);
         await anotar(null, "cheques_cargados",
-          { reportes: reportesEcheq.map((x) => x.archivo), vinculados: r.vinculados, actualizados: r.actualizados, sin_cambio: r.sin_cambio, no_estan: r.no_estan_total, conflictos: r.conflictos_total, diferencias: r.diferencias.length },
+          { reportes: reportesEcheq.map((x) => x.archivo), direcciones: [...new Set(reportesEcheq.map((x) => x.direccion).filter(Boolean))], vinculados: r.vinculados, actualizados: r.actualizados, sin_cambio: r.sin_cambio, no_estan: r.no_estan_total, conflictos: r.conflictos_total, diferencias: r.diferencias.length },
           `Reportes de cheques (${reportesEcheq.length}): ${r.vinculados} identificados, ${r.actualizados} con estado nuevo`);
       } catch (e) {
         msgs.push(`⚠️ Cheques: ${errorTexto(e)}`);
@@ -737,6 +789,16 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
             {i.detalle.filter(Boolean).map((d, k) => <p key={k} className="text-xs text-zinc-500">{d}</p>)}
             {i.debil && <p className="text-xs font-semibold text-red-600 dark:text-red-400">⛔ Sin evidencia: es una suposición por la suma de las facturas. Verificá con el aviso de pago antes de confirmar.</p>}
             {i.avisos.map((a, k) => <p key={k} className="text-xs font-medium text-amber-700 dark:text-amber-300">⚠️ {a}</p>)}
+            {i.opcionesCheque && i.opcionesCheque.length > 0 && !faltaMigracion && (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {i.opcionesCheque.map((o) => (
+                  <button key={o.id} type="button" disabled={ocupado !== null} onClick={() => void elegirCheque(i, o.id)}
+                    className="rounded-md border border-emerald-300 px-2 py-0.5 text-xs text-emerald-800 hover:bg-emerald-50 disabled:opacity-50 dark:border-emerald-800 dark:text-emerald-200">
+                    Es el {o.texto}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <span className={`w-32 shrink-0 text-right font-mono ${i.importe < 0 ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(i.importe)}</span>
           <div className="flex shrink-0 gap-1">
@@ -770,7 +832,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
               {(i.importe > 0
                 ? ["cobro", "intereses", "entre_cuentas", "fci", "impuesto", "personal", "otro"]
                 : ["pago", "impuesto", "gasto_bancario", "personal", "tarjeta", "entre_cuentas", "fci", "otro"]
-              ).map((c) => <option key={c} value={c}>{CLASIFICACION_LABEL[c as ClasificacionLinea]}{c === "cobro" || c === "pago" ? " (falta cargarlo)" : ""}</option>)}
+              ).filter((c) => !simple || (c !== "cobro" && c !== "pago")).map((c) => <option key={c} value={c}>{CLASIFICACION_LABEL[c as ClasificacionLinea]}{c === "cobro" || c === "pago" ? " (falta cargarlo)" : ""}</option>)}
             </select>
             <input value={correccion.nota} onChange={(e) => setCorreccion((c) => ({ ...c, nota: e.target.value }))} placeholder="Nota (ej. sueldo Mariana)" className="min-w-[12rem] flex-1 rounded-md border border-zinc-200 bg-white px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900" />
             <label className="flex items-center gap-1"><input type="checkbox" checked={correccion.recordar} onChange={(e) => setCorreccion((c) => ({ ...c, recordar: e.target.checked }))} /> Recordar para la próxima</label>
@@ -828,7 +890,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
         className={`rounded-xl border-2 border-dashed p-3 text-sm transition ${arrastrando ? "border-orange-400 bg-orange-50 dark:bg-orange-950/30" : "border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900"}`}
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
-          {simple ? <p className="text-zinc-600 dark:text-zinc-300"><b>Arrastrá acá todos los archivos del banco juntos</b>: los Excel "Movimientos" de cada cuenta y los reportes de eCheq. Primero se cargan los movimientos y después el estado de los cheques; no se duplica nada.</p> : (
+          {simple ? <p className="text-zinc-600 dark:text-zinc-300"><b>Arrastrá acá todos los archivos del banco juntos</b>: los Excel "Movimientos" de cada cuenta (una vez por mes alcanza) y los reportes de eCheq (todos los días). Primero se cargan los movimientos y después el estado de los cheques; no se duplica nada. Las transferencias se guardan pero no se tocan: los cobros y pagos los cargás vos.</p> : (
           <p className="text-zinc-600 dark:text-zinc-300"><b>Arrastrá acá el Excel del BBVA</b> (se verifican los saldos al centavo), el <b>resumen mensual en PDF</b> (pone nombre y CUIT a cada transferencia y débito automático) y el <b>CSV de ARCA</b> "Mis comprobantes recibidos" (qué factura paga cada transferencia a un proveedor).</p>
           )}
           <label className="flex cursor-pointer items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-600">
@@ -842,9 +904,11 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
               <p key={a.nombre}>
                 <b>{a.nombre}</b> → {a.cuenta ? a.cuenta.nombre : <span className="font-semibold text-red-600">no hay una cuenta con ese número</span>}
                 {a.leido.lineas.length ? ` · del ${formatDate(a.leido.lineas[0].fecha)} al ${formatDate(a.leido.saldoFecha || "")}` : ""}
-                {` · ${a.nuevas} líneas nuevas · saldo ${formatCurrency(a.leido.saldoFinal || 0)}`}
-                {a.leido.saltos > 0 ? <span className="font-semibold text-amber-600"> · ⚠️ en {a.leido.saltos} renglones el saldo no cierra</span> : !a.leido.avisoSaldo && <span className="text-emerald-600"> · saldos ✔</span>}
-                {a.leido.avisoSaldo && <span className="block font-semibold text-amber-600">⚠️ {a.leido.avisoSaldo}</span>}
+                {` · ${a.nuevas} líneas nuevas`}
+                {/* 26/10/2026 (Augusto): el saldo del banco no se muestra en el CRM por ahora (versión simple). */}
+                {!simple && ` · saldo ${formatCurrency(a.leido.saldoFinal || 0)}`}
+                {!simple && (a.leido.saltos > 0 ? <span className="font-semibold text-amber-600"> · ⚠️ en {a.leido.saltos} renglones el saldo no cierra</span> : !a.leido.avisoSaldo && <span className="text-emerald-600"> · saldos ✔</span>)}
+                {!simple && a.leido.avisoSaldo && <span className="block font-semibold text-amber-600">⚠️ {a.leido.avisoSaldo}</span>}
                 {a.corregir && a.corregir.length > 0 && <span className="block text-zinc-600 dark:text-zinc-300">✎ {a.corregir.length} línea{a.corregir.length > 1 ? "s" : ""} del último día cargado se actualiza{a.corregir.length > 1 ? "n" : ""} con el texto definitivo del banco (sin tocar su clasificación).</span>}
                 {a.control && (a.control.diferencias.length === 0
                   ? a.control.diasComparados > 0 && <span className="text-emerald-600"> · {a.control.diasComparados} días ya cargados coinciden ✔</span>
@@ -863,6 +927,24 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
                   </p>
                 ))}
                 {armarItemsEcheq(reportesEcheq).avisos.map((x, i) => <p key={i} className="font-semibold text-amber-600">⚠️ {x}</p>)}
+                {(() => {
+                  // 26/10/2026: lo que va a cambiar en el CRM al apretar Guardar (misma regla que actualizar_cheques_segun_banco).
+                  const cambios = cambiosDeLaCarga(armarItemsEcheq(reportesEcheq).items, (datos?.cheques || []).map((c): ChequeCrmMin => {
+                    const x = c as ChequeCruce & { cheq_id?: string | null; destino_nombre?: string | null; origen_nombre?: string | null };
+                    return { id: x.id, cheq_id: x.cheq_id, numero: x.numero, monto: x.monto, direccion: x.direccion, estado: x.estado, contraparte: x.direccion === "emitido" ? x.destino_nombre : x.origen_nombre };
+                  }));
+                  if (!cambios.length) return <p className="text-zinc-500">Ningún cheque cambia de estado en el CRM.</p>;
+                  return (
+                    <div className="space-y-0.5">
+                      <p className="font-semibold text-zinc-700 dark:text-zinc-200">Al guardar cambian {cambios.length} cheque{cambios.length > 1 ? "s" : ""} en el CRM:</p>
+                      {cambios.map((c) => (
+                        <p key={c.cheque.id} className={c.a === "cobrado" ? "" : "font-semibold text-amber-700 dark:text-amber-300"}>
+                          {c.a === "cobrado" ? "• " : "⚠️ "}Cheque {c.cheque.numero}{c.cheque.contraparte ? ` de ${c.cheque.contraparte}` : ""} {formatCurrency(Number(c.cheque.monto))}: {c.cheque.estado} → {c.a} (banco: {c.banco}){c.aviso ? `. ${c.aviso}` : ""}
+                        </p>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
             )}
             <div className="flex gap-2 pt-1">
@@ -969,7 +1051,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
             </>
           )}
 
-          {aCargar.length > 0 && (
+          {!simple && aCargar.length > 0 && (
             <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3 text-xs dark:border-amber-900 dark:bg-amber-950/30">
               <p className="font-semibold text-amber-800 dark:text-amber-200">{aCargar.length} cobros/pagos confirmados que falta cargar en el CRM ({formatCurrency(aCargar.reduce((s, l) => s + importeDe(l), 0))})</p>
               <p className="text-amber-700 dark:text-amber-300">Cuando cargues el cobro o la orden de pago, se cruzan solos. <button onClick={() => onIrATab?.("extractos")} className="underline">Ver en Extractos</button></p>

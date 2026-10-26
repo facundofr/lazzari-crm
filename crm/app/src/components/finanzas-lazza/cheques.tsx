@@ -11,10 +11,11 @@ import ChequesTercero from "@/components/cheques-tercero";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
-import { enFecha, estadoCheque, proximasSemanas, resumenPorEstado, type ChequeFL, type Total } from "@/lib/cheques-lazza";
+import { enFecha, estaEnFecha, estadoCheque, proximaSemana, proximasSemanas, resumenPorEstado, type ChequeFL, type Total } from "@/lib/cheques-lazza";
 import { ChequesBanco } from "./cheques-banco";
+
+const MOSTRAR_SUBIR_VIEJO = false;
 import { diferenciaConBanco } from "@/lib/cheques-estado-banco";
-import { CoberturaCheques } from "./cobertura-cheques-card";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -25,6 +26,8 @@ interface Cheque extends ChequeFL {
   origen: string; destino: string; fechaEndoso: string | null; fechaDeposito: string | null; observaciones: string;
   /** Estado según el banco (reportes eCheq), tal cual; vacío si todavía no se cargó. */
   estadoBanco: string;
+  /** Día en que la plata se movió en la cuenta según el Excel "Movimientos" (débito, depósito o devolución), o null (26/10/2026, Augusto). */
+  diaBanco: string | null;
 }
 
 const TONO: Record<string, string> = {
@@ -42,6 +45,16 @@ async function traerCheques(sociedadId: string): Promise<Cheque[]> {
   const rows = await traerTodo<any>(() => db.from("echeqs")
     .select("id, numero, banco_emisor, cuit_emisor, monto, moneda, fecha_emision, fecha_pago, estado, origen_nombre, destino_nombre, fecha_endoso, fecha_deposito, observaciones, tipo_cheque, direccion, cubre_tercero, estado_banco")
     .eq("sociedad_id", sociedadId).order("fecha_pago", { ascending: false }).order("id"));
+  // 26/10/2026: el día exacto lo da la línea del Excel atada al cheque (la última: un rechazado tiene depósito y devolución).
+  const lineas = await traerTodo<{ cheque_id: string; fecha: string }>(() => db.from("extracto_movimientos")
+    .select("cheque_id, fecha").not("cheque_id", "is", null).in("clasificacion", ["cheque_emitido", "cheque_acreditado", "cheque_devuelto"]).order("id")).catch(() => []);
+  const ids = new Set(rows.map((r) => r.id));
+  const diaBanco = new Map<string, string>();
+  for (const l of lineas) {
+    if (!ids.has(l.cheque_id)) continue;
+    const f = String(l.fecha).slice(0, 10);
+    if (f > (diaBanco.get(l.cheque_id) || "")) diaBanco.set(l.cheque_id, f);
+  }
   return rows.map((r) => ({
     id: r.id, numero: String(r.numero ?? ""), direccion: r.direccion === "emitido" ? "emitido" : "recibido", estado: r.estado || "",
     fecha_pago: r.fecha_pago ? String(r.fecha_pago).slice(0, 10) : null, monto: Number(r.monto || 0), moneda: r.moneda === "USD" ? "USD" : "ARS",
@@ -49,7 +62,7 @@ async function traerCheques(sociedadId: string): Promise<Cheque[]> {
     banco: r.banco_emisor || "", cuit: r.cuit_emisor || "", tipo: r.tipo_cheque === "fisico" ? "Físico" : "eCheq",
     emision: r.fecha_emision ? String(r.fecha_emision).slice(0, 10) : null, pago: r.fecha_pago ? String(r.fecha_pago).slice(0, 10) : "",
     origen: r.origen_nombre || "", destino: r.destino_nombre || "", fechaEndoso: r.fecha_endoso || null, fechaDeposito: r.fecha_deposito || null,
-    observaciones: r.observaciones || "", estadoBanco: r.estado_banco || "",
+    observaciones: r.observaciones || "", estadoBanco: r.estado_banco || "", diaBanco: diaBanco.get(r.id) || null,
   }));
 }
 
@@ -84,6 +97,7 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
 
   const todos = cheques || [];
   const fecha = useMemo(() => enFecha(todos, hoy), [todos, hoy]);
+  const semana = useMemo(() => proximaSemana(todos, hoy), [todos, hoy]);
   const porEstado = useMemo(() => resumenPorEstado(todos), [todos]);
   const semanas = useMemo(() => proximasSemanas(todos, hoy), [todos, hoy]);
 
@@ -95,7 +109,7 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
     if (segunBanco === "diferencia" && !diferenciaConBanco(c.direccion, c.estado, c.estadoBanco)) return false;
     if (segunBanco === "con" && !c.estadoBanco) return false;
     if (segunBanco === "sin" && c.estadoBanco) return false;
-    if (soloEnFecha && !(["entregado", "pendiente", "en_cartera"].includes(c.estado) && c.pago && c.pago <= hoy)) return false;
+    if (soloEnFecha && !estaEnFecha(c, hoy)) return false;
     if (desde && c.pago < desde) return false;
     if (hasta && c.pago > hasta) return false;
     if (q && !sinAcentos(`${c.numero} ${c.banco} ${c.cuit} ${c.origen} ${c.destino} ${c.cubre_tercero || ""} ${c.monto}`).includes(q)) return false;
@@ -125,6 +139,9 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
     { key: "monto", label: "Monto", sortable: true, sortValue: (c) => Number(c.monto), className: "text-right", render: (c) => <span className="whitespace-nowrap font-mono font-semibold">{formatCurrency(Number(c.monto), c.moneda === "USD" ? "USD" : "ARS")}</span> },
     { key: "banco", label: "Banco", sortable: true, sortValue: (c) => c.banco, render: (c) => <span className="text-xs">{c.banco || "—"}</span> },
     { key: "estado", label: "Estado", sortable: true, sortValue: (c) => estadoCheque(c).label, render: (c) => { const e = estadoCheque(c); return <span className={`whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-semibold ${TONO[e.tono]}`}>{e.label}</span>; } },
+    { key: "diaBanco", label: "Día en el banco", sortable: true, sortValue: (c) => c.diaBanco || "", render: (c) => (
+      c.diaBanco ? <span className="whitespace-nowrap text-xs" title="Día en que se movió la plata en la cuenta (Excel Movimientos)">{formatDate(c.diaBanco)}</span> : <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>
+    ) },
     { key: "segunBanco", label: "Según el banco", sortable: true, sortValue: (c) => c.estadoBanco, render: (c) => {
       if (!c.estadoBanco) return <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>;
       const dif = diferenciaConBanco(c.direccion, c.estado, c.estadoBanco);
@@ -147,7 +164,9 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
           <button type="button" onClick={() => setPestana("todos")} className={boton(pestana === "todos")}>Todos los cheques</button>
           <button type="button" onClick={() => setPestana("martin")} className={boton(pestana === "martin")}>Martín F.</button>
         </div>
-        {pestana === "todos" && (
+        {/* 26/10/2026 (Finanzas simple, una sola puerta): el botón viejo cambiaba estados del CRM por su cuenta; se oculta (no se borra).
+            Los archivos del banco se suben solo en Bancos > Movimientos > "Subir archivos del banco". */}
+        {MOSTRAR_SUBIR_VIEJO && pestana === "todos" && (
           <button type="button" onClick={() => setSubir(true)} className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-1 text-xs font-medium text-zinc-600 hover:border-orange-300 hover:text-orange-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
             <Upload className="h-3.5 w-3.5" /> Subir Excel del banco
           </button>
@@ -161,12 +180,12 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
       ) : (
         <>
           {/* En fecha: lo que el banco puede debitar hoy y lo que ya se puede depositar */}
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
             <button type="button" onClick={() => filtrar({ categoria: "emitido", enFecha: true })} title="Ver estos cheques en la lista"
               className={`rounded-xl border p-3 text-left hover:border-orange-300 ${fecha.pagar.cantidad ? "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/30" : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"}`}>
               <p className="text-[11px] font-semibold uppercase tracking-wide text-red-700 dark:text-red-300">En fecha para pagar</p>
               <p className="font-mono text-lg font-bold text-zinc-900 dark:text-white">{montos(fecha.pagar)}</p>
-              <p className="text-xs text-zinc-500">{fecha.pagar.cantidad} cheque{fecha.pagar.cantidad === 1 ? "" : "s"} propio{fecha.pagar.cantidad === 1 ? "" : "s"} que el banco puede debitar hoy</p>
+              <p className="text-xs text-zinc-500">{fecha.pagar.cantidad} cheque{fecha.pagar.cantidad === 1 ? "" : "s"} propio{fecha.pagar.cantidad === 1 ? "" : "s"} que el banco puede debitar hoy (hasta 30 días después de la fecha)</p>
             </button>
             <button type="button" onClick={() => filtrar({ categoria: "recibido", enFecha: true })} title="Ver estos cheques en la lista"
               className={`rounded-xl border p-3 text-left hover:border-orange-300 ${fecha.cobrar.cantidad ? "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30" : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"}`}>
@@ -174,10 +193,19 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
               <p className="font-mono text-lg font-bold text-zinc-900 dark:text-white">{montos(fecha.cobrar)}</p>
               <p className="text-xs text-zinc-500">{fecha.cobrar.cantidad} cheque{fecha.cobrar.cantidad === 1 ? "" : "s"} en cartera que ya se puede{fecha.cobrar.cantidad === 1 ? "" : "n"} depositar</p>
             </button>
+            {/* Próxima semana (26/10/2026, Augusto): sin comparar con el saldo del banco, solo indica. */}
+            {(["pagar", "cobrar"] as const).map((lado) => (
+              <button key={lado} type="button" disabled={!semana[lado].cantidad} title="Ver estos cheques en la lista"
+                onClick={() => filtrar({ categoria: lado === "pagar" ? "emitido" : "recibido", estado: lado === "pagar" ? "emitido:sin_debitar" : "recibido:en_cartera", desde: semana.desde, hasta: semana.hasta })}
+                className="rounded-xl border border-zinc-200 bg-white p-3 text-left hover:border-orange-300 disabled:cursor-default disabled:hover:border-zinc-200 dark:border-zinc-800 dark:bg-zinc-900">
+                <p className={`text-[11px] font-semibold uppercase tracking-wide ${lado === "pagar" ? "text-orange-600" : "text-emerald-600"}`}>Próxima semana {lado === "pagar" ? "a pagar" : "a cobrar"}</p>
+                <p className="font-mono text-lg font-bold text-zinc-900 dark:text-white">{montos(semana[lado])}</p>
+                <p className="text-xs text-zinc-500">{semana[lado].cantidad} cheque{semana[lado].cantidad === 1 ? "" : "s"} {lado === "pagar" ? `propio${semana[lado].cantidad === 1 ? "" : "s"}` : "en cartera"} del {formatDate(semana.desde).slice(0, 5)} al {formatDate(semana.hasta).slice(0, 5)}</p>
+              </button>
+            ))}
           </div>
 
-          {/* ¿Alcanza la plata de la cuenta? (25/10, Augusto): saldo del último extracto contra los cheques que el banco puede debitar */}
-          <CoberturaCheques sociedadId={sociedadId} hoy={hoy} cheques={todos.map((c) => ({ numero: c.numero, direccion: c.direccion, estado: c.estado, fecha_pago: c.fecha_pago, monto: c.monto, moneda: c.moneda, estadoBanco: c.estadoBanco }))} />
+          {/* 26/10/2026 (Augusto): "¿Alcanza la plata?" se sacó (comparaba contra el saldo del banco, que no se muestra por ahora). Queda en cobertura-cheques-card.tsx. */}
 
           {/* Resumen por estado */}
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">

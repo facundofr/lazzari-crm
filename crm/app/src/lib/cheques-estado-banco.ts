@@ -1,5 +1,5 @@
 // Estado del cheque según el banco (reportes eCheq, columna echeqs.estado_banco) frente al estado del CRM (24/10/2026, Augusto).
-// El banco NO corrige al CRM: solo se marca cuando el banco dice algo definitivo (pagado, rechazado, anulado) y el CRM no lo tiene así,
+// (Desde el 26/10/2026 los estados definitivos del banco SÍ actualizan el CRM: ver cambioSegunBanco más abajo.) Antes: el banco NO corregía al CRM: solo se marca cuando el banco dice algo definitivo (pagado, rechazado, anulado) y el CRM no lo tiene así,
 // para que una persona lo mire. Los estados intermedios del banco (ACTIVO, PRESENTADO, CUSTODIA…) se muestran pero no se comparan.
 // Prueba: scripts/test-cheques-estado-banco.ts
 export function diferenciaConBanco(direccion: "emitido" | "recibido", estadoCrm: string, estadoBanco: string | null | undefined): string | null {
@@ -13,4 +13,44 @@ export function diferenciaConBanco(direccion: "emitido" | "recibido", estadoCrm:
     if (direccion === "recibido" && crm === "en_cartera") return "El banco lo tiene pagado y el CRM lo tiene en cartera.";
   }
   return null;
+}
+
+// ─── 26/10/2026 (Augusto): los reportes de eCheq actualizan el estado del CRM ─────────────────────────────────────────
+// Misma regla que la función de base actualizar_cheques_segun_banco (migración 20261026130000): acá se usa para mostrar,
+// ANTES de Guardar, qué cheques van a cambiar. Los endosados no se tocan; los estados intermedios del banco no cambian nada.
+export interface CambioBanco { a: "cobrado" | "rechazado" | "anulado"; aviso: string | null }
+
+export function cambioSegunBanco(direccion: "emitido" | "recibido", estadoCrm: string, estadoBanco: string | null | undefined): CambioBanco | null {
+  const b = String(estadoBanco || "").trim().toUpperCase();
+  const crm = String(estadoCrm || "").trim().toLowerCase();
+  if (b === "PAGADO" && direccion === "emitido" && ["pendiente", "entregado"].includes(crm)) return { a: "cobrado", aviso: null };
+  if (b === "PAGADO" && direccion === "recibido" && ["en_cartera", "depositado"].includes(crm)) return { a: "cobrado", aviso: null };
+  if (b === "RECHAZADO" && direccion === "recibido" && !["rechazado", "anulado", "endosado"].includes(crm)) return { a: "rechazado", aviso: "Se anula el cobro de este cheque y la factura vuelve a deber." };
+  if (b === "RECHAZADO" && direccion === "emitido" && !["rechazado", "anulado"].includes(crm)) return { a: "rechazado", aviso: "Cheque propio rechazado: revisá la orden de pago con la que se pagó y avisale al proveedor." };
+  if (b === "ANULADO" && ["pendiente", "entregado", "en_cartera", "depositado"].includes(crm)) {
+    return { a: "anulado", aviso: direccion === "emitido" ? "Revisá la orden de pago con la que se pagó." : "Revisá el cobro de este cheque." };
+  }
+  return null;
+}
+
+export interface ChequeCrmMin { id: string; cheq_id?: string | null; numero: string; monto: number | string; direccion: string | null; estado: string; contraparte?: string | null }
+export interface ItemReporteMin { cheq_id: string; numero: string; monto: number; direccion: string; estado_banco: string }
+
+/** Qué cheques del CRM cambian con esta carga de reportes (por CheqID; si el cheque no lo tiene, por número + monto + dirección, uno solo). */
+export function cambiosDeLaCarga(items: ItemReporteMin[], cheques: ChequeCrmMin[]): Array<CambioBanco & { cheque: ChequeCrmMin; banco: string }> {
+  const sinCero = (n: string) => String(n || "").trim().replace(/^0+/, "");
+  const cent = (n: number | string) => Math.round(Number(n) * 100);
+  const porCheqId = new Map(cheques.filter((c) => c.cheq_id).map((c) => [String(c.cheq_id), c]));
+  const out: Array<CambioBanco & { cheque: ChequeCrmMin; banco: string }> = [];
+  for (const it of items) {
+    let ch = porCheqId.get(it.cheq_id);
+    if (!ch) {
+      const xs = cheques.filter((c) => !c.cheq_id && c.direccion === it.direccion && sinCero(c.numero) === sinCero(it.numero) && cent(c.monto) === cent(it.monto));
+      if (xs.length === 1) ch = xs[0];
+    }
+    if (!ch || ch.direccion !== it.direccion || (it.direccion !== "emitido" && it.direccion !== "recibido")) continue;
+    const c = cambioSegunBanco(it.direccion, ch.estado, it.estado_banco);
+    if (c) out.push({ ...c, cheque: ch, banco: String(it.estado_banco).toUpperCase() });
+  }
+  return out;
 }

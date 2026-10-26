@@ -1,6 +1,6 @@
 // Prueba rápida: npx tsx scripts/test-finanzas-propuestas.ts
 import assert from "node:assert/strict";
-import { armarBandeja, nombreEsComienzoDe, textoParaRegla, cuitEnTexto, lineasParaIA, resumenBandeja, gastosFijosParaDebito, type DatosBandeja, type FacturaBandeja } from "../src/lib/finanzas-propuestas";
+import { armarBandeja, esTransferencia, nombreEsComienzoDe, textoParaRegla, cuitEnTexto, lineasParaIA, resumenBandeja, gastosFijosParaDebito, type DatosBandeja, type FacturaBandeja } from "../src/lib/finanzas-propuestas";
 
 const CTA = "cta-cc";
 const fac = (id: string, pv: number, numero: number, saldo: number, cliente: string, extra: Partial<FacturaBandeja> = {}): FacturaBandeja => ({
@@ -228,6 +228,39 @@ assert.equal(cuitEnTexto("CTE 007875 285 30707784292 X"), "30707784292");
   });
   const it = items.find((i) => i.linea_id === "ban")!;
   assert.ok(!it.cobro, "no se cobra una nota de crédito");
+}
+
+// 26/10/2026 — Finanzas simple (Augusto: "todo menos los cobros a clientes y pagos a proveedores"): con sinCruces las transferencias no aparecen,
+// no se arman cobros, no se usan la IA ni los mails, los débitos automáticos pagan el gasto del mes ya cargado (sin cargar otro) y el 137 se sugiere.
+{
+  const fijos = gastosFijosParaDebito([{ id: "a3", descripcion: "ARBA plan de pagos web AA544RB 780301", categoria: "Débitos automáticos", notas: "" }]);
+  const simple = armarBandeja({
+    ...base, sinCruces: true, gastosFijosDebito: fijos,
+    gastosDeFijos: [{ id: "gm-oct", gasto_fijo_id: "a3", fecha: "2026-10-01", descripcion: "ARBA plan de pagos — octubre 2026", monto: 12000 }],
+    cheques: [{ id: "rec", numero: "131", monto: 5000, direccion: "recibido", estado: "depositado", fecha_pago: "2026-10-10" }],
+    lineas: [
+      ...base.lineas,
+      { id: "t136", fecha: "2026-10-14", concepto: "TRANSF.BANEL 30710480636 #136", importe: 60500, cuenta_id: CTA },
+      { id: "s137", fecha: "2026-10-14", concepto: "PAGO SERVICI 17779347 OP3636 #137", importe: -107789.2, cuenta_id: CTA },
+      { id: "deb", fecha: "2026-10-13", concepto: "DEBITO DIRECTO · DPR PLANPORWEB AA544RB 780301 #761", importe: -12864.7, cuenta_id: CTA },
+      { id: "deb-nov", fecha: "2026-11-13", concepto: "DEBITO DIRECTO · DPR PLANPORWEB AA544RB 780301 #761", importe: -12864.7, cuenta_id: CTA },
+      { id: "rech", fecha: "2026-10-20", concepto: "RECH.DEP.48H 09191840 N 131 #019", importe: -5000, cuenta_id: CTA },
+    ],
+  });
+  const s = (id: string) => simple.find((i) => i.linea_id === id);
+  for (const id of ["corteva", "termo", "cargill", "sueldo", "porcel", "prov", "marcada", "t136"]) assert.equal(s(id), undefined, `${id}: las transferencias no aparecen`);
+  assert.ok(!simple.some((i) => i.cobro || i.pagoProveedor || i.gastoFijo || i.origen === "ia" || i.origen === "mail"), "sin cobros, pagos, IA ni mails");
+  assert.equal(s("imp")?.confianza, "alta", "las reglas fijas siguen solas");
+  assert.equal(s("s137")?.confianza, "media", "el 137 se sugiere");
+  assert.equal(s("s137")?.cruce?.subtipo, "afip");
+  assert.equal(s("deb")?.gasto?.id, "gm-oct", "débito automático → paga el gasto de octubre ya cargado");
+  assert.ok(s("deb")?.avisos[0]?.includes("corregí el monto"), "el monto distinto se avisa");
+  assert.equal(s("deb-nov")?.tipo, "sin_resolver", "sin el gasto de noviembre cargado no se carga otro");
+  assert.equal(s("rech")?.confianza, "baja", "el rechazo de un cheque que el CRM no tiene rechazado queda para vos");
+  assert.deepEqual(s("rech")?.opcionesCheque?.map((o) => o.id), ["rec"]);
+  assert.equal(s("raro")?.titulo, "Salida sin identificar", "lo que no es transferencia ni regla queda para vos");
+  assert.ok(esTransferencia({ concepto: "TRANSFERENCIA CCP091 312483 1" }), "sin código: por el texto");
+  assert.ok(!esTransferencia({ concepto: "TRANSF ALGO", codigo: "263" }), "con código: manda el código");
 }
 
 console.log("finanzas-propuestas: OK", items.length, "renglones");

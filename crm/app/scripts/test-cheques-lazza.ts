@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { enFecha, estadoCheque, proximasSemanas, resumenPorEstado, type ChequeFL } from "../src/lib/cheques-lazza";
+import { enFecha, estadoCheque, proximaSemana, proximasSemanas, resumenPorEstado, type ChequeFL } from "../src/lib/cheques-lazza";
 
 const ch = (x: Partial<ChequeFL> & { id: string }): ChequeFL => ({ numero: x.id, direccion: "emitido", estado: "entregado", fecha_pago: "2026-10-19", monto: 100, moneda: "ARS", ...x });
 const hoy = "2026-10-19"; // lunes
@@ -18,6 +18,14 @@ const cheques: ChequeFL[] = [
 ];
 
 assert.deepEqual(enFecha(cheques, hoy), { pagar: { cantidad: 2, ARS: 200, USD: 0 }, cobrar: { cantidad: 1, ARS: 300, USD: 0 } });
+// 26/10/2026: en fecha solo hasta 30 días después de la fecha de pago
+assert.equal(enFecha([ch({ id: "v", fecha_pago: "2026-09-19" })], hoy).pagar.cantidad, 1, "30 días justos: en fecha");
+assert.equal(enFecha([ch({ id: "v", fecha_pago: "2026-09-18" })], hoy).pagar.cantidad, 0, "más de 30 días: ya no");
+// Próxima semana: de mañana a 7 días
+const ps = proximaSemana(cheques, hoy);
+assert.deepEqual([ps.desde, ps.hasta], ["2026-10-20", "2026-10-26"]);
+assert.deepEqual(ps.pagar, { cantidad: 1, ARS: 100, USD: 0 }, "el del 27/10 ya es la otra semana");
+assert.equal(ps.cobrar.cantidad, 0, "el endosado no cuenta");
 
 const sem = proximasSemanas(cheques, hoy);
 assert.deepEqual(sem.map((s) => [s.desde, s.hasta]), [["2026-10-20", "2026-10-25"], ["2026-10-26", "2026-11-01"], ["2026-11-02", "2026-11-08"], ["2026-11-09", "2026-11-15"]]);
