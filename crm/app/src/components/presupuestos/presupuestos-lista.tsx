@@ -1455,9 +1455,15 @@ export default function PresupuestosLista() {
       toast.warning("Selecciona tipo de documento (A o B)");
       return;
     }
-    const validItems = newPR.items.filter((it) => it.descripcion.trim() && it.cantidad > 0);
-    if (!esSolicitud && validItems.length === 0) {
-      toast.warning("Agrega al menos un item");
+    const itemsCargados = newPR.items.filter((it) => it.descripcion.trim() && it.cantidad > 0);
+    // Solicitud solo con texto: la base pide al menos un renglón, así que lo pedido queda como
+    // un renglón a cotizar (sin costo ni precio). Al convertirla en PR se reemplaza por los artículos.
+    const textoSolicitud = newPR.notas_internas.trim();
+    const validItems = esSolicitud && itemsCargados.length === 0 && textoSolicitud
+      ? [{ ...emptyItem, descripcion: textoSolicitud.slice(0, 500), cantidad: 1 }]
+      : itemsCargados;
+    if (validItems.length === 0) {
+      toast.warning(esSolicitud ? "Escribí qué necesita el cliente o elegí productos" : "Agrega al menos un item");
       return;
     }
 
