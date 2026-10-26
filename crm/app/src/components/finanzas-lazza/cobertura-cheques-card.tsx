@@ -3,14 +3,15 @@
 // Bancos > Cheques: "¿Alcanza la plata de la cuenta para los cheques?" (25/10/2026, Augusto).
 // Compara el saldo del último extracto cargado de la CC EPP con los cheques propios que el banco puede debitar hoy y en los próximos 7 días.
 // Es un aviso: no bloquea ni mueve nada. El FCI se muestra como dato, sin sumarlo. Cálculo en lib/cobertura-cheques (prueba: scripts/test-cobertura-cheques.ts).
+// 25/10: un cheque que el banco ya debitó (línea de débito en el extracto, o PAGADO según el banco) no se resta otra vez: ya está fuera del saldo.
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { digitosCuenta } from "@/lib/extracto-bbva";
-import { coberturaCheques, diasDesde, sobraOFalta, type ChequeCobertura } from "@/lib/cobertura-cheques";
+import { coberturaCheques, diasDesde, numerosDebitados, sobraOFalta, type ChequeCobertura } from "@/lib/cobertura-cheques";
 import { formatCurrency, formatDate } from "@/lib/utils";
 
-interface CuentaSaldo { nombre: string; numero: string | null; tipo: string; moneda: string; saldo_banco: number | null; saldo_banco_fecha: string | null }
+interface CuentaSaldo { id: string; nombre: string; numero: string | null; tipo: string; moneda: string; saldo_banco: number | null; saldo_banco_fecha: string | null }
 
 const CC_EPP = digitosCuenta("091-312483/1");
 const CC_INDU = digitosCuenta("091-318933/7");
@@ -25,17 +26,26 @@ function Veredicto({ valor }: { valor: number | null }) {
 
 export function CoberturaCheques({ sociedadId, cheques, hoy }: { sociedadId: string; cheques: ChequeCobertura[]; hoy: string }) {
   const [cuentas, setCuentas] = useState<CuentaSaldo[] | null>(null);
+  const [debitados, setDebitados] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let vivo = true;
     (async () => {
-      const { data } = await (supabase as any).from("cuentas_financieras").select("nombre, numero, tipo, moneda, saldo_banco, saldo_banco_fecha").eq("sociedad_id", sociedadId).eq("activa", true);
-      if (vivo) setCuentas(((data || []) as CuentaSaldo[]).map((c) => ({ ...c, saldo_banco: c.saldo_banco === null ? null : Number(c.saldo_banco) })));
+      const db = supabase as any;
+      const { data } = await db.from("cuentas_financieras").select("id, nombre, numero, tipo, moneda, saldo_banco, saldo_banco_fecha").eq("sociedad_id", sociedadId).eq("activa", true);
+      const cs = ((data || []) as CuentaSaldo[]).map((c) => ({ ...c, saldo_banco: c.saldo_banco === null ? null : Number(c.saldo_banco) }));
+      // Débitos de cheques de las cuentas corrientes de los últimos 90 días: esos cheques ya salieron del saldo.
+      const ids = cs.filter((c) => [CC_EPP, CC_INDU].includes(digitosCuenta(c.numero))).map((c) => c.id);
+      const desde = new Date(Date.now() - 90 * 86_400_000).toISOString().slice(0, 10);
+      const { data: ls } = ids.length
+        ? await db.from("extracto_movimientos").select("descripcion, tipo").in("cuenta_id", ids).eq("tipo", "debito").gte("fecha", desde).limit(5000)
+        : { data: [] };
+      if (vivo) { setCuentas(cs); setDebitados(numerosDebitados((ls || []) as Array<{ descripcion: string; tipo: string }>)); }
     })().catch(() => { if (vivo) setCuentas([]); });
     return () => { vivo = false; };
   }, [sociedadId]);
 
-  const cob = useMemo(() => coberturaCheques(cheques, hoy), [cheques, hoy]);
+  const cob = useMemo(() => coberturaCheques(cheques, hoy, debitados), [cheques, hoy, debitados]);
   if (!cuentas) return null;
   const epp = cuentas.find((c) => digitosCuenta(c.numero) === CC_EPP);
   const indu = cuentas.find((c) => digitosCuenta(c.numero) === CC_INDU);
@@ -67,6 +77,11 @@ export function CoberturaCheques({ sociedadId, cheques, hoy }: { sociedadId: str
             <span>Próximos 7 días: <b className="font-mono">{formatCurrency(cob.proximos7.total)}</b> <span className="text-xs text-zinc-500">({cob.proximos7.cantidad} cheques)</span></span>
             <Veredicto valor={sobraOFalta(epp.saldo_banco, cob.proximos7.total)} />
           </div>
+          {cob.yaDebitados.cantidad > 0 && (
+            <p className="text-xs text-zinc-500">
+              {cob.yaDebitados.cantidad} cheque{cob.yaDebitados.cantidad > 1 ? "s" : ""} por <b>{formatCurrency(cob.yaDebitados.total)}</b> ya {cob.yaDebitados.cantidad > 1 ? "los debitó" : "lo debitó"} el banco: no se {cob.yaDebitados.cantidad > 1 ? "cuentan" : "cuenta"} (ya {cob.yaDebitados.cantidad > 1 ? "están restados" : "está restado"} del saldo). En el CRM se {cob.yaDebitados.cantidad > 1 ? "pasan" : "pasa"} a debitado al confirmar Movimientos.
+            </p>
+          )}
           <p className="text-xs text-zinc-400">No cuenta cobros que entren ni el FCI.{fci?.saldo_banco ? ` ${fci.nombre}: ${formatCurrency(fci.saldo_banco)}${fci.saldo_banco_fecha ? ` al ${formatDate(fci.saldo_banco_fecha)}` : ""} (solo informativo).` : ""}</p>
         </div>
 

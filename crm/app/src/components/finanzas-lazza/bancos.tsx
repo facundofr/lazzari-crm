@@ -14,6 +14,7 @@ import { AlertTriangle, Check, ChevronDown, ChevronRight, CreditCard, Landmark, 
 import { supabase } from "@/lib/supabase/client";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { diasDesde, pesosDeObservaciones, resumenPrestamo, type CuotaPrestamo } from "@/lib/bancos-lazza";
+import { leerImporte } from "@/lib/extracto-bbva";
 import { FinanzasLazzaCheques } from "./cheques";
 import { CargarEstadoCheques } from "./cheques-reportes";
 import { MovimientosPorTipo } from "./movimientos-por-tipo";
@@ -72,6 +73,8 @@ export function FinanzasLazzaBancos({ sociedadId, pestanaInicial = "cuentas" }: 
   const [marcandoCuota, setMarcandoCuota] = useState<string | null>(null);
   const [versionCheques, setVersionCheques] = useState(0);
   const [vistaMov, setVistaMov] = useState<"confirmar" | "tipo">("confirmar");
+  // 25/10 (Augusto): el FCI no tiene Excel de movimientos con saldo; su saldo se pone a mano con el "Total de inversiones" del home banking.
+  const [editSaldo, setEditSaldo] = useState<{ id: string; valor: string } | null>(null);
   const hoy = todayAR();
 
   const cargar = useCallback(() => {
@@ -90,6 +93,21 @@ export function FinanzasLazzaBancos({ sociedadId, pestanaInicial = "cuentas" }: 
     for (const c of cuentas) { const s = c.saldo_banco ?? c.saldo_inicial; if (s !== null) t[c.moneda] += s; }
     return t;
   }, [cuentas]);
+
+  async function guardarSaldoManual(c: Cuenta) {
+    if (!editSaldo) return;
+    const texto = editSaldo.valor.trim();
+    // "500.000" (miles con punto, sin centavos) es quinientos mil, no 500.
+    const valor = /^\$?\s*\d{1,3}(\.\d{3})+$/.test(texto) ? Number(texto.replace(/\D/g, "")) : leerImporte(texto);
+    if (valor === null || valor < 0) { alert("Poné el total tal cual lo muestra el home banking (ej. 22.417.689,23)."); return; }
+    if (!confirm(`¿Guardar ${formatCurrency(valor, c.moneda)} como saldo de ${c.nombre} al ${formatDate(hoy)}?`)) return;
+    setGuardando(true);
+    const { error: e } = await db.from("cuentas_financieras").update({ saldo_banco: valor, saldo_banco_fecha: hoy, updated_at: new Date().toISOString() }).eq("id", c.id).eq("sociedad_id", sociedadId);
+    setGuardando(false);
+    if (e) { alert(`No se pudo guardar el saldo: ${e.message}`); return; }
+    setEditSaldo(null);
+    cargar();
+  }
 
   async function anotarPago() {
     if (!pago) return;
@@ -204,6 +222,16 @@ export function FinanzasLazzaBancos({ sociedadId, pestanaInicial = "cuentas" }: 
                       );
                     })()}
                   </p>
+                  {c.tipo === "fci" && (editSaldo?.id === c.id ? (
+                    <span className="mt-1 flex items-center gap-1">
+                      <input autoFocus value={editSaldo.valor} onChange={(e) => setEditSaldo({ id: c.id, valor: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") void guardarSaldoManual(c); }}
+                        placeholder="Total del home banking" className="h-7 w-36 rounded border border-zinc-300 bg-white px-1.5 text-xs dark:border-zinc-600 dark:bg-zinc-900" />
+                      <button type="button" disabled={guardando} onClick={() => void guardarSaldoManual(c)} className="rounded bg-emerald-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-emerald-700 disabled:opacity-50">Guardar</button>
+                      <button type="button" aria-label="Cancelar" onClick={() => setEditSaldo(null)} className="rounded p-1 text-zinc-400 hover:text-zinc-600"><X className="h-3.5 w-3.5" /></button>
+                    </span>
+                  ) : (
+                    <button type="button" onClick={() => setEditSaldo({ id: c.id, valor: "" })} title="Poné el Total de inversiones que muestra el home banking" className="mt-1 text-[11px] font-medium text-orange-600 hover:underline">Actualizar saldo</button>
+                  ))}
                 </div>
               );
             })}

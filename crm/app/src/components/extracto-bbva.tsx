@@ -16,7 +16,7 @@ import {
   type ExtractoLeido, type ChequeListado, type ClasificacionLinea, type MovCruce, type ChequeCruce, type ReglaCruce, type Propuesta,
   digitosCuenta,
 } from "@/lib/extracto-bbva";
-import { controlPorDia, limitarPorGuardadas, type ResultadoControl } from "@/lib/control-dia";
+import { controlPorDia, limitarPorGuardadas, textosDefinitivos, type GuardadaTexto, type ResultadoControl } from "@/lib/control-dia";
 import { montoCuentaDeOp } from "@/lib/saldo-cuentas";
 import { AlertTriangle, CheckCircle2, FileSpreadsheet, Loader2, RotateCcw, Upload, Wand2 } from "lucide-react";
 
@@ -72,6 +72,8 @@ export interface ArchivoPreview {
   nuevas: number;
   /** Control día por día contra lo ya guardado (solo si se le pasaron las líneas guardadas). */
   control?: ResultadoControl;
+  /** Líneas provisorias ya guardadas que el banco ahora trae con el texto y el código definitivos (se corrigen al guardar). */
+  corregir?: Array<{ id: string; viejo: string; nuevo: string }>;
   guardado?: string;
 }
 
@@ -106,7 +108,7 @@ export const esMovimientos = (hojas: unknown[][][]) => {
  * El "Movimientos" no trae saldo por línea: se calcula y se verifica contra el último saldo cargado (si no cierra, tira error).
  * También lo usa la bandeja "Para confirmar".
  */
-export async function leerArchivoExtracto(f: File, cuentas: CuentaRow[], clavesPorCuenta: Map<string, Set<string>>, guardadas?: Array<{ cuenta_id: string; fecha: string; importe: number }>): Promise<ArchivoPreview> {
+export async function leerArchivoExtracto(f: File, cuentas: CuentaRow[], clavesPorCuenta: Map<string, Set<string>>, guardadas?: Array<{ cuenta_id: string; fecha: string; importe: number; id?: string; descripcion?: string }>): Promise<ArchivoPreview> {
   const hojas = await leerHojas(f);
   // Aviso (24/10, Augusto): si es el reporte de cheques, decir dónde va (no se guarda nada).
   if (esListadoCheques(hojas) && !esMovimientos(hojas)) throw new Error("Este archivo parece el reporte de cheques (eCheq), no los Movimientos de la cuenta. Subilo en Bancos > Cheques.");
@@ -132,7 +134,23 @@ export async function leerArchivoExtracto(f: File, cuentas: CuentaRow[], clavesP
   const control = cuenta && guardadas
     ? controlPorDia(leido.lineas.map((l) => ({ fecha: l.fecha, importe: l.importe })), guardadas.filter((g) => g.cuenta_id === cuenta.id))
     : undefined;
-  return { nombre: f.name, leido, cuenta, desdeCorte, aGuardar, nuevas: aGuardar.length, control };
+  // 25/10: las líneas provisorias del último día cargado toman el texto y el código definitivos del banco (solo la descripción).
+  const conTexto: GuardadaTexto[] = (guardadasCuenta || []).flatMap((g) => (g.id && g.descripcion !== undefined ? [{ id: g.id, descripcion: g.descripcion, fecha: g.fecha, importe: g.importe }] : []));
+  const corregir = cuenta && conTexto.length
+    ? textosDefinitivos(leido.lineas, conTexto, cuenta.saldo_banco_fecha ? String(cuenta.saldo_banco_fecha).slice(0, 10) : null)
+    : [];
+  return { nombre: f.name, leido, cuenta, desdeCorte, aGuardar, nuevas: aGuardar.length, control, corregir };
+}
+
+/** Corrige la descripción de las líneas provisorias con el texto definitivo del banco (solo si nadie la cambió mientras tanto). Devuelve cuántas. */
+export async function corregirTextosExtracto(corregir: Array<{ id: string; viejo: string; nuevo: string }> | undefined): Promise<number> {
+  let n = 0;
+  for (const c of corregir || []) {
+    const { data, error: e } = await (supabase as any).from("extracto_movimientos").update({ descripcion: c.nuevo }).eq("id", c.id).eq("descripcion", c.viejo).select("id");
+    if (e) throw e;
+    n += (data || []).length;
+  }
+  return n;
 }
 
 /** Guarda las líneas nuevas del extracto (las repetidas se saltean) y el saldo según el banco. */

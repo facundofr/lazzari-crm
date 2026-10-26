@@ -127,13 +127,18 @@ export default function AsistenteFinanzas({ onIrATab }: { onIrATab?: (tab: strin
         try {
           const preliminar = await leerArchivoExtracto(f, cuentas, new Map());
           const claves = new Set<string>();
+          const guardadas: Array<{ cuenta_id: string; fecha: string; importe: number }> = [];
           if (preliminar.cuenta) {
-            const { data: ls } = await db.from("extracto_movimientos").select("clave").eq("cuenta_id", preliminar.cuenta.id).gte("fecha", preliminar.leido.lineas[0]?.fecha || "2000-01-01").limit(5000);
-            for (const l of ls || []) if (l.clave) claves.add(l.clave);
+            const { data: ls } = await db.from("extracto_movimientos").select("clave, fecha, monto, tipo").eq("cuenta_id", preliminar.cuenta.id).gte("fecha", preliminar.leido.lineas[0]?.fecha || "2000-01-01").limit(5000);
+            for (const l of ls || []) {
+              if (l.clave) claves.add(l.clave);
+              // 25/10: también por fecha + importe, para no duplicar líneas cargadas desde otro formato del banco (saldo o texto distintos).
+              guardadas.push({ cuenta_id: preliminar.cuenta.id, fecha: String(l.fecha).slice(0, 10), importe: l.tipo === "credito" ? Number(l.monto) : -Number(l.monto) });
+            }
           }
-          const a = await leerArchivoExtracto(f, cuentas, new Map(preliminar.cuenta ? [[preliminar.cuenta.id, claves]] : []));
+          const a = await leerArchivoExtracto(f, cuentas, new Map(preliminar.cuenta ? [[preliminar.cuenta.id, claves]] : []), preliminar.cuenta ? guardadas : undefined);
           const resumen = a.cuenta
-            ? `**${f.name}** → ${a.cuenta.nombre}. Del ${formatDate(a.leido.lineas[0]?.fecha || "")} al ${formatDate(a.leido.saldoFecha || "")}, saldo ${formatCurrency(a.leido.saldoFinal || 0)}. Saldos verificados ✔. **${a.nuevas} líneas nuevas**, ${a.desdeCorte.length - a.nuevas} ya estaban.`
+            ? `**${f.name}** → ${a.cuenta.nombre}. Del ${formatDate(a.leido.lineas[0]?.fecha || "")} al ${formatDate(a.leido.saldoFecha || "")}, saldo ${formatCurrency(a.leido.saldoFinal || 0)}. ${a.leido.avisoSaldo ? `⚠️ ${a.leido.avisoSaldo}` : "Saldos verificados ✔."} **${a.nuevas} líneas nuevas**, ${a.desdeCorte.length - a.nuevas} ya estaban.`
             : `**${f.name}**: no hay una cuenta con ese número en esta sociedad (${a.leido.cuentaTexto}).`;
           setMensajes((m) => [...m, { role: "user", content: `📎 ${f.name}` }, { role: "assistant", content: resumen, archivo: a.cuenta && a.nuevas ? a : undefined }]);
         } catch (e) {

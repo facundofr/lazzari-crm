@@ -72,3 +72,32 @@ export function controlPorDia(archivo: LineaControl[], base: LineaControl[]): Re
   }
   return { diasComparados, diferencias };
 }
+
+/** Línea ya guardada, con lo necesario para corregirle el texto. */
+export interface GuardadaTexto extends LineaControl { id: string; descripcion: string }
+
+/**
+ * Líneas provisorias (25/10/2026, Augusto): lo que entra de la hoja "Movimientos del Día" trae un texto y un código provisorios
+ * (ej. un pago a ARCA aparece como "BANELCO #062", extracción). Cuando llega el Excel siguiente, el mismo movimiento viene en
+ * "Movimientos Históricos" con el texto y el código definitivos. Devuelve qué líneas guardadas corregir: solo las del último día que
+ * ya estaba cargado en adelante (`desde`), solo si el cruce por fecha + importe es único de los dos lados, y solo si el texto cambió.
+ * No toca clasificación ni estado: solo la descripción.
+ */
+export function textosDefinitivos(
+  archivo: Array<LineaControl & { concepto: string; provisoria?: boolean }>,
+  guardadas: GuardadaTexto[],
+  desde: string | null | undefined,
+): Array<{ id: string; viejo: string; nuevo: string }> {
+  if (!desde) return [];
+  const clave = (l: LineaControl) => `${l.fecha}|${cent(l.importe)}`;
+  const agrupar = <T extends LineaControl>(ls: T[]) => { const m = new Map<string, T[]>(); for (const l of ls) m.set(clave(l), [...(m.get(clave(l)) || []), l]); return m; };
+  const definitivas = agrupar(archivo.filter((l) => !l.provisoria && l.fecha >= desde));
+  const candidatas = agrupar(guardadas.filter((g) => g.fecha >= desde));
+  const out: Array<{ id: string; viejo: string; nuevo: string }> = [];
+  for (const [k, gs] of candidatas) {
+    const ds = definitivas.get(k) || [];
+    if (gs.length !== 1 || ds.length !== 1) continue;
+    if (gs[0].descripcion.trim() !== ds[0].concepto.trim()) out.push({ id: gs[0].id, viejo: gs[0].descripcion, nuevo: ds[0].concepto });
+  }
+  return out;
+}

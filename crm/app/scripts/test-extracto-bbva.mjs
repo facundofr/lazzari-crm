@@ -292,7 +292,7 @@ console.log("extracto-bbva OK");
   assert.ok([ "a", "b", "c", "d", "e" ].every((id) => g(id).auto));
 }
 
-// Un Excel que solo trae el día de hoy se acepta si su saldo de apertura es el último saldo cargado, y se rechaza si no (23/10/2026).
+// Un Excel que solo trae el día de hoy se acepta si su saldo de apertura es el último saldo cargado; si no cierra, AVISA y se carga igual (25/10/2026: nada frena).
 {
   const hojas = [[
     ["Cuenta: ", "091-312483/1(CC $)"], ["Saldo: ", "1.000,00"], [],
@@ -301,7 +301,33 @@ console.log("extracto-bbva OK");
   ]];
   const ok = leerMovimientosBbva(hojas, { fecha: "2026-10-22", saldo: 1100 });
   assert.equal(ok.lineas.length, 1);
-  assert.throws(() => leerMovimientosBbva(hojas, { fecha: "2026-10-22", saldo: 1200 }), /no cierran/);
+  assert.equal(ok.avisoSaldo, null);
+  const aviso = leerMovimientosBbva(hojas, { fecha: "2026-10-22", saldo: 1200 });
+  assert.equal(aviso.lineas.length, 1);
+  assert.match(aviso.avisoSaldo, /no cierra/);
+  assert.equal(aviso.saldoFinal, 1000);
+}
+
+// Las líneas de la hoja "Movimientos del Día" quedan marcadas como provisorias; las del histórico no (25/10/2026).
+{
+  const hojas = [
+    [
+      ["Cuenta: ", "091-312483/1(CC $)"], ["Saldo: ", "800,00"], ["Movimientos de: ", "25-10-2026"], [],
+      ["Fecha", "Fecha Valor", "Concepto", "Codigo", "Nro de cheque", "Oficina", "Crédito", "Débito", "Saldo Parcial"],
+      ["26-10-2026", "26-10-2026", "PAGO CHEQUE 48HS CAP.FED. N 90017348", "005", "90017348", "91 - X", "", "-200.00", "1,000.00"],
+    ],
+    [
+      ["Cuenta: ", "091-312483/1(CC $)"], ["Saldo: ", "800,00"], ["Movimientos de: ", "Ultimos 60 Días."], [],
+      ["Fecha", "Fecha Valor", "Concepto", "Codigo", "Número Documento", "Oficina", "Crédito", "Débito", "Detalle"],
+      ["23-10-2026", "23-10-2026", "PAGO SERVICI 17779347 OP3636", "137", "", "100 - X", "", "-50.00", "Saldo Disponible: 1.000,00"],
+    ],
+  ];
+  const r = leerMovimientosBbva(hojas, null);
+  assert.equal(r.lineas.length, 2);
+  const dia = r.lineas.find((l) => l.fecha === "2026-10-26"), hist = r.lineas.find((l) => l.fecha === "2026-10-23");
+  assert.equal(dia.provisoria, true);
+  assert.equal(hist.provisoria, undefined);
+  assert.ok(hist.concepto.endsWith("#137"));
 }
 
 console.log("extracto-bbva OK");

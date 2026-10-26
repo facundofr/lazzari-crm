@@ -1,6 +1,6 @@
 // Prueba rápida: npx tsx scripts/test-cobertura-cheques.ts
 import assert from "node:assert/strict";
-import { coberturaCheques, sobraOFalta, diasDesde, type ChequeCobertura } from "../src/lib/cobertura-cheques";
+import { coberturaCheques, sobraOFalta, diasDesde, numerosDebitados, type ChequeCobertura } from "../src/lib/cobertura-cheques";
 
 const HOY = "2026-10-25";
 const ch = (numero: string, monto: number, fecha_pago: string, estado = "entregado", estadoBanco: string | null = "ACTIVO", extra: Partial<ChequeCobertura> = {}): ChequeCobertura =>
@@ -40,5 +40,25 @@ assert.equal(diasDesde(null, HOY), null);
 // Sin cheques
 const v = coberturaCheques([], HOY);
 assert.equal(v.hoy.total, 0); assert.equal(v.indu.cheques.length, 0);
+
+// Cheques que el banco ya debitó (línea en el extracto) o que figuran PAGADO: no se cuentan otra vez (25/10/2026)
+const deb = numerosDebitados([
+  { descripcion: "PAGO CHEQUE 48HS CAP.FED. N 90017348 #005", tipo: "debito" },
+  { descripcion: "CJE. INTERNO N 90017243 #016", tipo: "debito" },
+  { descripcion: "PAGO CHEQUE 24HS 90017218 #016", tipo: "debito" },          // formato viejo, sin " N "
+  { descripcion: "CH/CLEAR.48  000709521272275 N 90017095", tipo: "debito" }, // sin código
+  { descripcion: "DEPOS.CHQ.48 CFU. E09191840 #082", tipo: "credito" },       // depósito: no
+  { descripcion: "TRANSFERENCIA 30716314797 #319", tipo: "debito" },          // no es cheque
+  { descripcion: "DEVUELTO CAP F N 74 #019", tipo: "debito" },                // rechazo: no es un pago
+]);
+assert.deepEqual([...deb].sort(), ["90017095", "90017218", "90017243", "90017348"]);
+const d = coberturaCheques([
+  ch("90017348", 150000, "2026-10-21", "entregado", "PRESENTADO"),  // debitado según el extracto
+  ch("90017243", 1000000, "2026-10-21", "entregado", "DEPOSITADO"), // debitado según el extracto
+  ch("90017400", 70000, "2026-10-21", "entregado", "PAGADO"),       // PAGADO según el banco
+  ch("90017337", 590967.49, "2026-10-21", "entregado", "ACTIVO"),   // sigue pendiente
+], HOY, deb);
+assert.equal(d.hoy.cantidad, 1); assert.equal(d.hoy.total, 590967.49);
+assert.deepEqual(d.yaDebitados, { cantidad: 3, total: 1220000 });
 
 console.log("test-cobertura-cheques OK");

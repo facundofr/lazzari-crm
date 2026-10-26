@@ -111,6 +111,8 @@ export interface LineaBanco {
   importe: number;
   saldo: number | null;
   clave: string;
+  /** Viene de la hoja "Movimientos del Día": es provisoria (el texto y el código definitivos llegan después en "Movimientos Históricos"). */
+  provisoria?: boolean;
 }
 
 export interface ExtractoLeido {
@@ -123,6 +125,8 @@ export interface ExtractoLeido {
   saldoFecha: string | null;
   /** Renglones donde saldo anterior + importe ≠ saldo (faltan líneas en el Excel). */
   saltos: number;
+  /** Aviso (no frena): el saldo del Excel no cierra con el último saldo que tiene el CRM. */
+  avisoSaldo?: string | null;
 }
 
 export function claveLinea(l: Pick<LineaBanco, "fecha" | "importe" | "saldo" | "concepto">): string {
@@ -202,8 +206,9 @@ function leerFechaGuiones(v: unknown): string | null {
 /**
  * Lee el Excel "Movimientos" del home banking del BBVA (hojas "Movimientos del Día" y "Movimientos Históricos").
  * No trae el saldo de cada línea: se calcula hacia atrás desde el "Saldo:" del encabezado.
- * Si se pasa `ancla` (último saldo que el CRM ya tiene de esa cuenta), se VERIFICA que el cálculo llegue a ese mismo saldo:
- * si no cierra (por ejemplo falta el último día cerrado), tira un error explicando la diferencia y no se guarda nada.
+ * Si se pasa `ancla` (último saldo que el CRM ya tiene de esa cuenta), se compara el cálculo con ese saldo. Si no cierra, AVISA en `avisoSaldo`
+ * y se carga igual (Augusto 25/10/2026, regla n° 1: nada frena): pasa normalmente cuando el Excel anterior se bajó a mitad del día o el banco
+ * todavía no listó algún movimiento. Lo que falte se ve con el control día por día (lib/control-dia).
  */
 export function leerMovimientosBbva(hojas: unknown[][][], ancla?: { fecha: string; saldo: number } | null): ExtractoLeido {
   type Crudo = LineaBanco & { orden: number };
@@ -246,7 +251,7 @@ export function leerMovimientosBbva(hojas: unknown[][][], ancla?: { fecha: strin
       // Código de operación del banco (tabla de Augusto, lib/bbva-codigos): se guarda al final de la descripción.
       if (cCod >= 0) concepto = conCodigoBanco(concepto, f?.[cCod]);
       const l = { fecha, concepto, sucursal, importe: r2(importe), saldo: null as number | null };
-      (esDia ? dia : hist).push({ ...l, clave: "", orden: k });
+      (esDia ? dia : hist).push({ ...l, clave: "", orden: k, provisoria: esDia });
     });
   }
   if (!cuentaTexto || saldoHeader === null || (!dia.length && !hist.length)) {
@@ -264,19 +269,20 @@ export function leerMovimientosBbva(hojas: unknown[][][], ancla?: { fecha: strin
   const lineas: LineaBanco[] = [];
   for (const l of ordenado) {
     const base = { fecha: l.fecha, concepto: l.concepto, sucursal: l.sucursal, importe: l.importe, saldo: r2(saldo) };
-    lineas.push({ ...base, clave: claveLinea(base) });
+    lineas.push({ ...base, clave: claveLinea(base), ...(l.provisoria ? { provisoria: true } : {}) });
     saldo = r2(saldo - l.importe);
   }
   lineas.reverse();
 
   let saltos = 0;
+  let avisoSaldo: string | null = null;
   if (ancla) {
     let hasta = saldoAl(lineas, ancla.fecha);
     // Si el Excel arranca DESPUÉS del último saldo cargado (ej. solo trae el día de hoy), su saldo de apertura tiene que ser ese saldo.
     if (hasta === null && lineas.length && lineas[0].fecha > ancla.fecha && lineas[0].saldo !== null) hasta = r2(lineas[0].saldo - lineas[0].importe);
     if (hasta === null || centavos(hasta) !== centavos(ancla.saldo)) {
       const dif = hasta === null ? null : r2(hasta - ancla.saldo);
-      throw new Error(`Los saldos no cierran contra lo que ya está cargado (al ${ancla.fecha.split("-").reverse().join("/")} el CRM tiene ${ancla.saldo.toLocaleString("es-AR")} y este Excel da ${hasta === null ? "—" : hasta.toLocaleString("es-AR")}${dif === null ? "" : `, diferencia ${dif.toLocaleString("es-AR")}`}). Suele pasar cuando el Excel no incluye el último día cerrado: volvé a bajarlo cuando el banco lo actualice, o usá el "Detalle_mov_cuenta".`);
+      avisoSaldo = `El saldo no cierra con lo que ya tenía el CRM (al ${ancla.fecha.split("-").reverse().join("/")} tenía ${ancla.saldo.toLocaleString("es-AR")} y este Excel da ${hasta === null ? "—" : hasta.toLocaleString("es-AR")}${dif === null ? "" : `, diferencia ${dif.toLocaleString("es-AR")}`}). Suele pasar cuando el Excel anterior se bajó a mitad del día o el banco todavía no listó algún movimiento. Se carga igual: el saldo que vale es el de este Excel.`;
     }
   }
   const ultima = lineas[lineas.length - 1];
@@ -287,6 +293,7 @@ export function leerMovimientosBbva(hojas: unknown[][][], ancla?: { fecha: strin
     saldoFinal: ultima?.saldo ?? saldoHeader,
     saldoFecha: ultima?.fecha ?? null,
     saltos,
+    avisoSaldo,
   };
 }
 

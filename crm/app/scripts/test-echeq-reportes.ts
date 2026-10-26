@@ -1,6 +1,6 @@
 // Prueba rápida: npx tsx scripts/test-echeq-reportes.ts
 import assert from "node:assert/strict";
-import { leerReporteEcheq, tipoDeNombreEcheq, TOPE_EMITIDOS } from "../src/lib/echeq-reportes";
+import { leerReporteEcheq, tipoDeNombreEcheq, armarItemsEcheq, TOPE_EMITIDOS } from "../src/lib/echeq-reportes";
 
 // Nombres
 assert.equal(tipoDeNombreEcheq("23-10-2026-eCheqs-aceptados.xls"), "aceptados");
@@ -48,5 +48,16 @@ r = leerReporteEcheq([ENC_EMI, ...cien], "23-10-2026-eCheqs-emitidos.xls");
 assert.equal(r.filas.length, 100); assert.ok(r.advertencias.some((a) => /puede estar cortado/.test(a)));
 r = leerReporteEcheq([ENC_EMI, ...cien.slice(0, 99)], "23-10-2026-eCheqs-emitidos.xls");
 assert.deepEqual(r.advertencias, []);
+
+// armarItemsEcheq: une los reportes de una carga; el mismo CheqID con estados distintos no se aplica (se avisa)
+{
+  const rA = leerReporteEcheq([ENC_REC, rec("A", "ID1", "1", "$10", "BANCO GALICIA", "ACTIVO"), rec("B", "ID2", "2", "$20")], "x-eCheqs-aceptados.xls");
+  const rB = leerReporteEcheq([ENC_REC, rec("A", "ID1", "1", "$10", "BANCO GALICIA", "PAGADO"), rec("C", "ID3", "3", "$30", "BANCO GALICIA", "PAGADO")], "x-eCheqs-deposito.xls");
+  const rC = leerReporteEcheq([ENC_REC, rec("B", "ID2", "2", "$20")], "x-eCheqs-endosados.xls"); // mismo estado: se aplica una vez
+  const u = armarItemsEcheq([rA, rB, rC]);
+  assert.deepEqual(u.items.map((i) => i.cheq_id).sort(), ["ID2", "ID3"]);
+  assert.equal(u.avisos.length, 1); assert.ok(/ID1/.test(u.avisos[0]));
+  assert.equal(u.items.find((i) => i.cheq_id === "ID3")!.direccion, "recibido");
+}
 
 console.log("test-echeq-reportes OK");

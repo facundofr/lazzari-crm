@@ -23,7 +23,9 @@ import { notaLiteral, notaCobro, armarCobroSistemaAnterior, pesos, RETENCION_LAB
 import { leerResumenBbva, cruzarResumen, textoContraparte, type Contraparte } from "@/lib/resumen-bbva";
 import { leerArcaRecibidos, facturaDelPago, numeroFactura } from "@/lib/arca-recibidos";
 import { gastosFijosParaDebito, cuitEnTexto } from "@/lib/finanzas-propuestas";
-import { leerArchivoExtracto, guardarArchivoExtracto, type CuentaRow, type ArchivoPreview } from "@/components/extracto-bbva";
+import { leerArchivoExtracto, guardarArchivoExtracto, corregirTextosExtracto, leerHojas, type CuentaRow, type ArchivoPreview } from "@/components/extracto-bbva";
+import { leerReporteEcheq, type EcheqReporte } from "@/lib/echeq-reportes";
+import { armarItemsEcheq, aplicarReportesEcheq } from "@/components/finanzas-lazza/cheques-reportes";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, History, Loader2, Sparkles, Upload, X } from "lucide-react";
 
 interface LineaRow {
@@ -72,6 +74,8 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
   const [ocupado, setOcupado] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
   const [archivos, setArchivos] = useState<ArchivoPreview[]>([]);
+  // 25/10 (Augusto): todos los archivos del banco juntos. Los reportes de eCheq se aplican después de los movimientos.
+  const [reportesEcheq, setReportesEcheq] = useState<EcheqReporte[]>([]);
   const [verRegistro, setVerRegistro] = useState(false);
   const [verResueltas, setVerResueltas] = useState(false);
   const [verRuido, setVerRuido] = useState(false);
@@ -583,16 +587,23 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
     setOcupado("subir");
     setAviso(null);
     const out: ArchivoPreview[] = [];
+    const reps: EcheqReporte[] = [];
     const errores: string[] = [];
     const avisos: string[] = [];
     for (const f of lista) {
       try {
         if (/\.pdf$/i.test(f.name)) avisos.push(await subirResumenPdf(f));
         else if (/\.csv$/i.test(f.name)) avisos.push(await subirArcaRecibidos(f));
-        else out.push(await leerArchivoExtracto(f, cuentas, clavesPorCuenta, lineas.map((l) => ({ cuenta_id: l.cuenta_id, fecha: String(l.fecha).slice(0, 10), importe: l.tipo === "credito" ? Number(l.monto) : -Number(l.monto) }))));
+        else {
+          // Reporte de eCheq (trae CheqID): va con los cheques. Si no, es el Excel "Movimientos" de alguna cuenta.
+          const rep = leerReporteEcheq((await leerHojas(f))[0] || [], f.name);
+          if (rep.direccion) reps.push(rep);
+          else out.push(await leerArchivoExtracto(f, cuentas, clavesPorCuenta, lineas.map((l) => ({ cuenta_id: l.cuenta_id, fecha: String(l.fecha).slice(0, 10), importe: l.tipo === "credito" ? Number(l.monto) : -Number(l.monto), id: l.id, descripcion: l.descripcion }))));
+        }
       } catch (e) { errores.push(`${f.name}: ${errorTexto(e)}`); }
     }
     setArchivos(out);
+    setReportesEcheq(reps);
     setOcupado(null);
     if (avisos.length || errores.length) setAviso([...avisos, ...errores.map((e) => `⚠️ ${e}`)].join("\n"));
     if (avisos.length) await cargar();
@@ -668,13 +679,28 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
     for (const a of archivos.filter((x) => x.cuenta)) {
       try {
         const r = await guardarArchivoExtracto(sociedadId, a);
-        msgs.push(`${a.cuenta!.nombre}: ${r.insertadas} líneas nuevas${r.repetidas ? ` (${r.repetidas} ya estaban)` : ""}`);
-        await anotar(null, "extracto_cargado", { archivo: a.nombre, cuenta: a.cuenta!.nombre, ...r, saldo: a.leido.saldoFinal, fecha: a.leido.saldoFecha }, `Extracto ${a.nombre} → ${a.cuenta!.nombre}: ${r.insertadas} líneas nuevas, saldo ${formatCurrency(a.leido.saldoFinal || 0)} al ${formatDate(a.leido.saldoFecha || "")}`);
+        const corregidas = await corregirTextosExtracto(a.corregir);
+        msgs.push(`${a.cuenta!.nombre}: ${r.insertadas} líneas nuevas${r.repetidas ? ` (${r.repetidas} ya estaban)` : ""}${corregidas ? ` · ${corregidas} con el texto definitivo del banco` : ""}`);
+        await anotar(null, "extracto_cargado", { archivo: a.nombre, cuenta: a.cuenta!.nombre, ...r, corregidas, saldo: a.leido.saldoFinal, fecha: a.leido.saldoFecha }, `Extracto ${a.nombre} → ${a.cuenta!.nombre}: ${r.insertadas} líneas nuevas, saldo ${formatCurrency(a.leido.saldoFinal || 0)} al ${formatDate(a.leido.saldoFecha || "")}`);
       } catch (e) {
         msgs.push(`⚠️ ${a.nombre}: ${errorTexto(e)}`);
       }
     }
+    // Después de los movimientos, el estado de los cheques: así los débitos del extracto y el estado del banco son de la misma carga.
+    if (reportesEcheq.length) {
+      try {
+        const { items } = armarItemsEcheq(reportesEcheq);
+        const r = await aplicarReportesEcheq(sociedadId, items);
+        msgs.push(`Cheques (${reportesEcheq.length} reportes): ${r.vinculados} identificados por primera vez · ${r.actualizados} con estado del banco nuevo · ${r.sin_cambio} sin cambios${r.no_estan_total ? ` · ${r.no_estan_total} no están en el CRM (no se tocan)` : ""}${r.conflictos_total ? ` · ⚠️ ${r.conflictos_total} para revisar (Bancos > Cheques)` : ""}${r.diferencias.length ? ` · ⚠️ ${r.diferencias.length} donde el banco y el CRM no coinciden` : ""}`);
+        await anotar(null, "cheques_cargados",
+          { reportes: reportesEcheq.map((x) => x.archivo), vinculados: r.vinculados, actualizados: r.actualizados, sin_cambio: r.sin_cambio, no_estan: r.no_estan_total, conflictos: r.conflictos_total, diferencias: r.diferencias.length },
+          `Reportes de cheques (${reportesEcheq.length}): ${r.vinculados} identificados, ${r.actualizados} con estado nuevo`);
+      } catch (e) {
+        msgs.push(`⚠️ Cheques: ${errorTexto(e)}`);
+      }
+    }
     setArchivos([]);
+    setReportesEcheq([]);
     setOcupado(null);
     setAviso(msgs.join("\n"));
     await cargar();
@@ -802,22 +828,24 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
         className={`rounded-xl border-2 border-dashed p-3 text-sm transition ${arrastrando ? "border-orange-400 bg-orange-50 dark:bg-orange-950/30" : "border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900"}`}
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
-          {simple ? <p className="text-zinc-600 dark:text-zinc-300"><b>Arrastrá acá el Excel "Movimientos"</b> del home banking. Se controlan los saldos al centavo y no se duplica nada.</p> : (
+          {simple ? <p className="text-zinc-600 dark:text-zinc-300"><b>Arrastrá acá todos los archivos del banco juntos</b>: los Excel "Movimientos" de cada cuenta y los reportes de eCheq. Primero se cargan los movimientos y después el estado de los cheques; no se duplica nada.</p> : (
           <p className="text-zinc-600 dark:text-zinc-300"><b>Arrastrá acá el Excel del BBVA</b> (se verifican los saldos al centavo), el <b>resumen mensual en PDF</b> (pone nombre y CUIT a cada transferencia y débito automático) y el <b>CSV de ARCA</b> "Mis comprobantes recibidos" (qué factura paga cada transferencia a un proveedor).</p>
           )}
           <label className="flex cursor-pointer items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-600">
-            {ocupado === "subir" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} Subir extracto
+            {ocupado === "subir" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} {simple ? "Subir archivos del banco" : "Subir extracto"}
             <input type="file" accept=".xls,.xlsx,.pdf,.csv" multiple className="hidden" onChange={(e) => { void subir(e.target.files); e.target.value = ""; }} />
           </label>
         </div>
-        {archivos.length > 0 && (
+        {(archivos.length > 0 || reportesEcheq.length > 0) && (
           <div className="mt-2 space-y-1 rounded-lg bg-zinc-50 p-2 text-xs dark:bg-zinc-800/50">
             {archivos.map((a) => (
               <p key={a.nombre}>
                 <b>{a.nombre}</b> → {a.cuenta ? a.cuenta.nombre : <span className="font-semibold text-red-600">no hay una cuenta con ese número</span>}
                 {a.leido.lineas.length ? ` · del ${formatDate(a.leido.lineas[0].fecha)} al ${formatDate(a.leido.saldoFecha || "")}` : ""}
                 {` · ${a.nuevas} líneas nuevas · saldo ${formatCurrency(a.leido.saldoFinal || 0)}`}
-                {a.leido.saltos > 0 ? <span className="font-semibold text-amber-600"> · ⚠️ en {a.leido.saltos} renglones el saldo no cierra</span> : <span className="text-emerald-600"> · saldos ✔</span>}
+                {a.leido.saltos > 0 ? <span className="font-semibold text-amber-600"> · ⚠️ en {a.leido.saltos} renglones el saldo no cierra</span> : !a.leido.avisoSaldo && <span className="text-emerald-600"> · saldos ✔</span>}
+                {a.leido.avisoSaldo && <span className="block font-semibold text-amber-600">⚠️ {a.leido.avisoSaldo}</span>}
+                {a.corregir && a.corregir.length > 0 && <span className="block text-zinc-600 dark:text-zinc-300">✎ {a.corregir.length} línea{a.corregir.length > 1 ? "s" : ""} del último día cargado se actualiza{a.corregir.length > 1 ? "n" : ""} con el texto definitivo del banco (sin tocar su clasificación).</span>}
                 {a.control && (a.control.diferencias.length === 0
                   ? a.control.diasComparados > 0 && <span className="text-emerald-600"> · {a.control.diasComparados} días ya cargados coinciden ✔</span>
                   : <span className="block font-semibold text-amber-600">
@@ -825,9 +853,21 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
                     </span>)}
               </p>
             ))}
+            {reportesEcheq.length > 0 && (
+              <div className="space-y-0.5 border-t border-zinc-200 pt-1 dark:border-zinc-700">
+                <p className="font-semibold text-zinc-700 dark:text-zinc-200">Reportes de cheques (se aplican después de los movimientos):</p>
+                {reportesEcheq.map((r) => (
+                  <p key={r.archivo}>
+                    <b>{r.archivo}</b> · {r.tipo || "tipo ?"} · {r.direccion}s · {r.filas.length} cheques
+                    {r.advertencias.length > 0 && <span className="block font-semibold text-amber-600">⚠️ {r.advertencias.join(" · ")}</span>}
+                  </p>
+                ))}
+                {armarItemsEcheq(reportesEcheq).avisos.map((x, i) => <p key={i} className="font-semibold text-amber-600">⚠️ {x}</p>)}
+              </div>
+            )}
             <div className="flex gap-2 pt-1">
-              <button disabled={ocupado !== null || !archivos.some((a) => a.cuenta)} onClick={() => void guardarArchivos()} className="rounded-md bg-emerald-600 px-3 py-1 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">Guardar y armar la bandeja</button>
-              <button onClick={() => setArchivos([])} className="rounded-md border border-zinc-200 px-3 py-1 dark:border-zinc-700">Cancelar</button>
+              <button disabled={ocupado !== null || !(archivos.some((a) => a.cuenta) || reportesEcheq.length > 0)} onClick={() => void guardarArchivos()} className="rounded-md bg-emerald-600 px-3 py-1 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">Guardar y armar la bandeja</button>
+              <button onClick={() => { setArchivos([]); setReportesEcheq([]); }} className="rounded-md border border-zinc-200 px-3 py-1 dark:border-zinc-700">Cancelar</button>
             </div>
           </div>
         )}

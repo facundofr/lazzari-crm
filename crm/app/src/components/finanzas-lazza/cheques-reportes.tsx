@@ -8,39 +8,34 @@
 import { useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { leerHojas, esMovimientos } from "@/components/extracto-bbva";
-import { leerReporteEcheq, type EcheqReporte, type EcheqReporteFila } from "@/lib/echeq-reportes";
+import { armarItemsEcheq, leerReporteEcheq, type EcheqReporte, type ItemAplicar } from "@/lib/echeq-reportes";
 import { formatCurrency } from "@/lib/utils";
 import { AlertTriangle, CheckCircle2, Loader2, Upload } from "lucide-react";
 
-interface ItemAplicar {
-  cheq_id: string; numero: string; monto: number; direccion: string; estado_banco: string; banco_emisor: string; archivo: string;
-}
-interface Resultado {
+// armarItemsEcheq vive en lib/echeq-reportes (la usan esta pantalla, Bancos > Movimientos y los scripts de carga).
+export { armarItemsEcheq };
+export interface Resultado {
   vinculados: number; actualizados: number; sin_cambio: number; pagados: number; no_estan_total: number; conflictos_total: number;
   no_estan: Array<Record<string, unknown>>; conflictos: Array<Record<string, unknown>>; diferencias: Array<Record<string, unknown>>;
 }
 
 const errorTexto = (e: unknown) => (e instanceof Error ? e.message : (e as { message?: string })?.message || String(e));
 
-/** Une los reportes: si un mismo CheqID viene con estados distintos en la misma carga, no se aplica (se avisa). */
-function armarItems(reportes: EcheqReporte[]): { items: ItemAplicar[]; avisos: string[] } {
-  const avisos: string[] = [];
-  const por = new Map<string, Array<{ fila: EcheqReporteFila; r: EcheqReporte }>>();
-  for (const r of reportes) {
-    if (!r.direccion) continue;
-    for (const fila of r.filas) por.set(fila.cheqId, [...(por.get(fila.cheqId) || []), { fila, r }]);
+/** Aplica los cheques de los reportes (de a 200) con la función de base aplicar_reporte_echeqs y suma los resultados. */
+export async function aplicarReportesEcheq(sociedadId: string, items: ItemAplicar[]): Promise<Resultado> {
+  const total: Resultado = { vinculados: 0, actualizados: 0, sin_cambio: 0, pagados: 0, no_estan_total: 0, conflictos_total: 0, no_estan: [], conflictos: [], diferencias: [] };
+  for (let i = 0; i < items.length; i += 200) {
+    const { data, error: e } = await (supabase as any).rpc("aplicar_reporte_echeqs", {
+      p_sociedad_id: sociedadId,
+      p_cheques: items.slice(i, i + 200).map(({ archivo: _a, ...c }) => ({ ...c, pagado_antes_corte: false })),
+    });
+    if (e) throw e;
+    const r = data as Resultado;
+    total.vinculados += Number(r.vinculados || 0); total.actualizados += Number(r.actualizados || 0); total.sin_cambio += Number(r.sin_cambio || 0);
+    total.pagados += Number(r.pagados || 0); total.no_estan_total += Number(r.no_estan_total || 0); total.conflictos_total += Number(r.conflictos_total || 0);
+    total.no_estan.push(...(r.no_estan || [])); total.conflictos.push(...(r.conflictos || [])); total.diferencias.push(...(r.diferencias || []));
   }
-  const items: ItemAplicar[] = [];
-  for (const [id, xs] of por) {
-    const estados = new Set(xs.map((x) => x.fila.estadoBanco));
-    if (estados.size > 1) {
-      avisos.push(`El cheque ${xs[0].fila.numero} (CheqID ${id}) viene con estados distintos en esta carga (${xs.map((x) => `${x.fila.estadoBanco} en ${x.r.archivo}`).join(" · ")}): no se aplica.`);
-      continue;
-    }
-    const { fila, r } = xs[0];
-    items.push({ cheq_id: id, numero: fila.numero, monto: fila.monto, direccion: r.direccion!, estado_banco: fila.estadoBanco, banco_emisor: fila.bancoEmisor, archivo: r.archivo });
-  }
-  return { items, avisos };
+  return total;
 }
 
 export function CargarEstadoCheques({ sociedadId, onAplicado }: { sociedadId: string; onAplicado?: () => void }) {
@@ -74,26 +69,15 @@ export function CargarEstadoCheques({ sociedadId, onAplicado }: { sociedadId: st
     }
   }
 
-  const { items, avisos: avisosUnion } = armarItems(reportes);
+  const { items, avisos: avisosUnion } = armarItemsEcheq(reportes);
   const avisos = [...sospechosos, ...reportes.flatMap((r) => r.advertencias.map((a) => `${r.archivo}: ${a}`)), ...avisosUnion];
 
   async function aplicar() {
     if (!items.length) return;
     setAplicando(true);
     setError(null);
-    const total: Resultado = { vinculados: 0, actualizados: 0, sin_cambio: 0, pagados: 0, no_estan_total: 0, conflictos_total: 0, no_estan: [], conflictos: [], diferencias: [] };
     try {
-      for (let i = 0; i < items.length; i += 200) {
-        const { data, error: e } = await (supabase as any).rpc("aplicar_reporte_echeqs", {
-          p_sociedad_id: sociedadId,
-          p_cheques: items.slice(i, i + 200).map(({ archivo: _a, ...c }) => ({ ...c, pagado_antes_corte: false })),
-        });
-        if (e) throw e;
-        const r = data as Resultado;
-        total.vinculados += Number(r.vinculados || 0); total.actualizados += Number(r.actualizados || 0); total.sin_cambio += Number(r.sin_cambio || 0);
-        total.pagados += Number(r.pagados || 0); total.no_estan_total += Number(r.no_estan_total || 0); total.conflictos_total += Number(r.conflictos_total || 0);
-        total.no_estan.push(...(r.no_estan || [])); total.conflictos.push(...(r.conflictos || [])); total.diferencias.push(...(r.diferencias || []));
-      }
+      const total = await aplicarReportesEcheq(sociedadId, items);
       setResultado(total);
       setReportes([]);
       setSospechosos([]);

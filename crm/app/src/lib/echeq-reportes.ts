@@ -101,3 +101,32 @@ export function leerReporteEcheq(filas: unknown[][], archivo: string): EcheqRepo
   if (out.tipo === "emitidos" && out.filas.length === TOPE_EMITIDOS) out.advertencias.push(`El archivo trae exactamente ${TOPE_EMITIDOS} cheques emitidos: puede estar cortado (el banco baja de a ${TOPE_EMITIDOS}).`);
   return out;
 }
+
+/** Un cheque listo para aplicar con la función de base aplicar_reporte_echeqs. */
+export interface ItemAplicar {
+  cheq_id: string; numero: string; monto: number; direccion: string; estado_banco: string; banco_emisor: string; archivo: string;
+}
+
+/**
+ * Une los reportes de una misma carga: si un mismo CheqID viene con estados distintos, no se aplica (se avisa).
+ * La usan Bancos > Cheques, Bancos > Movimientos (todos los archivos juntos) y los scripts de carga.
+ */
+export function armarItemsEcheq(reportes: EcheqReporte[]): { items: ItemAplicar[]; avisos: string[] } {
+  const avisos: string[] = [];
+  const por = new Map<string, Array<{ fila: EcheqReporteFila; r: EcheqReporte }>>();
+  for (const r of reportes) {
+    if (!r.direccion) continue;
+    for (const fila of r.filas) por.set(fila.cheqId, [...(por.get(fila.cheqId) || []), { fila, r }]);
+  }
+  const items: ItemAplicar[] = [];
+  for (const [id, xs] of por) {
+    const estados = new Set(xs.map((x) => x.fila.estadoBanco));
+    if (estados.size > 1) {
+      avisos.push(`El cheque ${xs[0].fila.numero} (CheqID ${id}) viene con estados distintos en esta carga (${xs.map((x) => `${x.fila.estadoBanco} en ${x.r.archivo}`).join(" · ")}): no se aplica.`);
+      continue;
+    }
+    const { fila, r } = xs[0];
+    items.push({ cheq_id: id, numero: fila.numero, monto: fila.monto, direccion: r.direccion!, estado_banco: fila.estadoBanco, banco_emisor: fila.bancoEmisor, archivo: r.archivo });
+  }
+  return { items, avisos };
+}
