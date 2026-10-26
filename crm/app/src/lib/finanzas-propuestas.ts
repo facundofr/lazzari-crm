@@ -12,6 +12,7 @@ import {
   type ClasificacionLinea, type LineaCruce, type MovCruce, type ChequeCruce, type CuentaCruce, type ReglaCruce, type Propuesta,
 } from "./extracto-bbva";
 import { cruzarPago, mismoCliente, etiquetaFactura, type FacturaAbierta, type PagoExtraido } from "./agente-mail";
+import { esNotaCredito } from "./reportes-comprobantes";
 
 export type Confianza = "alta" | "media" | "baja";
 export type TipoItem = "cruce" | "cobro_nuevo" | "pago_gasto" | "pago_proveedor" | "a_cargar" | "sin_resolver";
@@ -249,7 +250,8 @@ export function armarBandeja(d: DatosBandeja): ItemBandeja[] {
   const porLinea = new Map(propuestas.map((p) => [p.linea_id, p]));
   const cuentaPorId = new Map(d.cuentas.map((c) => [c.id, c]));
   const movPorId = new Map(d.movimientos.map((m) => [m.id, m]));
-  const abiertas = d.facturas.filter((f) => f.saldo >= 1 && f.estado !== "pagada");
+  // Las notas de crédito son a favor del cliente: nunca se proponen como algo a cobrar (25/10: armaba el cobro de la NCA 15-7 de Corteva).
+  const abiertas = d.facturas.filter((f) => f.saldo >= 1 && f.estado !== "pagada" && !esNotaCredito(f.tipo));
   // Los CUIT propios (Augusto y Grupo LA) nunca son proveedor ni cliente: son pases entre cuentas propias o plata personal.
   const propio = (c: string | null | undefined) => CUITS_PROPIOS.includes(soloDigitos(c));
   const cliPorCuit = new Map(d.clientes.filter((c) => soloDigitos(c.cuit).length === 11 && !propio(c.cuit)).map((c) => [soloDigitos(c.cuit), c]));

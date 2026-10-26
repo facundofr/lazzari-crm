@@ -219,4 +219,15 @@ assert.equal(cuitEnTexto("CTE 007875 285 30707784292 X"), "30707784292");
   assert.ok(!/Entrada de un proveedor/.test(b.titulo), "no se toma como devolución de un proveedor");
 }
 
+// 25/10/2026: una nota de crédito es a favor del cliente; nunca se propone como cobro (proponía la NCA 15-7 de Corteva para un Banelco de $ 300.000).
+{
+  const items = armarBandeja({
+    ...base, pagosMail: [],
+    facturas: [fac("nc7", 15, 7, 300717.2, "corteva", { tipo: "NCA", fecha: "2026-10-14" })],
+    lineas: [{ id: "ban", fecha: "2026-10-21", concepto: "TRANSF.BANELCO", importe: 300000, cuenta_id: CTA }],
+  });
+  const it = items.find((i) => i.linea_id === "ban")!;
+  assert.ok(!it.cobro, "no se cobra una nota de crédito");
+}
+
 console.log("finanzas-propuestas: OK", items.length, "renglones");
