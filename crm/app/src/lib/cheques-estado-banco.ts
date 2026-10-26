@@ -54,3 +54,36 @@ export function cambiosDeLaCarga(items: ItemReporteMin[], cheques: ChequeCrmMin[
   }
   return out;
 }
+
+// ─── 26/10/2026 (Finanzas simple, tanda 2): que no se pierda ningún cheque ─────────────────────────────────────────────
+// Si en la carga viene el reporte de "emitidos", cada eCheq propio abierto del CRM (pendiente o entregado) tiene que estar
+// en alguno de los reportes de cheques emitidos de esa carga. Los que no están se avisan (nunca se cambia nada):
+// puede ser que el reporte esté cortado (el banco baja de a 100; con 300 faltaron 5 de Prisina) o que el cheque no exista en el banco.
+// No se miran los cheques físicos (no van en los reportes de eCheq) ni los emitidos después de la fecha del reporte.
+export interface ChequeAbiertoMin extends ChequeCrmMin { tipo_cheque?: string | null; fecha_emision?: string | null; fecha_pago?: string | null }
+export interface ReporteEmitidosMin { archivo: string; tipo: string | null; direccion: string | null; filas: Array<{ cheqId: string; numero: string; monto: number }> }
+
+/** "23-10-2026-eCheqs-emitidos.xls" → "2026-10-23" (null si el nombre no trae la fecha). */
+export function fechaDelReporte(archivo: string): string | null {
+  const m = String(archivo || "").match(/(\d{2})-(\d{2})-(\d{4})/);
+  return m ? `${m[3]}-${m[2]}-${m[1]}` : null;
+}
+
+/** null = en la carga no vino el reporte de emitidos (no hay contra qué controlar). */
+export function abiertosFueraDelReporte(reportes: ReporteEmitidosMin[], cheques: ChequeAbiertoMin[]): ChequeAbiertoMin[] | null {
+  const emitidos = reportes.filter((r) => r.direccion === "emitido");
+  const base = emitidos.filter((r) => r.tipo === "emitidos");
+  if (!base.length) return null;
+  const sinCero = (n: string) => String(n || "").trim().replace(/^0+/, "");
+  const cent = (n: number | string) => Math.round(Number(n) * 100);
+  const ids = new Set<string>(), claves = new Set<string>();
+  for (const r of emitidos) for (const f of r.filas) { ids.add(f.cheqId); claves.add(`${sinCero(f.numero)}|${cent(f.monto)}`); }
+  // La fecha más vieja de los reportes de emitidos: lo emitido después puede no estar todavía.
+  const fechas = base.map((r) => fechaDelReporte(r.archivo)).filter(Boolean) as string[];
+  const hasta = fechas.length === base.length ? fechas.sort()[0] : null;
+  return cheques
+    .filter((c) => c.direccion === "emitido" && ["pendiente", "entregado"].includes(String(c.estado)) && String(c.tipo_cheque || "echeq") === "echeq")
+    .filter((c) => !hasta || !c.fecha_emision || String(c.fecha_emision).slice(0, 10) <= hasta)
+    .filter((c) => !(c.cheq_id && ids.has(String(c.cheq_id))) && !claves.has(`${sinCero(c.numero)}|${cent(c.monto)}`))
+    .sort((a, b) => String(a.fecha_pago || "").localeCompare(String(b.fecha_pago || "")) || String(a.numero).localeCompare(String(b.numero)));
+}

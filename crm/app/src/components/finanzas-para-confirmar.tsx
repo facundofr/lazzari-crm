@@ -28,7 +28,7 @@ import { leerArcaRecibidos, facturaDelPago, numeroFactura } from "@/lib/arca-rec
 import { gastosFijosParaDebito, cuitEnTexto } from "@/lib/finanzas-propuestas";
 import { leerArchivoExtracto, guardarArchivoExtracto, corregirTextosExtracto, leerHojas, type CuentaRow, type ArchivoPreview } from "@/components/extracto-bbva";
 import { leerReporteEcheq, type EcheqReporte } from "@/lib/echeq-reportes";
-import { cambiosDeLaCarga, type ChequeCrmMin } from "@/lib/cheques-estado-banco";
+import { abiertosFueraDelReporte, cambiosDeLaCarga, type ChequeAbiertoMin, type ChequeCrmMin } from "@/lib/cheques-estado-banco";
 import { elegirExcelMasNuevos } from "@/lib/carga-diaria";
 import { armarItemsEcheq, aplicarReportesEcheq } from "@/components/finanzas-lazza/cheques-reportes";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, History, Loader2, Sparkles, Upload, X } from "lucide-react";
@@ -119,7 +119,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
         traerTodo<MovRow>(() => db.from("movimientos")
           .select("id, fecha, monto, moneda, tipo, cliente_id, proveedor_id, anulado, descripcion, nota_credito_compra_id, ajuste_sentido, orden_pago_id, gasto_manual_id")
           .eq("sociedad_id", sociedadId).gte("fecha", desdeMovs).order("fecha").order("id")),
-        traerTodo<ChequeCruce>(() => db.from("echeqs").select("id, cheq_id, numero, monto, direccion, estado, fecha_pago, tipo_cheque, destino_nombre, origen_nombre").eq("sociedad_id", sociedadId).order("id")),
+        traerTodo<ChequeCruce>(() => db.from("echeqs").select("id, cheq_id, numero, monto, direccion, estado, fecha_pago, fecha_emision, tipo_cheque, destino_nombre, origen_nombre").eq("sociedad_id", sociedadId).order("id")),
         db.from("extracto_reglas").select("texto, sentido, clasificacion, subtipo, contra_cuenta_id, nota").eq("sociedad_id", sociedadId).eq("activa", true),
         traerTodo<Tercero>(() => db.from("clientes").select("id, razon_social, cuit").eq("sociedad_id", sociedadId).order("id")),
         traerTodo<Tercero>(() => db.from("proveedores").select("id, razon_social, cuit").eq("sociedad_id", sociedadId).order("id")),
@@ -655,6 +655,13 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
     if (avisos.length) await cargar();
   }
 
+  /** 26/10/2026 (tanda 2): eCheqs propios abiertos del CRM que no vinieron en los reportes de emitidos de esta carga (null = no vino el de emitidos). */
+  const chequesFueraDelReporte = () => abiertosFueraDelReporte(reportesEcheq, (datos?.cheques || []) as ChequeAbiertoMin[]);
+  const lineaChequeAbierto = (c: ChequeAbiertoMin) => {
+    const prov = (c as ChequeAbiertoMin & { destino_nombre?: string | null }).destino_nombre;
+    return `N° ${c.numero} ${formatCurrency(Number(c.monto))}${prov ? ` (${prov})` : ""}${c.fecha_pago ? `, paga ${formatDate(String(c.fecha_pago))}` : ""}`;
+  };
+
   /** Líneas sin cerrar con la cuenta en dígitos, para cruzar con el resumen o con ARCA. */
   const lineasParaDetalle = () => {
     const digitos = new Map(cuentas.map((c) => [c.id, String(c.numero || "").replace(/\D/g, "")]));
@@ -734,6 +741,8 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
     }
     // Después de los movimientos, el estado de los cheques: así los débitos del extracto y el estado del banco son de la misma carga.
     if (reportesEcheq.length) {
+      const fuera = chequesFueraDelReporte();
+      if (fuera?.length) msgs.push(`⚠️ ${fuera.length} cheque${fuera.length > 1 ? "s" : ""} propio${fuera.length > 1 ? "s" : ""} abierto${fuera.length > 1 ? "s" : ""} del CRM no vino${fuera.length > 1 ? "eron" : ""} en el reporte de emitidos (no se cambió nada): ${fuera.map(lineaChequeAbierto).join(" · ")}. Bajá el reporte con 400 filas; si igual no aparece, revisalo en el banco.`);
       try {
         const { items } = armarItemsEcheq(reportesEcheq);
         const r = await aplicarReportesEcheq(sociedadId, items);
@@ -933,9 +942,20 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
                     const x = c as ChequeCruce & { cheq_id?: string | null; destino_nombre?: string | null; origen_nombre?: string | null };
                     return { id: x.id, cheq_id: x.cheq_id, numero: x.numero, monto: x.monto, direccion: x.direccion, estado: x.estado, contraparte: x.direccion === "emitido" ? x.destino_nombre : x.origen_nombre };
                   }));
-                  if (!cambios.length) return <p className="text-zinc-500">Ningún cheque cambia de estado en el CRM.</p>;
+                  const fuera = chequesFueraDelReporte();
+                  // 26/10/2026 (tanda 2): que no se pierda ningún cheque. Solo avisa.
+                  const avisoFuera = fuera === null ? null : fuera.length === 0
+                    ? <p className="text-emerald-600">✔ Todos los eCheqs propios abiertos del CRM vinieron en el reporte de emitidos.</p>
+                    : (
+                      <details open className="font-semibold text-amber-700 dark:text-amber-300">
+                        <summary className="cursor-pointer">⚠️ {fuera.length} cheque{fuera.length > 1 ? "s" : ""} propio{fuera.length > 1 ? "s" : ""} abierto{fuera.length > 1 ? "s" : ""} del CRM no vino{fuera.length > 1 ? "eron" : ""} en el reporte de emitidos. Puede estar cortado: bajalo con 400 filas. Si igual no aparece{fuera.length > 1 ? "n" : ""}, revisalo{fuera.length > 1 ? "s" : ""} en el banco. No se cambia nada.</summary>
+                        <ul className="ml-4 list-disc font-normal">{fuera.map((c) => <li key={c.id}>{lineaChequeAbierto(c)}</li>)}</ul>
+                      </details>
+                    );
+                  if (!cambios.length) return <>{avisoFuera}<p className="text-zinc-500">Ningún cheque cambia de estado en el CRM.</p></>;
                   return (
                     <div className="space-y-0.5">
+                      {avisoFuera}
                       <p className="font-semibold text-zinc-700 dark:text-zinc-200">Al guardar cambian {cambios.length} cheque{cambios.length > 1 ? "s" : ""} en el CRM:</p>
                       {cambios.map((c) => (
                         <p key={c.cheque.id} className={c.a === "cobrado" ? "" : "font-semibold text-amber-700 dark:text-amber-300"}>

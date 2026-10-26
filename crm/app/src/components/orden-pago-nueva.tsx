@@ -14,6 +14,7 @@ import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { traerTodo } from "@/lib/paginar";
 import { proponerCheques, textoCondicionPago, type FechasChequeMes } from "@/lib/condicion-pago";
 import { parsedPaymentForSingleInvoice, paymentDocumentFields } from "@/lib/payment-document-parser";
+import { chequeDelComprobante, numeroSinCeros, type ChequeCandidato } from "@/lib/cheque-comprobante-op";
 import { canonicalCondicionIva, isKnownCondicionIva, isResponsableInscripto } from "@/lib/fiscal-condition";
 import { pctRetencion, reglaPorConcepto } from "@/lib/retencion-conceptos";
 import { roundPaymentMoney, sumPaymentMoney } from "@/lib/payment-money";
@@ -74,6 +75,11 @@ export interface OpMedioPago {
   beneficiario_nombre?: string | null;
   comprobante_url?: string;
   comprobante_nombre?: string;
+  /** 26/10/2026: el cheque salió del comprobante del banco (texto para mostrar) y, si hace falta, un aviso. */
+  cheque_comprobante?: string;
+  aviso_cheque?: string;
+  /** El selector de cheques queda escondido: solo si se pide "elegir a mano". */
+  elegir_a_mano?: boolean;
 }
 const BANCOS_ARGENTINA = [
   "Banco Galicia", "Banco Nación", "Banco Provincia", "Banco Santander",
@@ -558,6 +564,58 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
   const opDiferencia = roundPaymentMoney(opNetoAPagar - opTotalMedios);
   const opSaldoFavor = Math.max(0, -opDiferencia);
 
+  /**
+   * 26/10/2026 (Augusto): los cheques no se eligen desde el sistema; se endosan o emiten en el banco y se carga el comprobante.
+   * Por cada cheque leído se busca en el CRM (número + monto): de cartera → ese (al guardar pasa a endosado); propio ya cargado o
+   * de una OP anulada a este proveedor → ese, sin crear otro. Si no está, se avisa (nunca se traba). Regla en lib/cheque-comprobante-op.ts.
+   */
+  async function chequesDelComprobante(medios: OpMedioPago[]): Promise<OpMedioPago[]> {
+    const conCheque = medios.filter((m) => ["cheque", "cheque_propio", "echeq"].includes(m.tipo) && numeroSinCeros(m.numero_cheque));
+    if (!conCheque.length) return medios;
+    const db = supabase as any;
+    const candidatos: ChequeCandidato[] = [];
+    try {
+      for (const num of [...new Set(conCheque.map((m) => numeroSinCeros(m.numero_cheque)))]) {
+        const { data, error } = await db.from("echeqs").select("id, numero, monto, moneda, direccion, estado, tipo_cheque, banco_emisor, destino_id, origen_nombre, created_at")
+          .eq("sociedad_id", sociedadId).like("numero", `%${num}`).limit(50);
+        if (error) throw error;
+        for (const c of (data || []) as Array<ChequeCandidato & { created_at: string }>) if (numeroSinCeros(c.numero) === num && !candidatos.some((x) => x.id === c.id)) candidatos.push(c);
+      }
+      // Los ya dados (entregado / endosado): ¿los usa alguna OP vigente? (por echeq_id en sus medios o porque la OP lo creó)
+      for (const c of candidatos.filter((x) => x.estado === "entregado" || x.estado === "endosado") as Array<ChequeCandidato & { created_at: string }>) {
+        const [porId, porHora] = await Promise.all([
+          db.from("ordenes_pago").select("id").eq("sociedad_id", sociedadId).neq("estado", "anulada").contains("medios_pago", [{ echeq_id: c.id }]).limit(1),
+          db.from("ordenes_pago").select("id").eq("sociedad_id", sociedadId).neq("estado", "anulada").eq("created_at", c.created_at).limit(1),
+        ]);
+        c.enOpVigente = Boolean(porId.data?.length || porHora.data?.length || porId.error || porHora.error);
+      }
+    } catch {
+      return medios.map((m) => conCheque.includes(m) ? { ...m, aviso_cheque: "No se pudo buscar el cheque en el CRM: revisalo antes de guardar." } : m);
+    }
+    const usados = opMedios.map((m) => m.echeq_id).filter(Boolean) as string[];
+    return medios.map((m) => {
+      if (!conCheque.includes(m)) return m;
+      const r = chequeDelComprobante({ numero: m.numero_cheque, monto: Number(m.monto), moneda: m.moneda, direccion: (m as OpMedioPago & { direccion?: string | null }).direccion ?? null }, candidatos, opForm.proveedor_id, usados);
+      if (r.tipo === "cartera" || r.tipo === "propio_existente") {
+        usados.push(r.cheque.id);
+        const propio = r.tipo === "propio_existente";
+        return {
+          ...m,
+          tipo: propio ? "cheque_propio" : (r.cheque.tipo_cheque === "fisico" ? "cheque" : "echeq"),
+          echeq_id: r.cheque.id,
+          origen_cheque: propio ? "propio" : "cartera",
+          monto: Number(r.cheque.monto),
+          numero_cheque: r.cheque.numero,
+          banco: r.cheque.banco_emisor || m.banco,
+          cheque_comprobante: `✔ Cheque ${r.cheque.numero}${!propio && r.cheque.origen_nombre ? ` de ${r.cheque.origen_nombre}` : ""} (del comprobante)${propio ? "" : ": al guardar pasa a endosado"}`,
+          aviso_cheque: r.aviso || undefined,
+        };
+      }
+      if (r.tipo === "endoso_sin_cheque") return { ...m, tipo: m.tipo === "cheque_propio" ? "cheque" : m.tipo, echeq_id: undefined, origen_cheque: "cartera", aviso_cheque: r.aviso };
+      return { ...m, aviso_cheque: r.aviso || undefined };
+    });
+  }
+
   async function handleParseComprobante(f: File) {
     setOpFiles(prev => [...prev, f]);
     setOpParsingCount(prev => prev + 1);
@@ -573,6 +631,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
       const mapped: OpMedioPago[] = pagos.map(d => {
         const fields = paymentDocumentFields(d, { context: "orden_pago_proveedor" });
         const tipo = fields.tipo === "cheque" && fields.direccion === "emitido" ? "cheque_propio" : fields.tipo;
+        // fields.direccion queda en el medio (solo para buscar el cheque): "recibido" = comprobante de endoso.
         return {
           ...makeOpMedio(fields.moneda),
           ...fields,
@@ -580,17 +639,18 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
           // En una OP el comprobante adjunto acredita un pago saliente. Si la IA
           // detecta un e-cheq, se trata de uno propio emitido; uno recibido de un
           // cliente solo puede ingresarse seleccionandolo desde cartera.
-          origen_cheque: tipo === "echeq" || tipo === "cheque_propio" ? "propio" : undefined,
+          origen_cheque: tipo === "echeq" || tipo === "cheque_propio" ? (fields.direccion === "recibido" ? "cartera" : "propio") : undefined,
           banco_otro: "",
         };
       });
+      const conCheques = await chequesDelComprobante(mapped);
       setOpMedios(prev => {
         const hasOnlyEmptyDefault = prev.length === 1
           && prev[0].monto === 0
           && !prev[0].banco
           && !prev[0].numero_cheque
           && !prev[0].echeq_id;
-        return hasOnlyEmptyDefault ? mapped : [...prev, ...mapped];
+        return hasOnlyEmptyDefault ? conCheques : [...prev, ...conCheques];
       });
       setOpFCPendientes((prev) => {
         const allocation = parsedPaymentForSingleInvoice(mapped, prev);
@@ -693,7 +753,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
     const totalMediosVal = sumPaymentMoney(opMedios.map(m => m.monto));
     const selectedEcheqIds = opMedios.map(m => m.echeq_id).filter((id): id is string => Boolean(id));
     if (new Set(selectedEcheqIds).size !== selectedEcheqIds.length) { setOpError("Un mismo e-cheq no puede usarse en dos medios de la OP"); return; }
-    if (opMedios.some(m => (m.tipo === "cheque" || (m.tipo === "echeq" && m.origen_cheque !== "propio")) && !m.echeq_id)) { setOpError("Los cheques de terceros deben seleccionarse desde la cartera para reservarlos junto con la OP"); return; }
+    if (opMedios.some(m => (m.tipo === "cheque" || (m.tipo === "echeq" && m.origen_cheque !== "propio")) && !m.echeq_id)) { setOpError(opMedios.find(m => (m.tipo === "cheque" || (m.tipo === "echeq" && m.origen_cheque !== "propio")) && !m.echeq_id)?.aviso_cheque || "Los cheques de terceros deben seleccionarse desde la cartera para reservarlos junto con la OP"); return; }
     const proveedorPago = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
     const proveedorCuitPago = String(proveedorPago?.cuit || "").replace(/\D/g, "");
     if (opMedios.some(m => ["cheque", "cheque_propio", "echeq"].includes(m.tipo)) && proveedorCuitPago.length !== 11) {
@@ -1266,6 +1326,8 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
                         ...x,
                         tipo,
                         echeq_id: undefined,
+                        cheque_comprobante: undefined,
+                        aviso_cheque: undefined,
                         origen_cheque: tipo === "echeq" || tipo === "cheque_propio" ? "propio" : tipo === "cheque" ? "cartera" : undefined,
                       };
                     }))}
@@ -1300,7 +1362,18 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
                       </>
                     )}
                     {/* Un e-cheq manual se emite ahora; solo los cheques elegidos de cartera son de terceros. */}
-                    {(m.tipo === "echeq" || m.tipo === "cheque" || m.tipo === "cheque_propio") && (() => {
+                    {/* 26/10/2026: el cheque sale del comprobante del banco; elegirlo de la lista queda escondido ("elegir a mano"). */}
+                    {(m.tipo === "echeq" || m.tipo === "cheque" || m.tipo === "cheque_propio") && !m.elegir_a_mano && (
+                      <span className="flex items-center gap-1.5 text-[10px]">
+                        {m.cheque_comprobante
+                          ? <span className="font-medium text-emerald-600">{m.cheque_comprobante}</span>
+                          : m.tipo === "cheque" || (m.tipo === "echeq" && m.origen_cheque === "cartera")
+                            ? <span className="text-amber-600">Cheque de cliente: cargá el comprobante del endoso</span>
+                            : <span className="text-zinc-400">Se registrará como emitido al confirmar</span>}
+                        <button type="button" onClick={() => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, elegir_a_mano: true } : x))} className="text-zinc-400 underline hover:text-zinc-600">elegir a mano</button>
+                      </span>
+                    )}
+                    {(m.tipo === "echeq" || m.tipo === "cheque" || m.tipo === "cheque_propio") && m.elegir_a_mano && (() => {
                       const available = m.tipo === "cheque_propio"
                         ? echeqs.filter(e => e.direccion === "emitido" && e.estado === "pendiente" && e.moneda === m.moneda)
                         : echeqs.filter(e => (e.direccion === "recibido" || !e.direccion)
@@ -1313,6 +1386,8 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
                           setOpMedios(prev => prev.map((x, i) => i === idx ? {
                             ...x,
                             echeq_id: e.target.value || undefined,
+                            cheque_comprobante: undefined,
+                            aviso_cheque: undefined,
                             origen_cheque: e.target.value ? (m.tipo === "cheque_propio" ? "propio" : "cartera") : (m.tipo === "echeq" || m.tipo === "cheque_propio" ? "propio" : "cartera"),
                             monto: sel ? sel.monto : x.monto,
                             banco: sel?.banco_emisor || x.banco,
@@ -1329,6 +1404,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
                       ) : null;
                     })()}
                     {m.fecha_emision && <span className="text-[10px] text-zinc-500">Emitido {formatDate(m.fecha_emision)}</span>}
+                    {m.aviso_cheque && <span className="basis-full text-[10px] font-medium text-amber-600">⚠️ {m.aviso_cheque}</span>}
                     {opMedios.length > 1 && (
                       <button type="button" onClick={() => setOpMedios(prev => prev.filter((_, i) => i !== idx))} className="ml-auto text-zinc-400 hover:text-red-500"><Trash2 className="h-3.5 w-3.5" /></button>
                     )}

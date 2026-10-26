@@ -150,7 +150,7 @@ export async function POST(request: NextRequest) {
     const contextoOrdenPagoCliente = contexto === "orden_pago_cliente";
     contentBlocks.push({
       type: "text",
-      text: `${contextoOrdenPagoCliente ? ORDEN_PAGO_CLIENTE_PROMPT : ""}${contextoOrdenPago ? `CONTEXTO OBLIGATORIO: estos archivos fueron adjuntados al crear una orden de pago a un proveedor. Son comprobantes salientes generados por nuestra empresa. Todo cheque o eCheq hallado aquí es PROPIO/EMITIDO, nunca un cheque recibido de terceros: devolvé direccion "emitido". Si es electrónico/digital, devolvé tipo "echeq" y tipo_cheque "echeq".\n\n` : ""}${files.length > 1
+      text: `${contextoOrdenPagoCliente ? ORDEN_PAGO_CLIENTE_PROMPT : ""}${contextoOrdenPago ? `CONTEXTO OBLIGATORIO: estos archivos fueron adjuntados al crear una orden de pago a un proveedor. Son comprobantes salientes generados por nuestra empresa. Todo cheque o eCheq hallado aquí es PROPIO/EMITIDO: devolvé direccion "emitido". ÚNICA EXCEPCIÓN: si el comprobante es de un cheque ENDOSADO (dice "eCheq Endosado", "endoso" o "endosado"), el cheque es de un cliente que endosamos al proveedor: devolvé direccion "recibido", concepto "Endoso", en "ordenante" la razón social del emisor y en "cuit_ordenante" su CUIT. Si es electrónico/digital, devolvé tipo "echeq" y tipo_cheque "echeq".\n\n` : ""}${files.length > 1
         ? `Hay ${files.length} comprobantes adjuntos. Extraé TODOS los pagos de TODOS los archivos y devolvé el JSON con el array "pagos".`
         : "Extraé todos los pagos de este comprobante y devolvé el JSON con el array \"pagos\". Si hay múltiples cheques, crealos como entradas separadas."}`,
     });
@@ -193,7 +193,8 @@ export async function POST(request: NextRequest) {
           ...pago,
           tipo: esEcheq ? "echeq" : "cheque",
           tipo_cheque: esEcheq ? "echeq" : (pago.tipo_cheque || "fisico"),
-          direccion: "emitido",
+          // 26/10/2026: el comprobante de un eCheq ENDOSADO es de un cheque de un cliente (va de cartera); el resto es propio.
+          direccion: pago.direccion === "recibido" && /endos/.test(`${chequeHint} ${String(pago.concepto || "")}`.toLocaleLowerCase()) ? "recibido" : "emitido",
         };
       });
     }

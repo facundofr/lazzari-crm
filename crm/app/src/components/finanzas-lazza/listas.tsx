@@ -94,7 +94,7 @@ const sumar = <T,>(filas: T[], monto: (f: T) => number, moneda: (f: T) => "ARS" 
 /**
  * Anular una OP (20/10): la MISMA función de la base que Finanzas (anular_orden_pago_segura; si es una liquidación en US$,
  * anular_liquidacion_fx). No se borra nada: la OP queda tachada, sus movimientos (pago y retenciones) anulados, los cheques
- * vuelven a cartera / pendientes, las NC usadas se liberan y las facturas vuelven a quedar a pagar. "Anular y pagar de nuevo"
+ * no cambian (26/10: los mueve solo el banco), las NC usadas se liberan y las facturas vuelven a quedar a pagar. "Anular y pagar de nuevo"
  * abre la ventana de OP con el mismo proveedor y las mismas facturas tildadas, así no queda nada duplicado.
  */
 function AnularOP({ op, sociedadId, onClose, onAnulada }: {
@@ -132,7 +132,7 @@ function AnularOP({ op, sociedadId, onClose, onAnulada }: {
         <p className="text-sm text-zinc-600 dark:text-zinc-300">{op.proveedor} · {formatDate(op.fecha)} · entregado <b className="font-mono">{formatCurrency(op.neto, op.moneda)}</b>{op.retGan > 0 ? <> · ret. {formatCurrency(op.retGan, op.moneda)}</> : null}</p>
         <ul className="list-disc space-y-0.5 pl-5 text-xs text-zinc-600 dark:text-zinc-300">
           <li>No se borra: la OP queda anulada (tachada) y se sigue viendo.</li>
-          <li>El pago y la retención quedan anulados; si había cheques, vuelven a cartera o a pendientes.</li>
+          <li>El pago y la retención quedan anulados. Los cheques no cambian: dónde está cada uno lo dice el banco.</li>
           <li>{facturas === null ? "Buscando facturas…" : facturas.length ? `Vuelve${facturas.length === 1 ? "" : "n"} a quedar a pagar: ${facturas.map((f) => f.numero).join(", ")}.` : "No paga facturas (era un pago a cuenta): el saldo a favor desaparece."}</li>
           {op.enviada && <li className="text-amber-700 dark:text-amber-300">⚠️ Esta OP se mandó por mail el {formatDate(op.enviada)}: avisale al proveedor.</li>}
         </ul>
