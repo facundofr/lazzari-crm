@@ -71,6 +71,7 @@ Además de "orden_pago_cliente" y "pagos", agregá al JSON estos campos:
 Reglas para facturas_pagadas:
 - Una entrada por cada comprobante de la sección "Conceptos abonados", "Comprobantes cancelados", "Detalle" o similar.
 - Los números suelen venir pegados: "0001500000007" = punto de venta 15, número 7 (5 dígitos de punto de venta + 8 de número). "0015-00000007" = punto de venta 15, número 7.
+- Si la factura viene SIN punto de venta (ej. "FC 65" en la columna NRO.COMP), poné "punto_venta": null y "numero": 65. Nunca uses la fecha ni otra columna como número.
 - importe_pagado es la columna "Pago" / "Importe pagado" (lo que se cancela de esa factura), no el total de la orden.
 - Las notas de crédito restan: usá tipo "NC" e importe_pagado positivo.
 

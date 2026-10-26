@@ -83,6 +83,20 @@ assert.equal(sol.incluidas.length, 3);
 assert.equal(sol.otras.length, 0);
 assert.equal(sol.medios[0].monto, 3241696.55);
 assert.equal(sol.retenciones[0].monto, 54482.29);
+// Lo que leyó la IA de verdad (26/10): "FC 65 13/10/2026" → punto de venta 65, número 13 (el día).
+const leidoAlReves = { ...delSol, facturas_pagadas: [
+  { tipo: "FC", punto_venta: 65, numero: 13, importe_pagado: 253387.55 },
+  { tipo: "FC", punto_venta: 67, numero: 14, importe_pagado: 1206073.43 },
+  { tipo: "FC", punto_venta: 68, numero: 15, importe_pagado: 1836717.86 },
+] };
+const reves = buildOrdenPagoPlan(leidoAlReves, docsDelSol);
+assert.equal(reves.incluidas.length, 3);
+assert.equal(reves.otras.length, 0);
+assert.equal(reves.medios[0].monto, 3241696.55);
+// Un punto de venta propio (15) nunca se toma como número: la FA 15-70 no es la factura número 15.
+const propio = buildOrdenPagoPlan({ facturas_pagadas: [{ punto_venta: 15, numero: 70, importe_pagado: 100 }], pagos: [{ tipo: "transferencia", monto: 100 }] },
+  [{ id: "x", numero: "FA 0016-00000015" }, { id: "y", numero: "FA 0015-00000001" }]);
+assert.equal(propio.incluidas.length, 0);
 // Si dos facturas del formulario tienen el mismo número (otro punto de venta), no se adivina.
 const dup = buildOrdenPagoPlan({ facturas_pagadas: [{ comprobante: "FC 65", importe_pagado: 100 }], pagos: [{ tipo: "transferencia", monto: 100 }] },
   [{ id: "a", numero: "FA 0015-00000065" }, { id: "b", numero: "FA 0016-00000065" }]);

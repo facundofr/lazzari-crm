@@ -118,6 +118,7 @@ export function buildOrdenPagoPlan(parsed: OpParsed, docs: PlanDoc[]): OrdenPago
     const n = Number(k.split("-")[1]);
     docsPorNumero.set(n, [...(docsPorNumero.get(n) || []), d]);
   }
+  const pvsPropios = new Set([...docPorClave.keys()].map(k => Number(k.split("-")[0])));
   const unicoPorNumero = (n: number) => { const ds = docsPorNumero.get(n) || []; return ds.length === 1 ? ds[0] : null; };
 
   // Facturas de la OP con su importe (las NC restan).
@@ -129,7 +130,12 @@ export function buildOrdenPagoPlan(parsed: OpParsed, docs: PlanDoc[]): OrdenPago
     let clave = comprobanteKey(f.punto_venta, f.numero, f.comprobante);
     const numeroSolo = clave ? Number(clave.split("-")[1])
       : Number(f.numero) > 0 ? Number(f.numero) : Number((String(f.comprobante || "").match(/\d+/g) || []).pop() || 0);
-    const doc = (clave && docPorClave.get(clave)) || (numeroSolo > 0 ? unicoPorNumero(numeroSolo) : null);
+    // Si la IA tomó el número como punto de venta ("FC 65 13/10" → pv 65, número 13), se prueba ese
+    // "punto de venta" como número, solo cuando no es un punto de venta de las facturas del formulario.
+    const pvLeido = clave ? Number(clave.split("-")[0]) : 0;
+    const pvComoNumero = pvLeido > 0 && !pvsPropios.has(pvLeido) ? pvLeido : 0;
+    const doc = (clave && docPorClave.get(clave)) || (numeroSolo > 0 ? unicoPorNumero(numeroSolo) : null)
+      || (pvComoNumero ? unicoPorNumero(pvComoNumero) : null);
     if (doc) clave = comprobanteKey(null, null, doc.numero);
     if (!clave) {
       if (!(numeroSolo > 0)) continue;
