@@ -3,6 +3,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
+// Opus 5.5 piensa antes de responder: más tiempo.
+export const maxDuration = 180;
+
 export async function POST(request: NextRequest) {
   try {
     const { mensaje, cliente_id, moneda, imagen, sociedad_id } = await request.json();
@@ -90,8 +93,10 @@ export async function POST(request: NextRequest) {
     });
 
     const stream = client.messages.stream({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 16000,
+      // Augusto 26/10/2026: Opus 5.5 con esfuerzo alto.
+      model: "claude-opus-5-5",
+      max_tokens: 32000,
+      output_config: { effort: "high" },
       system: `Sos un asistente que arma presupuestos para Lazzari Soluciones Industriales, empresa de válvulas, caños, fittings, instrumentación y materiales industriales en Argentina.
 
 Tu tarea: dado un mensaje o imagen de un cliente pidiendo productos, buscá los items más relevantes en el catálogo de listas de precios de proveedores y devolvé un JSON con los items para el presupuesto. Si te envían una foto (de un mail, WhatsApp, lista, PDF, etc.), extraé los productos y cantidades de la imagen.

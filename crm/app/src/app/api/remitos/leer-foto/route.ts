@@ -67,10 +67,11 @@ export async function POST(request: NextRequest) {
     const client = new Anthropic({ apiKey, timeout: 100_000 });
     let ultimoError: unknown = null;
     // Modelo más efectivo (Opus 5.5) para leer letra a mano; si falla, los de respaldo.
-    for (const model of ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"]) {
+    // Augusto 26/10/2026: Opus 5.5 con esfuerzo alto; si no responde, Sonnet 5.5 (Haiku 4.5 no acepta el esfuerzo).
+    for (const model of ["claude-opus-5-5", "claude-sonnet-5-5"]) {
       try {
         const res = await client.messages.create({
-          model, max_tokens: 2000, system: SISTEMA,
+          model, max_tokens: 12000, output_config: { effort: "high" }, system: SISTEMA,
           messages: [{ role: "user", content: [archivo, { type: "text", text: `REMITOS EN CAMINO:\n${lineas.join("\n") || "(ninguno)"}` }] }],
         });
         await registrarUsoIA("remito_foto", res.model, res.usage);

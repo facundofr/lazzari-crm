@@ -7,7 +7,8 @@ import { NextRequest } from "next/server";
  * (impuesto, gasto del banco, sueldo, servicio, pase entre cuentas, cobro, pago…). Solo SUGIERE:
  * no guarda nada; la pantalla guarda la sugerencia y una persona la confirma. Hasta 30 líneas por llamada (la pantalla manda de a 25, en paralelo).
  */
-const MODELOS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"];
+// Augusto 26/10/2026: Opus 5.5 con esfuerzo alto; si no responde, Sonnet 5.5 (Haiku 4.5 no acepta el esfuerzo).
+const MODELOS = ["claude-opus-5-5", "claude-sonnet-5-5"];
 export const maxDuration = 120;
 
 const CLASIFICACIONES = ["cobro", "pago", "impuesto", "gasto_bancario", "intereses", "fci", "entre_cuentas", "tarjeta", "personal", "otro"];
@@ -61,7 +62,7 @@ export async function POST(request: NextRequest) {
     let ultimo: unknown = null;
     for (const model of MODELOS) {
       try {
-        const res = await client.messages.stream({ model, max_tokens: 6000, system: SYSTEM, messages: [{ role: "user", content: datos }] }).finalMessage();
+        const res = await client.messages.stream({ model, max_tokens: 32000, output_config: { effort: "high" }, system: SYSTEM, messages: [{ role: "user", content: datos }] }).finalMessage();
         await registrarUsoIA("finanzas_clasificar_lineas", model, res.usage);
         const t = res.content.find((x) => x.type === "text");
         const out = parseJson(t && t.type === "text" ? t.text : "{}");

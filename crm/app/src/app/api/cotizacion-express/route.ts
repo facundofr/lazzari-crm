@@ -14,7 +14,8 @@ import { NextRequest } from "next/server";
  * Nunca guarda nada: solo devuelve sugerencias para que el vendedor revise.
  */
 // Modelo más efectivo (Augusto 16/10/2026: Opus 5.5). Si no está disponible o falla, se prueba con los de respaldo.
-const MODELOS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"];
+// Augusto 26/10/2026: Opus 5.5 con esfuerzo alto; si no responde, Sonnet 5.5 (Haiku 4.5 no acepta el esfuerzo).
+const MODELOS = ["claude-opus-5-5", "claude-sonnet-5-5"];
 export const maxDuration = 120;
 
 function parseJson(raw: string) {
@@ -28,7 +29,7 @@ async function ask(client: Anthropic, system: string, content: Anthropic.Message
   let ultimoError: unknown = null;
   for (const model of MODELOS) {
     try {
-      const res = await client.messages.stream({ model, max_tokens: 16000, system, messages: [{ role: "user", content }] }).finalMessage();
+      const res = await client.messages.stream({ model, max_tokens: 32000, output_config: { effort: "high" }, system, messages: [{ role: "user", content }] }).finalMessage();
       await registrarUsoIA("cotizacion_express", model, res.usage);
       const t = res.content.find(b => b.type === "text");
       return parseJson(t && t.type === "text" ? t.text : "{}");

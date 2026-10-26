@@ -149,10 +149,11 @@ export async function POST(request: NextRequest) {
     // Si no está disponible o falla, se prueba con los de respaldo. Streaming por el max_tokens grande.
     let response: Anthropic.Message | null = null;
     let ultimoError: unknown = null;
-    for (const model of ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"]) {
+    // Augusto 26/10/2026: Opus 5.5 con esfuerzo alto; si no responde, Sonnet 5.5 (Haiku 4.5 no acepta el esfuerzo).
+    for (const model of ["claude-opus-5-5", "claude-sonnet-5-5"]) {
       try {
         response = await client.messages.stream({
-          model, max_tokens: 8000, system: EXTRACTION_PROMPT, messages: [{ role: "user", content: contentBlocks }],
+          model, max_tokens: 32000, output_config: { effort: "high" }, system: EXTRACTION_PROMPT, messages: [{ role: "user", content: contentBlocks }],
         }).finalMessage();
         await registrarUsoIA("factura_compra", response.model, response.usage);
         break;

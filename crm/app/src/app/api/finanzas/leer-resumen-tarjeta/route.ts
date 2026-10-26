@@ -5,7 +5,10 @@ import { NextRequest } from "next/server";
 
 // Finanzas Lazza > Bancos > Tarjetas (19/10/2026): lee el PDF del resumen de una tarjeta de crédito.
 // Solo completa la ventana: Augusto revisa y guarda (nunca guarda solo).
+// Augusto 26/10/2026: Opus 5.5 con esfuerzo alto; si no responde, Sonnet 5.5 (Haiku 4.5 no acepta el esfuerzo).
 const MODELOS = ["claude-opus-5-5", "claude-sonnet-5-5"];
+// Opus 5.5 piensa antes de responder: más tiempo para leer el PDF.
+export const maxDuration = 120;
 
 const PROMPT = `Sos un experto en resúmenes de tarjetas de crédito argentinas (Visa, Mastercard, Amex; bancos como BBVA, Galicia, Nación).
 Te paso el resumen mensual de una tarjeta. Devolvé SOLO un JSON con esta estructura exacta:
@@ -52,7 +55,7 @@ export async function POST(request: NextRequest) {
     let ultimoError: unknown = null;
     for (const model of MODELOS) {
       try {
-        const r = await client.messages.create({ model, max_tokens: 1000, system: PROMPT, messages: [{ role: "user", content: contenido }] });
+        const r = await client.messages.create({ model, max_tokens: 12000, output_config: { effort: "high" }, system: PROMPT, messages: [{ role: "user", content: contenido }] });
         await registrarUsoIA("resumen_tarjeta", model, r.usage);
         let txt = r.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
         const ini = txt.indexOf("{"), fin = txt.lastIndexOf("}");
