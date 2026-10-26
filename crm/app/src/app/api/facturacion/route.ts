@@ -159,7 +159,9 @@ async function validateFacturaInput(
   params: { sociedadId: string; tipo: string; puntoVenta: number; fecha: string; numero?: number; clienteId?: string }
 ) {
   const config = getArcaConfigBySociedad(params.sociedadId);
-  if (!Number.isInteger(params.puntoVenta) || !config.ptoVtaPermitidos.includes(params.puntoVenta)) {
+  // El comprobante X no va a ARCA: su talonario propio es el punto de venta 0.
+  const pvPermitidos = params.tipo === "X" ? [0, ...config.ptoVtaPermitidos] : config.ptoVtaPermitidos;
+  if (!Number.isInteger(params.puntoVenta) || !pvPermitidos.includes(params.puntoVenta)) {
     throw new Error(`Punto de venta ${params.puntoVenta} no está permitido para esta sociedad (permitidos: ${config.ptoVtaPermitidos.join(", ")})`);
   }
   const parsedDate = new Date(`${params.fecha}T12:00:00Z`);
