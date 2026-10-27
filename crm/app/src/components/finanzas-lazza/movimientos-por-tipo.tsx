@@ -9,6 +9,7 @@ import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { codigoDeConcepto, sinCodigoBanco } from "@/lib/bbva-codigos";
+import { nombreCodigoBanco } from "@/lib/nombres-estados";
 import { clasificarMovimiento, detalleDebitoAutomatico, resumenImpuestos, resumenPorTipo, TIPOS_MOV, type LineaMov, type TipoMov } from "@/lib/movimientos-banco";
 import { CheckCircle2, Loader2 } from "lucide-react";
 
@@ -160,7 +161,7 @@ export function MovimientosPorTipo({ sociedadId }: { sociedadId: string }) {
                 <td className="whitespace-nowrap px-3 py-1.5">{formatDate(f.fecha)}</td>
                 <td className="px-3 py-1.5">
                   {sinCodigoBanco(f.descripcion)}
-                  {codigoDeConcepto(f.descripcion) && <span className="ml-1 text-[10px] text-zinc-400">#{codigoDeConcepto(f.descripcion)}</span>}
+                  {nombreCodigoBanco(codigoDeConcepto(f.descripcion)) && <span className="ml-1 text-[10px] text-zinc-400">· {nombreCodigoBanco(codigoDeConcepto(f.descripcion))}</span>}
                   {c.tipo === "debitos_automaticos" && detalleDebitoAutomatico(f.nota) && <span className="block text-xs text-zinc-500 dark:text-zinc-400">{detalleDebitoAutomatico(f.nota)}</span>}
                   {/* Finanzas simple: las transferencias se registran y no se cruzan; no quedan "Pendiente" para siempre (auditoría UX 26/10/2026, arreglo 6). */}
                   {f.estado === "pendiente" && (c.tipo === "transferencias"

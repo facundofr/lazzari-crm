@@ -13,6 +13,7 @@ import {
 } from "./extracto-bbva";
 import { cruzarPago, mismoCliente, etiquetaFactura, type FacturaAbierta, type PagoExtraido } from "./agente-mail";
 import { familiaDeCodigo } from "./bbva-codigos";
+import { nombreEstadoCheque } from "./nombres-estados";
 import { esNotaCredito } from "./reportes-comprobantes";
 
 export type Confianza = "alta" | "media" | "baja";
@@ -310,7 +311,7 @@ function itemSinCruces(
       const c = chPorId.get(id);
       if (!c) return [];
       const pago = c.fecha_pago ? ` · pago ${String(c.fecha_pago).slice(0, 10).split("-").reverse().join("/")}` : "";
-      return [{ id: c.id, texto: `N° ${c.numero} · ${fmt(Number(c.monto))}${pago} · ${c.estado}` }];
+      return [{ id: c.id, texto: `N° ${c.numero} · ${fmt(Number(c.monto))}${pago} · ${nombreEstadoCheque(c.estado)}` }];
     });
     return {
       ...base, tipo: "sin_resolver", confianza: "baja", origen: "extracto", titulo: etiquetaClasificacion(p.clasificacion, p.subtipo),

@@ -1213,7 +1213,8 @@ export function generateReciboPDF(recibo: ReciboData, soc: SociedadPDF): string 
   const referencia = recibo.numero.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8).toUpperCase() || "CLIENTE";
   const numero = recibo.numeroRecibo ? `N° ${recibo.numeroRecibo}` : `REC-${recibo.fecha.replace(/\D/g, "")}-${referencia}`;
   const monedaLabel = recibo.moneda === "USD" ? "Dólares estadounidenses" : "Pesos argentinos";
-  const estado = recibo.anulado ? "ANULADO" : recibo.conciliado ? "Conciliado" : "Pendiente de conciliación";
+  // El cliente solo ve «ANULADO» si lo está: «Conciliado» / «Pendiente de conciliación» es del banco y no le dice nada (auditoría UX 27/10/2026, arreglo 15).
+  const estado = recibo.anulado ? "ANULADO" : "";
   const renglones = recibo.renglones?.length ? recibo.renglones : null;
   const concepto = recibo.facturas?.length ? `Cobro de ${recibo.facturas.join(", ")}` : recibo.descripcion;
   const medioTexto = renglones ? [...new Set(renglones.map((x) => x.medio))].join(", ") : recibo.medio;

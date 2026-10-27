@@ -22,6 +22,8 @@ import type { Recibo } from "@/lib/recibos";
 import { abrirFacturaVenta, FichaFacturaCompra, FichaFacturaVenta } from "@/components/facturas-consulta";
 import { EmitirFacturaModal } from "@/components/facturacion/emitir-factura-modal";
 import { useArcaStatus } from "@/lib/use-arca-status";
+import { saldoClienteEn } from "@/lib/saldo-clientes";
+import { useSaldosClientes } from "./use-saldos-clientes";
 import { sumarMeses } from "@/lib/reportes-comprobantes";
 import { traerComprobantesMes, traerFacturasFL } from "./datos";
 import { CobrarCliente } from "./cobrar";
@@ -80,6 +82,8 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta", soloL
   // "Nueva factura" (Augusto 20/10): la misma ventana de emitir, sin PR (se elige el cliente).
   const [nuevaFactura, setNuevaFactura] = useState(false);
   const arcaStatus = useArcaStatus(sociedadId);
+  // «Límite de crédito alcanzado» al facturar (arreglo 12): el saldo del cliente se trae al abrir «Nueva factura».
+  const saldosClientes = useSaldosClientes(sociedadId, nuevaFactura);
   const hoy = todayAR();
   const necesitaTodas = filtro === "todas";
   const [mes, setMes] = useState(hoy.slice(0, 7));
@@ -322,22 +326,29 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta", soloL
               <span>{esVenta ? "A cobrar" : "A pagar"} <b className={`font-mono ${esVenta ? "text-emerald-700 dark:text-emerald-400" : "text-orange-700 dark:text-orange-400"}`}>{montos(totales.saldo)}</b></span>
               <span>Vencido <b className="font-mono text-red-600">{montos(totales.vencido)}</b></span>
             </span>
-            {tildadas.length > 0 && seleccion && (
-              <span className="flex items-center gap-2">
-                <span>Tildadas: {tildadas.length} · <b className="font-mono text-zinc-800 dark:text-zinc-100">{formatCurrency(seleccion.saldo, seleccion.moneda)}</b>{seleccion.ids.length < tildadas.length ? ` (${seleccion.ids.length} de ${seleccion.nombre})` : ""}</span>
-                <button type="button" onClick={() => setTildadas([])} className="text-orange-600 hover:underline">Destildar</button>
-                <button type="button" onClick={abrirPago}
-                  className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-sm font-medium text-white ${esVenta ? "bg-emerald-600 hover:bg-emerald-700" : "bg-orange-500 hover:bg-orange-600"}`}>
-                  {esVenta ? <HandCoins className="h-4 w-4" /> : <Wallet className="h-4 w-4" />} {esVenta ? "Cobrar" : "Pagar"} ({seleccion.ids.length})
-                </button>
-              </span>
-            )}
           </div>
           {seleccion && seleccion.avisos.length > 0 && (
             <div className="space-y-1 border-t border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
               {seleccion.avisos.map((a) => <p key={a} className="flex items-start gap-1.5"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {a}</p>)}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Barra fija (auditoría UX 27/10, arreglo 1): lo tildado y su suma siempre a la vista, sin bajar hasta el final de la tabla. */}
+      {datos && tildadas.length > 0 && seleccion && (
+        <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-300 bg-white px-3 py-2 shadow-lg dark:border-zinc-600 dark:bg-zinc-900">
+          <span className="text-sm text-zinc-600 dark:text-zinc-300">
+            <b>{tildadas.length}</b> {tildadas.length === 1 ? "factura" : "facturas"} · <b className="font-mono text-zinc-900 dark:text-white">{formatCurrency(seleccion.saldo, seleccion.moneda)}</b>
+            {seleccion.ids.length < tildadas.length ? <span className="text-xs text-zinc-400"> ({seleccion.ids.length} de {seleccion.nombre})</span> : null}
+          </span>
+          <span className="flex items-center gap-3">
+            <button type="button" onClick={() => setTildadas([])} className="text-xs text-orange-600 hover:underline">Destildar</button>
+            <button type="button" onClick={abrirPago}
+              className={`inline-flex items-center gap-1 rounded-lg px-4 py-1.5 text-sm font-medium text-white ${esVenta ? "bg-emerald-600 hover:bg-emerald-700" : "bg-orange-500 hover:bg-orange-600"}`}>
+              {esVenta ? <HandCoins className="h-4 w-4" /> : <Wallet className="h-4 w-4" />} {esVenta ? "Cobrar" : "Pagar"} ({seleccion.ids.length})
+            </button>
+          </span>
         </div>
       )}
 
@@ -375,6 +386,7 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta", soloL
       {nuevaFactura && (
         <EmitirFacturaModal
           arcaCertOk={arcaStatus?.certOk}
+          saldoClienteArs={(id) => (saldosClientes ? saldoClienteEn(saldosClientes, id, "ARS") : null)}
           onClose={() => setNuevaFactura(false)}
           onEmitted={recargar}
         />

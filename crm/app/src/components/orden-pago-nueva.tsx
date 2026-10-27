@@ -24,6 +24,8 @@ import { pesosDeUsd, brutoPesosDeUsd, cotizacionValida } from "@/lib/op-usd-peso
 import { diaHabilAnterior } from "@/lib/dias-habiles";
 import { parseDecimalInput, toDecimalInput } from "@/lib/decimal-input";
 import { claveArchivo, mismoPago, sinRepetir } from "@/lib/comprobante-medios";
+import { useToast } from "@/components/ui/toast";
+import { textoOP } from "@/lib/cartel-guardado";
 import { FileText, Minimize2, Maximize2, X, Search, Loader2, Sparkles, ShieldCheck, Landmark, Plus, Trash2, Paperclip } from "lucide-react";
 
 export interface ProveedorOption {
@@ -156,6 +158,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
   /** Se llama al registrar: la pantalla cierra la ventana y refresca lo suyo (con enviar, abre el mail de la OP). */
   onCreada: (r: OrdenPagoCreada) => void | Promise<void>;
 }) {
+  const { toast } = useToast();
   const [opModalFullscreen, setOpModalFullscreen] = useState(false);
   const pagoParcialDirecto = !!pagoParcialFCId;
   // Aviso amarillo de la OP (pago parcial): informa, nunca frena.
@@ -732,7 +735,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
       const fc = elegidas.find(f => f.id === q.id);
       return `${fc?.numero || "S/N"} queda debiendo ${formatCurrency(roundPaymentMoney((fc?.saldo_pendiente || 0) - (res.montos[q.id] || 0)), opMonedaDocs)}`;
     }).join(" · ");
-    setOpAviso(`Pago parcial: ${detalle}. La retención se recalculó sobre lo que pagás (${formatCurrency(roundPaymentMoney(res.retencion * tc), opForm.moneda)}). Revisá y apretá «Crear Orden de pago».`);
+    setOpAviso(`Pago parcial: ${detalle}. La retención se recalculó sobre lo que pagás (${formatCurrency(roundPaymentMoney(res.retencion * tc), opForm.moneda)}). Revisá y apretá «Guardar».`);
     return true;
   }
 
@@ -802,7 +805,9 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
     // Hasta $1 menos es redondeo (la base lo acepta). Si falta más, se arma el pago parcial y se avisa: nunca se traba.
     if (opDiffMedios < -1) {
       if (aplicarPagoParcial()) { setOpError(""); return; }
-      setOpError("Los medios suman menos que el neto a pagar (faltan $" + Math.abs(opDiffMedios).toFixed(2) + "). Bajá «A pagar» en la factura que queda con saldo."); return;
+      // Sin facturas (pago a cuenta o monto manual) no hay «A pagar» para bajar: se dice qué sí se puede tocar.
+      const conFacturas = selectedFCs.length > 0 && !opForm.usar_monto_manual;
+      setOpError("Los medios suman menos que el neto a pagar (faltan $" + Math.abs(opDiffMedios).toFixed(2) + "). " + (conFacturas ? "Bajá «A pagar» en la factura que queda con saldo." : "Subí el importe de los medios o bajá el monto a pagar.")); return;
     }
     if (opDiffMedios > 0.01) {
       if (!confirm(`Los medios superan el neto a pagar en $${opDiffMedios.toFixed(2)}. El excedente quedará como crédito a nuestro favor en la CC del proveedor. ¿Continuar?`)) return;
@@ -910,6 +915,8 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
       }
       setOpFiles([]);
       opRequestKeyRef.current = "";
+      // Cartel verde (auditoría UX 27/10, arreglo 2): antes «Guardar» cerraba sin decir nada ni el N° de la OP.
+      toast.success(textoOP(opNumero, enviar));
       await onCreada({ opId, enviar });
       if (Number(opData?.saldo_a_favor || 0) > 0) {
         alert(`${opNumero} registrada. Crédito a nuestro favor: ${formatCurrency(Number(opData.saldo_a_favor), opForm.moneda)}.`);
@@ -944,7 +951,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
     if (opMedios.some(m => ["cheque", "cheque_propio", "echeq"].includes(m.tipo))) { setOpError("Los pagos parciales directos con cheque o e-cheq todavía no están habilitados porque requieren reservar la cartera en la misma transacción"); return; }
     const bruto = roundPaymentMoney(Number(fc.monto_a_pagar));
     const retencion = roundPaymentMoney(Number(opRetencionGanancias));
-    if (!Number.isFinite(bruto) || bruto <= 0 || bruto >= fc.saldo_pendiente - 0.005) { setOpError("El importe bruto debe ser positivo y menor al saldo pendiente; para cancelarlo usá Generar OP"); return; }
+    if (!Number.isFinite(bruto) || bruto <= 0 || bruto >= fc.saldo_pendiente - 0.005) { setOpError("El importe bruto debe ser positivo y menor al saldo pendiente; para pagarla entera hacé una orden de pago normal desde «Nueva OP»"); return; }
     if (!Number.isFinite(retencion) || retencion < 0 || retencion > bruto) { setOpError("La retención debe estar entre cero y el bruto a pagar"); return; }
     if (opMedios.some(m => !Number.isFinite(Number(m.monto)) || Number(m.monto) < 0) || total <= 0) { setOpError("Ingresá medios de pago válidos, sin importes negativos"); return; }
     if (Math.round(total * 100) !== Math.round((bruto - retencion) * 100)) { setOpError("Los medios deben sumar el neto: importe bruto «A pagar» menos la retención calculada"); return; }
@@ -986,6 +993,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
         if (anotarError) sinAnotar = anotarError.message || "error de la base";
       }
       opRequestKeyRef.current = "";
+      toast.success("Pago parcial registrado");
       await onCreada({ enviar: false });
       if (sinAnotar) avisoSinAnotar("Pago registrado", sinAnotar);
     } catch (err: unknown) {
@@ -1010,6 +1018,8 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
   const opHayCargado = opFiles.length > 0 || opMedios.some(m => Number(m.monto) > 0) || !!opForm.notas.trim()
     || (opForm.usar_monto_manual && Number(opForm.monto_manual) > 0) || opNCDisponibles.some(n => n.selected)
     || opFCPendientes.some(f => f.selected !== tildadaAlAbrir(f.id) || (f.selected && Math.abs(f.monto_a_pagar - f.saldo_pendiente) > 0.005));
+  // Por qué «Guardar» está gris: se dice al lado de los botones (auditoría UX 27/10, arreglo 4).
+  const opMotivoGris = opSaving ? "" : !opForm.proveedor_id ? "elegí el proveedor." : opFCLoading ? "se están cargando las facturas del proveedor." : opMontoBruto <= 0 ? "tildá al menos una factura o cargá un monto a pagar." : "";
   function pedirCierre() {
     if (opSaving) return;
     if (opHayCargado && !confirm(`¿Estás seguro que deseas salir sin guardar? Se pierde lo que cargaste en ${pagoParcialDirecto ? "este pago" : "esta orden de pago"}.`)) return;
@@ -1040,7 +1050,6 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
             <button onClick={pedirCierre} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
           </div>
         </div>
-        {opError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{opError}</div>}
         {opAviso && <div className="mb-2 flex items-start justify-between gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-1.5 text-xs text-amber-800 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-300"><span>⚠️ {opAviso}</span><button type="button" onClick={() => setOpAviso("")} className="shrink-0 text-amber-500 hover:text-amber-700"><X className="h-3 w-3" /></button></div>}
         {opCargaAviso && <div role="alert" className="mb-4 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-300">{opCargaAviso}</div>}
           {opDatosError && <div role="alert" className="mb-4 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-300">{opDatosError}</div>}
@@ -1537,18 +1546,21 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
             </div>
           </div>
         </div>
+        {/* Error y motivo del botón gris pegados a los botones (auditoría UX 27/10, arreglo 4): antes el error salía arriba, fuera de pantalla. */}
+        {opError && <div role="alert" className="mt-3 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{opError}</div>}
+        {opMotivoGris && <p className="mt-3 text-right text-xs text-amber-700 dark:text-amber-400">⚠️ No se puede guardar todavía: {opMotivoGris}</p>}
         <div className="flex justify-end gap-3 mt-3 pt-3 border-t border-zinc-200 dark:border-zinc-700">
           <button onClick={onClose} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
           {!pagoParcialDirecto && (
             <button onClick={() => handleCreateOP(false)} disabled={opSaving || !opForm.proveedor_id || (opMontoBruto <= 0)}
-              title="Crea la OP sin mandar nada; la mandás después desde la lista"
+              title={opMotivoGris ? `No se puede guardar todavía: ${opMotivoGris}` : "Crea la OP sin mandar nada; la mandás después desde la lista"}
               className="flex items-center gap-2 rounded-lg border border-orange-300 px-4 py-2 text-sm font-medium text-orange-600 hover:bg-orange-50 disabled:opacity-50 dark:hover:bg-orange-950/30">
               {opSaving && <Loader2 className="h-4 w-4 animate-spin" />}
               Guardar
             </button>
           )}
           <button onClick={pagoParcialDirecto ? handleRegistrarPagoParcialDirecto : () => handleCreateOP(true)} disabled={opSaving || !opForm.proveedor_id || (opMontoBruto <= 0)}
-            title={pagoParcialDirecto ? undefined : "Crea la OP y abre el mail al proveedor con la OP y los comprobantes"}
+            title={opMotivoGris ? `No se puede guardar todavía: ${opMotivoGris}` : pagoParcialDirecto ? undefined : "Crea la OP y abre el mail al proveedor con la OP y los comprobantes"}
             className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
             {opSaving && <Loader2 className="h-4 w-4 animate-spin" />}
             {pagoParcialDirecto ? "Registrar pago parcial" : "Guardar y enviar"}

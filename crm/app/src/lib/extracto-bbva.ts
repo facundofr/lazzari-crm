@@ -500,15 +500,15 @@ function clasificarPorConcepto(l: LineaCruce, ctx: Contexto): Omit<Propuesta, "l
 
   // Por el CÓDIGO del banco (tabla de Augusto, lib/bbva-codigos): no depende del texto, que cambia según el Excel que se baje.
   const fc = familiaDeCodigo(l.codigo);
-  if (fc === "iva") return fam({ ...base, clasificacion: "impuesto", subtipo: "iva", motivo: "IVA del banco (código 236)" });
-  if (fc === "ley_25413") return fam({ ...base, clasificacion: "impuesto", subtipo: "ley_25413", motivo: "Impuesto al cheque (código del banco)" });
-  if (fc === "sircreb") return fam({ ...base, clasificacion: "impuesto", subtipo: "sircreb", motivo: "SIRCREB (código 550)" });
-  if (fc === "comision") return fam({ ...base, clasificacion: "gasto_bancario", subtipo: "comision", motivo: "Comisión del banco (código del banco)" });
+  if (fc === "iva") return fam({ ...base, clasificacion: "impuesto", subtipo: "iva", motivo: "IVA del banco" });
+  if (fc === "ley_25413") return fam({ ...base, clasificacion: "impuesto", subtipo: "ley_25413", motivo: "Impuesto al cheque" });
+  if (fc === "sircreb") return fam({ ...base, clasificacion: "impuesto", subtipo: "sircreb", motivo: "SIRCREB" });
+  if (fc === "comision") return fam({ ...base, clasificacion: "gasto_bancario", subtipo: "comision", motivo: "Comisión del banco" });
   // 26/10/2026 (Finanzas simple, decidido el 23/10): el código 137 se SUGIERE como ARCA (no se aplica solo): puede ser otro servicio.
-  if (fc === "arca" && !credito) return { ...base, auto: false, clasificacion: "impuesto" as const, subtipo: "afip", motivo: "Pago de servicios (código 137): ¿es un VEP de ARCA? (el impuesto lo dice el mail del VEP)" };
-  if (fc === "fci") return { clasificacion: "fci" as const, subtipo: null, auto: false, candidatos: [] as string[], motivo: "Inversión FCI (código 654)" };
-  if (fc === "entre_propias") return { clasificacion: "entre_cuentas" as const, subtipo: null, auto: false, candidatos: [] as string[], motivo: "Transferencia entre cuentas propias (código 263)" };
-  if (fc === "tarjeta") return { clasificacion: "tarjeta" as const, subtipo: null, auto: false, candidatos: [] as string[], motivo: "Pago de tarjeta (código del banco)" };
+  if (fc === "arca" && !credito) return { ...base, auto: false, clasificacion: "impuesto" as const, subtipo: "afip", motivo: "Pago de servicios: ¿es un VEP de ARCA? (el impuesto lo dice el mail del VEP)" };
+  if (fc === "fci") return { clasificacion: "fci" as const, subtipo: null, auto: false, candidatos: [] as string[], motivo: "Inversión FCI" };
+  if (fc === "entre_propias") return { clasificacion: "entre_cuentas" as const, subtipo: null, auto: false, candidatos: [] as string[], motivo: "Transferencia entre cuentas propias" };
+  if (fc === "tarjeta") return { clasificacion: "tarjeta" as const, subtipo: null, auto: false, candidatos: [] as string[], motivo: "Pago de tarjeta" };
 
   // El Excel "Movimientos" abrevia los textos: "IVA TASA GRA", "LEY NRO 25.4 …", "IMPUESTO LEY dd/mm/aa …", "REG REC SIRC …" (códigos del banco 236, 609, 589 y 550).
   if (/IVA TASA (GENERAL|GRA)/.test(c)) return fam({ ...base, clasificacion: "impuesto", subtipo: "iva", motivo: "IVA del banco" });

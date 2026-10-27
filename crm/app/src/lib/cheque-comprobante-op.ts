@@ -6,6 +6,8 @@
 //   - Entregado / endosado a ESTE proveedor y sin OP vigente (ej. de una OP anulada) → se usa ese, no se duplica.
 //   - Si no está → propio: se crea como hasta ahora; endosado: aviso (hay que tenerlo en cartera). Nunca se bloquea.
 // Prueba: scripts/test-cheque-comprobante-op.ts
+import { nombreEstadoCheque } from "./nombres-estados";
+
 export interface ChequeCandidato {
   id: string;
   numero: string;
@@ -41,11 +43,6 @@ export function chequeLibreParaOp(c: ChequeCandidato, proveedorId: string): bool
   return dado && !!proveedorId && c.destino_id === proveedorId && !c.enOpVigente;
 }
 
-const ESTADO_TEXTO: Record<string, string> = {
-  en_cartera: "en cartera", pendiente: "pendiente", entregado: "entregado", endosado: "endosado", cobrado: "cobrado",
-  depositado: "depositado", rechazado: "rechazado", anulado: "anulado",
-};
-
 export function chequeDelComprobante(leido: ChequeLeido, candidatos: ChequeCandidato[], proveedorId: string, yaUsados: string[] = []): ResultadoCheque {
   const num = numeroSinCeros(leido.numero);
   const mismos = num ? candidatos.filter((c) => numeroSinCeros(c.numero) === num && (c.moneda || "ARS") === leido.moneda && !yaUsados.includes(c.id)) : [];
@@ -73,7 +70,7 @@ export function chequeDelComprobante(leido: ChequeLeido, candidatos: ChequeCandi
   if (mismos.length && !conMonto.length) aviso = `El cheque ${leido.numero} está en el CRM por otro monto (${mismos.map((c) => Number(c.monto).toLocaleString("es-AR", { minimumFractionDigits: 2 })).join(", ")}): revisá el comprobante.`;
   else if (conMonto.length) {
     const c = conMonto[0];
-    const estado = ESTADO_TEXTO[c.estado] || c.estado;
+    const estado = nombreEstadoCheque(c.estado);
     aviso = c.enOpVigente || ((c.estado === "entregado" || c.estado === "endosado") && c.destino_id !== proveedorId)
       ? `El cheque ${c.numero} ya está ${estado}${c.enOpVigente ? " en otra OP vigente" : " a otro proveedor"}: revisalo.`
       : `El cheque ${c.numero} figura ${estado} en el CRM: revisalo.`;

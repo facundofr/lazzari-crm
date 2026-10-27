@@ -41,6 +41,8 @@ export function FinanzasLazzaReportes({ sociedadId, periodo }: { sociedadId: str
 
   return (
     <div className="space-y-3">
+      {/* Objetivos adentro de Reportes (auditoría UX 27/10, arreglo 8): antes era una tarjeta aparte con la misma cuenta. */}
+      <BarraObjetivo o={r.objetivo} />
       <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
         <table className="w-full text-sm">
           <thead>

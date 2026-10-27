@@ -6,6 +6,9 @@
 export const SECCIONES_LAZZA = [
   "cobrar", "pagar", "facturas", "cuentas", "ordenes_pago", "recibos", "retenciones", "iva",
   "bancos", "cheques", "gastos", "movimientos", "objetivos", "reportes", "vencimientos",
+  // 27/10/2026 (auditoría UX, arreglo 8): atajos que no son tarjeta. "facturar" abre Facturas en su pestaña Facturar;
+  // "movimientos_banco" abre Bancos en la pestaña Movimientos (donde se suben los archivos del banco).
+  "facturar", "movimientos_banco",
 ] as const;
 export type SeccionLazza = typeof SECCIONES_LAZZA[number];
 
@@ -48,4 +51,21 @@ export function traducirLinkViejo(params: URLSearchParams): string | null {
   const tab = params.get("tab");
   if (tab && !params.get("seccion")) return linkFinanzas(tab);
   return null;
+}
+
+/** Evento para abrir una sección cuando ya se está en `/finanzas` (router.push solo cambia la dirección, no la pantalla). */
+export const EVENTO_ABRIR_FINANZAS = "finanzas:abrir";
+
+/**
+ * A dónde lleva un aviso de la campana (auditoría UX 27/10/2026, arreglo 8): al ítem, no a Finanzas en general.
+ * Cheque rechazado (aviso de un cliente) → la ficha de ese cliente en Cuentas corrientes; aviso de cheque de tercero → Cheques;
+ * recordatorio de Revisar → Revisar (solo existe en la pantalla vieja). Cualquier otro aviso de finanzas → el inicio.
+ */
+export function linkDeAlertaFinanzas(entityType: string | null | undefined, entityId: string | null | undefined): string {
+  switch (entityType) {
+    case "cliente": return entityId ? `/finanzas?seccion=cuentas&cliente=${encodeURIComponent(entityId)}` : "/finanzas?seccion=cuentas";
+    case "echeq_tercero": return "/finanzas?seccion=cheques";
+    case "finanzas_revisar": return `${RUTA_FINANZAS_VIEJA}?tab=revisar`;
+    default: return "/finanzas";
+  }
 }

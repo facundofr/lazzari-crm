@@ -9,7 +9,7 @@
 // Resumen de cuenta (19/10): la ficha muestra TODOS los movimientos con saldo acumulado (resumen-cuenta.tsx).
 // Saldos con las mismas reglas que Finanzas (lib/saldo-clientes y lib/saldo-proveedores); semáforo BCRA del último informe.
 // "Ocultar menores a $ 100" (auditoría UX 26/10/2026, arreglo 25): saca los saldos de centavos; abajo, un clic los muestra.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { HandCoins, Loader2, Scale, Search, Wallet, X } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
@@ -84,7 +84,11 @@ const columnas = (enPesos: (m: { ARS: number; USD: number }) => number): Column<
 ];
 
 /** Saldos | Riesgo BCRA (clientes y proveedores): el mismo informe de Finanzas, adentro de Cuentas corrientes (23/10/2026). */
-export function FinanzasLazzaCuentasCorrientes({ sociedadId }: { sociedadId: string }) {
+export function FinanzasLazzaCuentasCorrientes({ sociedadId, abrirCliente = null }: {
+  sociedadId: string;
+  /** Cliente cuya ficha se abre sola (la campana lleva al ítem: auditoría UX 27/10, arreglo 8). */
+  abrirCliente?: string | null;
+}) {
   const [pestana, setPestana] = useState<"saldos" | "bcra_clientes" | "bcra_proveedores">("saldos");
   const boton = (k: typeof pestana, l: string) => (
     <button key={k} type="button" onClick={() => setPestana(k)}
@@ -97,14 +101,14 @@ export function FinanzasLazzaCuentasCorrientes({ sociedadId }: { sociedadId: str
         {boton("bcra_clientes", "Riesgo BCRA · Clientes")}
         {boton("bcra_proveedores", "Riesgo BCRA · Proveedores")}
       </div>
-      {pestana === "saldos" && <CuentasSaldos sociedadId={sociedadId} />}
+      {pestana === "saldos" && <CuentasSaldos sociedadId={sociedadId} abrirCliente={abrirCliente} />}
       {pestana === "bcra_clientes" && <RiesgoBcra key="cliente" tipo="cliente" />}
       {pestana === "bcra_proveedores" && <RiesgoBcra key="proveedor" tipo="proveedor" />}
     </div>
   );
 }
 
-function CuentasSaldos({ sociedadId }: { sociedadId: string }) {
+function CuentasSaldos({ sociedadId, abrirCliente }: { sociedadId: string; abrirCliente: string | null }) {
   const [datos, setDatos] = useState<Awaited<ReturnType<typeof traerCuentas>> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lado, setLado] = useState<"todos" | "cliente" | "proveedor">("todos");
@@ -134,6 +138,15 @@ function CuentasSaldos({ sociedadId }: { sociedadId: string }) {
   }, [sociedadId, hoy, recarga]);
 
   useEffect(() => { setTildadas(new Set()); setCobrando(false); setAjustando(false); }, [abierta?.entidadId]);
+
+  // La campana lleva a la ficha del cliente (una sola vez por cliente, apenas cargan los datos).
+  const abiertaPorLink = useRef<string | null>(null);
+  useEffect(() => {
+    if (!abrirCliente || !datos || abiertaPorLink.current === abrirCliente) return;
+    abiertaPorLink.current = abrirCliente;
+    const fila = datos.filas.find((f) => f.lado === "cliente" && f.entidadId === abrirCliente);
+    if (fila) setAbierta(fila);
+  }, [abrirCliente, datos]);
 
   const q = texto.trim().toLowerCase();
   // "Moneda: la de cada cuenta": saldo y vencido pasados a la moneda del cliente (proveedores en $), solo para mostrar.
@@ -172,6 +185,18 @@ function CuentasSaldos({ sociedadId }: { sociedadId: string }) {
 
   const facturasAbierta: FilaVencimiento[] = useMemo(() => !abierta || !datos ? [] : datos.vencimientos
     .filter((v) => v.entidadId === abierta.entidadId && (v.lado === "venta") === (abierta.lado === "cliente")), [abierta, datos]);
+
+  // Barra fija de la ficha (auditoría UX 27/10, arreglo 1): lo tildado y su suma, siempre a la vista.
+  const sumaTildadas = useMemo(() => {
+    const t = { ARS: 0, USD: 0 };
+    let cantidad = 0;
+    for (const v of facturasAbierta) {
+      if (!tildadas.has(v.id)) continue;
+      cantidad++;
+      t[v.moneda === "USD" ? "USD" : "ARS"] += v.saldo;
+    }
+    return { cantidad, monto: t };
+  }, [facturasAbierta, tildadas]);
 
   if (error) return <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30">{error}</p>;
 
@@ -282,6 +307,20 @@ function CuentasSaldos({ sociedadId }: { sociedadId: string }) {
             )}
             <ResumenCuentaFicha sociedadId={sociedadId} lado={abierta.lado} entidadId={abierta.entidadId} nombre={abierta.nombre} cuit={abierta.cuit}
               saldoFicha={saldoFichaAbierta} recarga={recarga} onCambio={() => setRecarga((n) => n + 1)} />
+            {sumaTildadas.cantidad > 0 && (
+              <div className="sticky bottom-0 -mx-4 -mb-4 mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 bg-white px-4 py-2 shadow-[0_-4px_8px_rgba(0,0,0,0.06)] dark:border-zinc-700 dark:bg-zinc-900">
+                <span className="text-sm text-zinc-600 dark:text-zinc-300">
+                  <b>{sumaTildadas.cantidad}</b> {sumaTildadas.cantidad === 1 ? "factura" : "facturas"} · <b className="font-mono text-zinc-900 dark:text-white">{montos(sumaTildadas.monto, "$ 0")}</b>
+                </span>
+                <span className="flex items-center gap-2">
+                  <button type="button" onClick={() => setTildadas(new Set())} className="text-xs text-orange-600 hover:underline">Destildar</button>
+                  <button type="button" onClick={() => setCobrando(true)}
+                    className={`inline-flex items-center gap-1 rounded-lg px-4 py-1.5 text-sm font-medium text-white ${abierta.lado === "cliente" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-orange-500 hover:bg-orange-600"}`}>
+                    {abierta.lado === "cliente" ? <><HandCoins className="h-4 w-4" /> Cobrar</> : <><Wallet className="h-4 w-4" /> Pagar</>}
+                  </button>
+                </span>
+              </div>
+            )}
           </div>
         </div>
       )}

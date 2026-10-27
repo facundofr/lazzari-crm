@@ -75,7 +75,7 @@ export function BotonDejarRevisar({ datos, className = "", etiqueta = "Dejar par
   return (
     <>
       <button type="button" onClick={(ev) => { ev.stopPropagation(); setAbierto(true); setListo(false); }}
-        title="Anotarlo en Finanzas > Hoy > Revisar"
+        title="Anotarlo en Revisar"
         className={`inline-flex items-center gap-1 rounded-lg border border-amber-300 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-950/40 ${className}`}>
         <Flag className="h-3.5 w-3.5" /> {listo ? "Anotado en Revisar" : etiqueta}
       </button>

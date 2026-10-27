@@ -88,6 +88,11 @@ function formatComprobante(tipo: string, pv: number, num: number) {
   return `${tipo} ${String(pv).padStart(4, "0")}-${String(num).padStart(8, "0")}`;
 }
 
+/** Firma de lo que se carga a mano en la factura (cliente, renglones y observaciones): sirve para saber si hay algo sin guardar. */
+function firmaCargado(d: { cliente_id: string; observaciones: string; items: { descripcion: string; cantidad: number; precio_unitario: number }[] }): string {
+  return JSON.stringify([d.cliente_id, d.observaciones, d.items.map((it) => [it.descripcion, it.cantidad, it.precio_unitario])]);
+}
+
 export function EmitirFacturaModal({
   presupuesto, arcaCertOk, saldoClienteArs, onClose, onEmitted,
 }: {
@@ -165,6 +170,12 @@ export function EmitirFacturaModal({
       items: items.length > 0 ? items : [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }],
     };
   });
+
+  // Lo cargado a mano (arreglo 13, 27/10/2026): cliente, renglones y observaciones contra lo que traía al abrir.
+  // El PR ya viene cargado: eso no cuenta. La X pregunta si hay algo; «Cancelar» cierra directo (como la OP y el cobro).
+  const firmaInicial = useRef<string | null>(null);
+  if (firmaInicial.current === null) firmaInicial.current = firmaCargado(emitData);
+  const hayCargado = emitStep === "form" && firmaCargado(emitData) !== firmaInicial.current;
 
   const editRate = emitManual || (canOverrideRate && rateOverride);
   const isFacturaA = esA(emitData.tipo);
@@ -433,7 +444,7 @@ export function EmitirFacturaModal({
         ...(restoDecision === "no_facturar" ? { resuelto_at: ahora, resuelto_por: profile?.id || null } : {}),
       });
       if (error) { console.error("Resto a facturar:", error.message); avisos.push(`No se pudo guardar lo que quedó sin facturar (${detalleResto(resto)}): anotalo.`); }
-      else avisos.push(restoDecision === "pendiente" ? `Quedó a facturar: ${detalleResto(resto)} (${formatCurrency(restoTotales.total, pr.moneda === "USD" ? "USD" : "ARS")}). Está en Finanzas Lazza › Facturar.` : `Lo que faltaba quedó como «No facturar» en el ${pr.numero}.`);
+      else avisos.push(restoDecision === "pendiente" ? `Quedó a facturar: ${detalleResto(resto)} (${formatCurrency(restoTotales.total, pr.moneda === "USD" ? "USD" : "ARS")}). Está en Finanzas › Facturar.` : `Lo que faltaba quedó como «No facturar» en el ${pr.numero}.`);
     }
     setRestoAviso(avisos.join(" "));
   }
@@ -516,10 +527,22 @@ export function EmitirFacturaModal({
   }
 
   const cerrar = () => { if (emitStep !== "emitting") onClose(); };
+  const pedirCierre = () => {
+    if (emitStep === "emitting") return;
+    if (hayCargado && !confirm("¿Estás seguro que deseas salir sin guardar? Se pierde lo que cargaste en esta factura.")) return;
+    onClose();
+  };
   const clienteNombre = pr ? pr.cliente?.razon_social || "" : emitData.cliente_id === "consumidor_final" ? "Consumidor Final" : clienteElegido?.razon_social || "";
   const monedaTotal = isUSD ? "USD" : "ARS";
   const valorMoneda = isUSD ? `USD:${modalidad}` : "ARS";
   const emitDisabled = emitManual ? ocBlocked : (ocBlocked || fiscalDateBlocked || fceBlocked || (needsRate && (cotizBnaLoading || (!editRate && !cotizBna) || tc <= 0)));
+  // Por qué el botón está gris (auditoría UX 27/10, arreglo 4): sale al lado de los botones, no hay que adivinar.
+  const motivoGris = !emitDisabled ? ""
+    : ocBlocked ? `la factura no puede tener fecha anterior a la OC del cliente (${formatDate(ocFecha!)}).`
+    : fiscalDateBlocked ? (fiscalDates.error || (!fiscalDates.ready ? "ARCA todavía está informando las fechas habilitadas." : `elegí una fecha válida: desde ${fiscalMinDate} hasta hoy.`))
+    : fceBlocked ? (fceCheck.error || "se está verificando la FCE y su cotización.")
+    : cotizBnaLoading ? "se está consultando la cotización del BNA."
+    : "falta la cotización del dólar: traela del BNA o escribila.";
 
   const toggleArca = (
     <div className="flex items-center gap-0.5 rounded-lg border border-zinc-200 dark:border-zinc-700 p-0.5">
@@ -563,7 +586,7 @@ export function EmitirFacturaModal({
             <button onClick={() => setEmitFullscreen(f => !f)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-400" title={emitFullscreen ? "Restaurar" : "Maximizar"}>
               {emitFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
             </button>
-            <button onClick={cerrar} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
+            <button onClick={pedirCierre} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
               <X className="h-5 w-5" />
             </button>
           </div>
@@ -571,7 +594,6 @@ export function EmitirFacturaModal({
 
         {emitStep === "form" && (<>
           <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-            {emitError && <div className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-1.5">{emitError}</div>}
             {emitData.cliente_id && emitData.cliente_id !== "consumidor_final" && <AvisoBCRA clienteId={emitData.cliente_id} />}
             {forceManual && (
               <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
@@ -604,12 +626,8 @@ export function EmitirFacturaModal({
                       <option value="FCEA">FCE A (MiPyMEs)</option>
                       <option value="FCEB">FCE B (MiPyMEs)</option>
                     </optgroup>
-                    <optgroup label="Notas de crédito">
-                      <option value="NCA">NC A</option>
-                      <option value="NCB">NC B</option>
-                      <option value="NCEA">NCE A (MiPyMEs)</option>
-                      <option value="NCEB">NCE B (MiPyMEs)</option>
-                    </optgroup>
+                    {/* Las notas de crédito ya no se ofrecen acá (auditoría UX 27/10, arreglo 9): esta ventana no manda la factura de origen y la API las rechaza.
+                        Se hacen con «Hacer NC» desde la factura. */}
                   </>)}
                 </select>
               </div>
@@ -894,6 +912,13 @@ export function EmitirFacturaModal({
             </div>
           )}
 
+          {/* Errores y motivo del botón gris: pegados a los botones, siempre a la vista (antes el error salía arriba, fuera de pantalla) */}
+          {(emitError || motivoGris) && (
+            <div className="shrink-0 space-y-1 border-t border-zinc-200 dark:border-zinc-700 px-4 py-1.5">
+              {emitError && <div className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-1.5">{emitError}</div>}
+              {motivoGris && <p className="text-xs text-amber-700 dark:text-amber-400">⚠️ No se puede {emitManual ? "guardar" : "emitir"} todavía: {motivoGris}</p>}
+            </div>
+          )}
           {/* Totales y botones: siempre a la vista */}
           <div className="shrink-0 border-t border-zinc-200 dark:border-zinc-700 px-4 py-2.5 flex flex-col sm:flex-row sm:items-center gap-2 sm:justify-between">
             <div className="flex flex-wrap items-baseline gap-x-4 gap-y-0.5 text-sm">
@@ -907,11 +932,11 @@ export function EmitirFacturaModal({
             <div className="flex justify-end gap-2">
               <button onClick={cerrar} className="px-3 py-1.5 text-sm font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 dark:text-zinc-300 transition-colors">Cancelar</button>
               {emitManual ? (
-                <button onClick={handleEmitManual} disabled={emitDisabled} className="flex items-center gap-2 px-4 py-1.5 text-sm font-medium rounded-lg bg-zinc-700 text-white hover:bg-zinc-800 transition-colors disabled:opacity-50">
+                <button onClick={handleEmitManual} disabled={emitDisabled} title={motivoGris || undefined} className="flex items-center gap-2 px-4 py-1.5 text-sm font-medium rounded-lg bg-zinc-700 text-white hover:bg-zinc-800 transition-colors disabled:opacity-50">
                   <FileCheck className="h-4 w-4" /> Guardar manual
                 </button>
               ) : (
-                <button onClick={handleEmit} disabled={emitDisabled} className="flex items-center gap-2 px-4 py-1.5 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors disabled:opacity-50">
+                <button onClick={handleEmit} disabled={emitDisabled} title={motivoGris || undefined} className="flex items-center gap-2 px-4 py-1.5 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors disabled:opacity-50">
                   <ShieldCheck className="h-4 w-4" /> Emitir con ARCA
                 </button>
               )}

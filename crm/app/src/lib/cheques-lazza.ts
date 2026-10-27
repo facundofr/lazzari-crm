@@ -91,9 +91,12 @@ export function situacionPago(ch: ChequeFL, hoy: string): "en_fecha" | "vencido"
   return f >= masDias(hoy, -30) ? "en_fecha" : "vencido";
 }
 
+/** «Próxima semana» (26/10/2026, Augusto): de mañana a 7 días; lo de hoy ya está «en fecha». Un solo criterio para el inicio y Cheques (arreglo 10, 27/10/2026). */
+export const rangoProximaSemana = (hoy: string): { desde: string; hasta: string } => ({ desde: masDias(hoy, 1), hasta: masDias(hoy, 7) });
+
 /** Próxima semana (26/10/2026, Augusto): los pendientes con fecha de pago de mañana a 7 días. */
 export function proximaSemana(cheques: ChequeFL[], hoy: string): { desde: string; hasta: string; pagar: Total; cobrar: Total } {
-  const r = { desde: masDias(hoy, 1), hasta: masDias(hoy, 7), pagar: vacio(), cobrar: vacio() };
+  const r = { ...rangoProximaSemana(hoy), pagar: vacio(), cobrar: vacio() };
   for (const ch of cheques) {
     if (!chequePendiente(ch) || !ch.fecha_pago) continue;
     const f = String(ch.fecha_pago).slice(0, 10);

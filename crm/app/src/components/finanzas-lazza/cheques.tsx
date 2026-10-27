@@ -22,6 +22,7 @@ import { abrirRecibo, traerRecibo } from "./recibo-doc";
 
 const MOSTRAR_SUBIR_VIEJO = false;
 import { diferenciaConBanco } from "@/lib/cheques-estado-banco";
+import { nombreEstadoBancoTitulo } from "@/lib/nombres-estados";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -190,7 +191,7 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
     { key: "segunBanco", label: "Según el banco", sortable: true, sortValue: (c) => c.estadoBanco, render: (c) => {
       if (!c.estadoBanco) return <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>;
       const dif = diferenciaConBanco(c.direccion, c.estado, c.estadoBanco);
-      return <span title={dif || undefined} className={`whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-semibold ${dif ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>{dif ? "⚠️ " : ""}{c.estadoBanco}</span>;
+      return <span title={dif || undefined} className={`whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-semibold ${dif ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>{dif ? "⚠️ " : ""}{nombreEstadoBancoTitulo(c.estadoBanco)}</span>;
     } },
   ];
 
@@ -365,7 +366,7 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
             <dl className="space-y-1.5 text-sm">
               {([
                 ["Estado", <span key="e" className={`rounded px-1.5 py-0.5 text-xs font-semibold ${TONO[estadoCheque(abierto).tono]}`}>{estadoCheque(abierto).label}</span>],
-                ...(abierto.estadoBanco ? [["Según el banco", <span key="sb">{abierto.estadoBanco}{diferenciaConBanco(abierto.direccion, abierto.estado, abierto.estadoBanco) && <span className="mt-0.5 block text-xs font-medium text-amber-700 dark:text-amber-300">⚠️ {diferenciaConBanco(abierto.direccion, abierto.estado, abierto.estadoBanco)} No se cambió nada solo.</span>}</span>]] : []),
+                ...(abierto.estadoBanco ? [["Según el banco", <span key="sb">{nombreEstadoBancoTitulo(abierto.estadoBanco)}{diferenciaConBanco(abierto.direccion, abierto.estado, abierto.estadoBanco) && <span className="mt-0.5 block text-xs font-medium text-amber-700 dark:text-amber-300">⚠️ {diferenciaConBanco(abierto.direccion, abierto.estado, abierto.estadoBanco)} No se cambió nada solo.</span>}</span>]] : []),
                 ["Monto", <b key="m" className="font-mono">{formatCurrency(Number(abierto.monto), abierto.moneda === "USD" ? "USD" : "ARS")}</b>],
                 ["De dónde vino", abierto.direccion === "emitido" ? "Lo emitimos nosotros" : abierto.origen || "—"],
                 // Arreglo 20 (27/10/2026): el recibo en que entró y la OP que pagó (o donde se endosó), con link a su PDF.

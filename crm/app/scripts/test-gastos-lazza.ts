@@ -1,6 +1,6 @@
 // npx tsx scripts/test-gastos-lazza.ts
 import assert from "node:assert/strict";
-import { nombreGrupo, armarFilasGastos, filtrarGastos, fijosSinCargar, grupoDe, grupoDeCategoria, totalesPorGrupo, venceEnMes, type FijoRow, type GastoRow } from "../src/lib/gastos-lazza";
+import { esGastoFijo, nombreGrupo, armarFilasGastos, filtrarGastos, fijosSinCargar, grupoDe, grupoDeCategoria, totalesPorGrupo, venceEnMes, type FijoRow, type GastoRow } from "../src/lib/gastos-lazza";
 
 assert.equal(grupoDeCategoria("Sueldos"), "Personal");
 assert.equal(grupoDeCategoria("Débitos automáticos"), "Local y servicios");
@@ -52,5 +52,12 @@ assert.deepEqual(fijosSinCargar(fijos, gastos, "2026-11").map((f) => f.id), ["lu
 assert.equal(nombreGrupo("Personal"), "Sueldos");
 assert.equal(nombreGrupo("Personales"), "Augusto");
 assert.equal(nombreGrupo("Impuestos"), "Impuestos");
+
+// Un solo criterio de «Fijo» para Gastos y Reportes (arreglo 10, 27/10/2026): la pantalla Gastos guarda «Fijo» como mensual
+assert.equal(esGastoFijo({ tipo_recurrencia: "mensual" }), true);
+assert.equal(esGastoFijo({ tipo_recurrencia: "fijo" }), true);
+assert.equal(esGastoFijo({ tipo_recurrencia: "eventual", gasto_fijo_id: "gf" }), true, "atado a un fijo");
+assert.equal(esGastoFijo({ tipo_recurrencia: "eventual" }), false);
+assert.equal(esGastoFijo({}), false);
 
 console.log("test-gastos-lazza OK");

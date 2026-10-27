@@ -19,6 +19,7 @@ import { useUser } from "@/lib/auth-context";
 import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { codigoDeConcepto, conCodigoBanco, sinCodigoBanco } from "@/lib/bbva-codigos";
+import { nombreAccionRegistro, nombreEstadoBanco, nombreEstadoCheque, quitarCodigosBanco } from "@/lib/nombres-estados";
 import { montoCuentaDeOp } from "@/lib/saldo-cuentas";
 import { repartirCobro, facturasParaRegistrar } from "@/lib/cobro-reparto";
 import {
@@ -743,7 +744,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
     for (let i = 0; i < items.length; i += 200) {
       const { error: e } = await (supabase as any).rpc("guardar_contrapartes_extracto", { p_sociedad_id: sociedadId, p_items: items.slice(i, i + 200) });
       if (e) {
-        if (/guardar_contrapartes_extracto|contraparte|schema cache/i.test(String(e.message || ""))) throw new Error("Falta correr la migración 20261016180000_extracto_contraparte.sql en Supabase.");
+        if (/guardar_contrapartes_extracto|contraparte|schema cache/i.test(String(e.message || ""))) throw new Error("Falta una actualización de la base de datos (los nombres de a quién se pagó y de quién se cobró): avisá a soporte. Mientras tanto no se pueden guardar.");
         throw e;
       }
     }
@@ -819,9 +820,9 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
         const r = await aplicarReportesEcheq(sociedadId, items);
         // 26/10/2026 (Augusto): lo definitivo del banco (pagado, rechazado, anulado) actualiza el estado del CRM.
         const { data: cb, error: eCb } = await (supabase as any).rpc("actualizar_cheques_segun_banco", { p_sociedad_id: sociedadId, p_probar: false });
-        if (eCb) msgs.push(/actualizar_cheques_segun_banco|schema cache|does not exist/i.test(String(eCb.message || "")) ? "⚠️ Falta correr la migración 20261026130000_finanzas_simple.sql: el estado de los cheques no se actualizó." : `⚠️ Cheques según el banco: ${errorTexto(eCb)}`);
+        if (eCb) msgs.push(/actualizar_cheques_segun_banco|schema cache|does not exist/i.test(String(eCb.message || "")) ? "⚠️ Falta una actualización de la base de datos (avisá a soporte): el estado de los cheques no se actualizó." : `⚠️ Cheques según el banco: ${errorTexto(eCb)}`);
         else for (const c of (cb?.cambios || []) as Array<{ numero: string; monto: number; direccion: string; contraparte: string; de: string; a: string; aviso: string | null }>) {
-          msgs.push(`Cheque ${c.numero}${c.contraparte ? ` (${c.contraparte})` : ""} ${formatCurrency(Number(c.monto))}: ${c.de} → ${c.a}${c.aviso ? `. ${c.aviso}` : ""}`);
+          msgs.push(`Cheque ${c.numero}${c.contraparte ? ` (${c.contraparte})` : ""} ${formatCurrency(Number(c.monto))}: de ${nombreEstadoCheque(c.de)} a ${nombreEstadoCheque(c.a)}${c.aviso ? `. ${c.aviso}` : ""}`);
         }
         msgs.push(`Cheques (${reportesEcheq.length} reportes): ${r.vinculados} identificados por primera vez · ${r.actualizados} con estado del banco nuevo · ${r.sin_cambio} sin cambios${r.no_estan_total ? ` · ${r.no_estan_total} no están en el CRM (no se tocan)` : ""}${r.conflictos_total ? ` · ⚠️ ${r.conflictos_total} para revisar (Bancos > Cheques)` : ""}${r.diferencias.length ? ` · ⚠️ ${r.diferencias.length} donde el banco y el CRM no coinciden` : ""}`);
         await anotar(null, "cheques_cargados",
@@ -850,7 +851,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
   // Cheques de clientes rechazados: al guardar se anula su cobro y la factura vuelve a deber. Piden "Entendido" antes de guardar.
   const rechazosQueAnulan = cambiosCarga.filter((c) => c.a === "rechazado" && c.cheque.direccion === "recibido");
 
-  const registroVisible = registro.filter((r) => !filtroRegistro.trim() || `${r.resumen} ${r.accion} ${r.tipo} ${nombres.get(r.usuario_id || "")}`.toLowerCase().includes(filtroRegistro.trim().toLowerCase()));
+  const registroVisible = registro.filter((r) => !filtroRegistro.trim() || `${quitarCodigosBanco(r.resumen)} ${r.accion} ${nombreAccionRegistro(r.accion)} ${r.tipo} ${nombres.get(r.usuario_id || "")}`.toLowerCase().includes(filtroRegistro.trim().toLowerCase()));
   /** Vista simple: impuestos y comisiones que ya cruzan solos van juntos en una fila; lo demás sin cerrar es "para vos". */
   const esRuidoSimple = (i: ItemBandeja) => Boolean(i.cruce && ["impuesto", "gasto_bancario"].includes(i.cruce.clasificacion));
   const ruidoSimple = porConfianza.alta.filter(esRuidoSimple);
@@ -877,7 +878,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
               {i.origen === "ia" && <Sparkles className="mr-1 inline h-3.5 w-3.5 text-violet-500" />}
               {i.titulo}
             </p>
-            <p className="truncate text-xs text-zinc-500" title={i.concepto}>{i.concepto}{i.cuenta_id ? ` · ${cuentaNombre.get(i.cuenta_id) || ""}` : ""}</p>
+            <p className="truncate text-xs text-zinc-500" title={sinCodigoBanco(i.concepto)}>{sinCodigoBanco(i.concepto)}{i.cuenta_id ? ` · ${cuentaNombre.get(i.cuenta_id) || ""}` : ""}</p>
             {i.detalle.filter(Boolean).map((d, k) => <p key={k} className="text-xs text-zinc-500">{d}</p>)}
             {i.debil && <p className="text-xs font-semibold text-red-600 dark:text-red-400">⛔ Sin evidencia: es una suposición por la suma de las facturas. Verificá con el aviso de pago antes de confirmar.</p>}
             {i.avisos.map((a, k) => <p key={k} className="text-xs font-medium text-amber-700 dark:text-amber-300">⚠️ {a}</p>)}
@@ -1068,7 +1069,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
                       <p className="font-semibold text-zinc-700 dark:text-zinc-200">Al guardar cambian {cambios.length} cheque{cambios.length > 1 ? "s" : ""} en el CRM:</p>
                       {cambios.map((c) => (
                         <p key={c.cheque.id} className={c.a === "cobrado" ? "" : "font-semibold text-amber-700 dark:text-amber-300"}>
-                          {c.a === "cobrado" ? "• " : "⚠️ "}Cheque {c.cheque.numero}{c.cheque.contraparte ? ` de ${c.cheque.contraparte}` : ""} {formatCurrency(Number(c.cheque.monto))}: {c.cheque.estado} → {c.a} (banco: {c.banco}){c.aviso ? `. ${c.aviso}` : ""}
+                          {c.a === "cobrado" ? "• " : "⚠️ "}Cheque {c.cheque.numero}{c.cheque.contraparte ? ` de ${c.cheque.contraparte}` : ""} {formatCurrency(Number(c.cheque.monto))}: de {nombreEstadoCheque(c.cheque.estado)} a {nombreEstadoCheque(c.a)} (el banco dice: {nombreEstadoBanco(c.banco)}){c.aviso ? `. ${c.aviso}` : ""}
                         </p>
                       ))}
                     </div>
@@ -1096,7 +1097,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
       {faltaMigracion && (
         <div className="flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          <div><b>Falta correr la migración de la bandeja</b> (20261016120000_finanzas_bandeja.sql). Mientras tanto se ve lo que propone el sistema, pero no se puede confirmar (hace falta el Registro).</div>
+          <div><b>Falta una actualización de la base de datos para la bandeja</b> (avisá a soporte). Mientras tanto se ve lo que propone el sistema, pero no se puede confirmar (hace falta el Registro).</div>
         </div>
       )}
 
@@ -1127,7 +1128,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
           {simple && (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-violet-200 bg-violet-50/60 p-3 text-sm dark:border-violet-900 dark:bg-violet-950/30">
               <div className="flex flex-wrap gap-x-6 gap-y-1">
-                <span className="text-emerald-700 dark:text-emerald-300"><b className="text-lg">{porConfianza.alta.length}</b> resueltas solas</span>
+                <span className="text-emerald-700 dark:text-emerald-300"><b className="text-lg">{resueltasSimple.length}</b> resueltas solas</span>
                 {ruidoSimple.length > 0 && <span><b>{textoRuido}</b> en impuestos y comisiones</span>}
                 <span><b className="text-lg">{paraVosSimple.length}</b> para vos</span>
                 {iaTrabajando && <span className="flex items-center gap-1 text-violet-700 dark:text-violet-300"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Mirando {paraIA.length} líneas…</span>}
@@ -1179,7 +1180,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
                 {verResueltas && <div className="divide-y divide-zinc-100 rounded-xl border border-zinc-200 bg-white px-3 dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">{resueltasSimple.map(renglon)}</div>}
                 {ruidoSimple.length > 0 && (
                   <button onClick={() => setVerRuido((v) => !v)} className="flex items-center gap-1 text-zinc-600 hover:text-zinc-900 dark:text-zinc-300">
-                    {verRuido ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />} Impuestos y comisiones del banco: {textoRuido} · ver detalle
+                    {verRuido ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />} Ver el detalle de impuestos y comisiones del banco
                   </button>
                 )}
                 {verRuido && <div className="divide-y divide-zinc-100 rounded-xl border border-zinc-200 bg-white px-3 dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">{ruidoSimple.map(renglon)}</div>}
@@ -1209,9 +1210,9 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
                 {registroVisible.map((r) => (
                   <div key={r.id} className="flex flex-wrap gap-2 py-1">
                     <span className="w-28 shrink-0 text-zinc-500">{new Date(r.created_at).toLocaleString("es-AR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
-                    <span className="w-24 shrink-0 font-medium">{r.accion}</span>
+                    <span className="w-32 shrink-0 font-medium">{nombreAccionRegistro(r.accion)}</span>
                     <span className="w-28 shrink-0 truncate text-zinc-500">{nombres.get(r.usuario_id || "") || "—"}</span>
-                    <span className="min-w-0 flex-1">{r.resumen}{r.resultado?.motivo ? ` · motivo: ${r.resultado.motivo}` : ""}</span>
+                    <span className="min-w-0 flex-1">{quitarCodigosBanco(r.resumen)}{r.resultado?.motivo ? ` · motivo: ${r.resultado.motivo}` : ""}</span>
                   </div>
                 ))}
                 {!registroVisible.length && <p className="py-2 text-zinc-500">Todavía no hay nada registrado.</p>}

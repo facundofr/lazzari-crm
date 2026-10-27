@@ -21,6 +21,7 @@
 import { esNotaCredito, filtrarParaGestion, incluirEnLibroIVACompras, incluirEnLibroIVAVentas, normalizarMoneda, periodoDeFecha, sumarMeses } from "./reportes-comprobantes";
 import { clasificarMovimiento, type LineaMov } from "./movimientos-banco";
 import { sinCodigoBanco } from "./bbva-codigos";
+import { esGastoFijo } from "./gastos-lazza";
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const num = (v: unknown) => Number(v || 0) || 0;
@@ -265,7 +266,7 @@ export function reporteBasico(input: {
     const tc = tcComprobante(g.moneda, null, g.fecha, tcDia);
     if (!tc) { enUsdSinCotizacion += num(g.monto); continue; }
     const monto = num(g.monto) * tc;
-    if (g.tipo_recurrencia === "fijo" || g.gasto_fijo_id) fijos += monto; else eventuales += monto;
+    if (esGastoFijo(g)) fijos += monto; else eventuales += monto;
   }
 
   const fact = redondearNI(facturado);

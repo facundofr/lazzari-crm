@@ -16,6 +16,9 @@ import { Autocompletar } from "@/components/ui/autocompletar";
 import CobroMasivoLiquidacion from "@/components/cobro-masivo-liquidacion";
 import { FxSettlementDialog } from "@/components/fx-settlement-dialog";
 import { cobradoPorFactura } from "@/lib/saldo-clientes";
+import { useToast } from "@/components/ui/toast";
+import type { OpParsed } from "@/lib/orden-pago-plan";
+import { avisosDePaso, facturasDeOrdenPago, numerosDeOrdenPago, type FacturasDeOrdenPago } from "@/lib/cobro-orden-pago";
 import { clientesACobrar, facturasACobrar, monedaDelCobro, type ClienteACobrar, type FacturaACobrar } from "@/lib/finanzas-lazza";
 import { traerDeudas } from "./datos";
 
@@ -28,6 +31,12 @@ async function traerFacturasCliente(sociedadId: string, clienteId: string): Prom
   if (error) throw error;
   const facturas = data || [];
   if (!facturas.length) return [];
+  return facturasACobrar(facturas, await cobradoDe(sociedadId, facturas));
+}
+
+/** Lo ya cobrado de cada factura (movimientos y aplicaciones de cobro). */
+async function cobradoDe(sociedadId: string, facturas: any[]): Promise<Record<string, number>> {
+  if (!facturas.length) return {};
   const ids = facturas.map((f: any) => f.id);
   const [movs, aplic] = await Promise.all([
     db.from("movimientos").select("id, factura_id, monto, moneda, anulado").eq("sociedad_id", sociedadId).in("factura_id", ids),
@@ -35,7 +44,19 @@ async function traerFacturasCliente(sociedadId: string, clienteId: string): Prom
   ]);
   if (movs.error) throw movs.error;
   if (aplic.error) throw aplic.error;
-  return facturasACobrar(facturas, cobradoPorFactura(facturas, movs.data || [], aplic.data || []));
+  return cobradoPorFactura(facturas, movs.data || [], aplic.data || []);
+}
+
+/** Busca en el sistema las facturas que figuran en la OP del cliente (ya leída por la IA) y arma el cobro en pesos y en dólares. */
+async function traerFacturasDeOrdenPago(sociedadId: string, clienteId: string, parsed: OpParsed): Promise<FacturasDeOrdenPago> {
+  const numeros = numerosDeOrdenPago(parsed);
+  if (!numeros.length) return facturasDeOrdenPago(parsed, [], {});
+  const { data, error } = await db.from("facturas")
+    .select("id, numero, tipo, punto_venta, fecha, subtotal, iva, total, total_acreditado, moneda, tipo_cambio, estado")
+    .eq("sociedad_id", sociedadId).eq("cliente_id", clienteId).in("numero", numeros);
+  if (error) throw error;
+  const filas = (data || []).filter((f: any) => f.estado !== "anulada");
+  return facturasDeOrdenPago(parsed, filas, await cobradoDe(sociedadId, filas));
 }
 
 export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preseleccion = [], directo = false, onClose, onCobrado }: {
@@ -52,6 +73,7 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
   onCobrado: () => void;
 }) {
   const { profile } = useUser();
+  const { toast } = useToast();
   const [cliente, setCliente] = useState<{ id: string; nombre: string } | null>(clienteId ? { id: clienteId, nombre: clienteNombre || "" } : null);
   const [clientes, setClientes] = useState<{ id: string; razon_social: string; cuit: string | null }[] | null>(null);
   const [facturas, setFacturas] = useState<FacturaACobrar[] | null>(null);
@@ -59,6 +81,8 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
   const [elegidas, setElegidas] = useState<Set<string>>(() => new Set(preseleccion));
   const [liquidando, setLiquidando] = useState(false);
   const [saltoDirecto, setSaltoDirecto] = useState(directo);
+  // «Cobrar todas las facturas de esta orden de pago» (arreglo 11, 27/10/2026): primero las de pesos y después las de dólares.
+  const [secuencia, setSecuencia] = useState<(FacturasDeOrdenPago & { parsed: OpParsed; paso: "ars" | "usd" }) | null>(null);
 
   // Lista de clientes solo si hay que elegir uno.
   useEffect(() => {
@@ -100,19 +124,51 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
 
   const tildar = (id: string, si: boolean) => setElegidas((prev) => { const n = new Set(prev); if (si) n.add(id); else n.delete(id); return n; });
   const cerrarLiquidacion = () => { setLiquidando(false); if (directo) onClose(); };
-  const listo = async () => { setLiquidando(false); onCobrado(); onClose(); };
+  const listo = async () => { setLiquidando(false); setSecuencia(null); onCobrado(); onClose(); };
+
+  // Con la OP del cliente leída, ofrece cobrar todas sus facturas juntas. Nada se registra sin confirmar; lo que no se puede cobrar se avisa.
+  async function iniciarCobroOrdenPago(parsed: OpParsed) {
+    if (!cliente) return;
+    try {
+      const r = await traerFacturasDeOrdenPago(sociedadId, cliente.id, parsed);
+      if (r.sinDetalle) { toast.warning("La IA no encontró el detalle de facturas en la orden de pago."); return; }
+      if (!r.ars.length && !r.usd.length) { toast.warning(`No hay facturas pendientes para cobrar en esta orden de pago. ${r.avisos.join(" ")}`); return; }
+      setSecuencia({ ...r, parsed, paso: r.ars.length ? "ars" : "usd" });
+    } catch (e) {
+      console.error("Finanzas Lazza · Cobrar toda la OP:", e);
+      toast.error(e instanceof Error ? e.message : "No se pudieron buscar las facturas de la orden de pago.");
+    }
+  }
+
+  if (secuencia && cliente) {
+    if (secuencia.paso === "ars") {
+      return (
+        <CobroMasivoLiquidacion facturas={secuencia.ars} clienteId={cliente.id} clienteNombre={cliente.nombre} sociedadId={sociedadId}
+          profileId={profile?.id || null} moneda="ARS" ordenPago={secuencia.parsed} ordenPagoAvisos={avisosDePaso(secuencia, "ars")}
+          onClose={onClose}
+          onSuccess={() => { if (secuencia.usd.length) { onCobrado(); setSecuencia({ ...secuencia, paso: "usd" }); } else void listo(); }} />
+      );
+    }
+    return (
+      <FxSettlementDialog kind="cobro" sociedadId={sociedadId} counterpartyId={cliente.id}
+        documents={secuencia.usd} ordenPago={secuencia.parsed} ordenPagoAvisos={avisosDePaso(secuencia, "usd")}
+        onClose={onClose} onSuccess={listo} />
+    );
+  }
 
   if (liquidando && cliente && moneda) {
     if (moneda === "USD") {
       return (
         <FxSettlementDialog kind="cobro" sociedadId={sociedadId} counterpartyId={cliente.id}
           documents={seleccion.map((f) => ({ id: f.id, numero: f.numero, saldo: f.saldo, total: f.total, subtotal: f.subtotal, cotizacion: f.tipo_cambio }))}
+          onCobrarOrdenCompleta={(orden) => { void iniciarCobroOrdenPago(orden); }}
           onClose={cerrarLiquidacion} onSuccess={listo} />
       );
     }
     return (
       <CobroMasivoLiquidacion facturas={seleccion} clienteId={cliente.id} clienteNombre={cliente.nombre} sociedadId={sociedadId}
-        profileId={profile?.id || null} moneda="ARS" onClose={cerrarLiquidacion} onSuccess={listo} />
+        profileId={profile?.id || null} moneda="ARS" onCobrarOrdenCompleta={(orden) => { void iniciarCobroOrdenPago(orden); }}
+        onClose={cerrarLiquidacion} onSuccess={listo} />
     );
   }
 
@@ -124,7 +180,7 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
         <div className="flex items-start justify-between gap-2">
           <div>
             <h2 className="text-base font-bold text-zinc-900 dark:text-white">Cobrar{cliente ? ` · ${cliente.nombre}` : ""}</h2>
-            <p className="text-sm text-zinc-500">{cliente ? "Tildá las facturas que paga y seguí a la liquidación (la misma de Finanzas)." : "Elegí el cliente."}</p>
+            <p className="text-sm text-zinc-500">{cliente ? "Tildá las facturas que paga y seguí a la liquidación." : "Elegí el cliente."}</p>
           </div>
           <button type="button" aria-label="Cerrar" onClick={onClose} className="rounded p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
         </div>

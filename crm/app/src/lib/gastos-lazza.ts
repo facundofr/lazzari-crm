@@ -54,13 +54,17 @@ const num = (v: unknown) => Number(v || 0) || 0;
 const r2 = (v: number) => Math.round((v + Number.EPSILON) * 100) / 100;
 const mon = (m: unknown): "ARS" | "USD" => (String(m || "").toUpperCase() === "USD" ? "USD" : "ARS");
 
+/** Un gasto es fijo si viene de un gasto fijo o se cargó como fijo/mensual. Un solo criterio para Gastos y Reportes (auditoría UX 27/10, arreglo 10). */
+export const esGastoFijo = (g: { gasto_fijo_id?: string | null; tipo_recurrencia?: string | null }): boolean =>
+  !!g.gasto_fijo_id || g.tipo_recurrencia === "fijo" || g.tipo_recurrencia === "mensual";
+
 export function armarFilasGastos(gastos: GastoRow[], fijos: FijoRow[]): FilaGasto[] {
   const fijoPorId = new Map(fijos.map((f) => [f.id, f]));
   return gastos.map((g) => {
     const f = g.gasto_fijo_id ? fijoPorId.get(g.gasto_fijo_id) : undefined;
     return {
       id: g.id, fecha: String(g.fecha).slice(0, 10), grupo: grupoDe(g), detalle: g.descripcion || "",
-      fijo: !!g.gasto_fijo_id || g.tipo_recurrencia === "fijo" || g.tipo_recurrencia === "mensual",
+      fijo: esGastoFijo(g),
       // Un gasto de un fijo con débito automático se muestra 🔁 aunque se haya cargado con otro medio.
       medio: f?.medio_pago === "debito_automatico" ? "debito_automatico" : (g.medio_pago || ""),
       monto: r2(num(g.monto)), moneda: mon(g.moneda), fijoId: g.gasto_fijo_id || null,

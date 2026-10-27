@@ -5,11 +5,15 @@ import { Sparkles } from "lucide-react";
 import { Modal } from "@/components/ui/modal";
 import { ZonaArchivos } from "@/components/ui/zona-archivos";
 import { supabase } from "@/lib/supabase/client";
-import { formatCurrency, todayAR } from "@/lib/utils";
+import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
+import { mismaRetencion, mismoPago, sinRepetir } from "@/lib/comprobante-medios";
 import { parseDecimalInput, toDecimalInput } from "@/lib/decimal-input";
 import { buildOrdenPagoPlan, type OpParsed } from "@/lib/orden-pago-plan";
 import { diaHabilAnterior } from "@/lib/dias-habiles";
 import { modalidadCobroUsd, compararTcCobro, mensajeActualizacionTc, UMBRAL_TC_COBRO, type ModalidadUsd } from "@/lib/tc-cobro-usd";
+import { useToast } from "@/components/ui/toast";
+import { textoCobro, textoOP } from "@/lib/cartel-guardado";
+import { numeroDeOP, numerosDeRecibo } from "@/lib/recibo-numero";
 
 export interface FxSettlementDocument { id: string; numero: string; saldo: number; total: number; subtotal?: number; cotizacion?: number }
 interface Props {
@@ -42,6 +46,7 @@ const medioLabel: Record<string, string> = { transferencia: "transferencia", efe
 const retentionTypes = [{ value: "retencion_iva", label: "IVA" }, { value: "retencion_ganancias", label: "Ganancias" }, { value: "retencion_iibb", label: "IIBB" }, { value: "retencion_suss", label: "SUSS" }];
 
 export function FxSettlementDialog({ kind, sociedadId, counterpartyId, documents, onClose, onSuccess, ordenPago, ordenPagoAvisos, onCobrarOrdenCompleta }: Props) {
+  const { toast } = useToast();
   const [fecha, setFecha] = useState(todayAR());
   const [cotizacionFecha, setCotizacionFecha] = useState(diaHabilAnterior(todayAR()));
   const [modalidad, setModalidad] = useState<"divisas" | "billetes" | "manual">("divisas");
@@ -136,9 +141,13 @@ export function FxSettlementDialog({ kind, sociedadId, counterpartyId, documents
       const avisos: string[] = [];
       const ars = (n: number) => formatCurrency(n, "ARS");
 
-      // Fecha de la operación = fecha del pago (nunca futura).
-      const fechaOp = plan.fecha && /^\d{4}-\d{2}-\d{2}$/.test(plan.fecha) && plan.fecha <= todayAR() ? plan.fecha : fecha;
-      setFecha(fechaOp); setCotizacionFecha(diaHabilAnterior(fechaOp));
+      // Fecha de la operación = fecha del pago (nunca futura). Con algo ya cargado (un primer comprobante), no cambia:
+      // todos los medios tienen que llevar la misma fecha de la operación (auditoría UX 27/10, arreglo 14).
+      const fechaPlan = plan.fecha && /^\d{4}-\d{2}-\d{2}$/.test(plan.fecha) && plan.fecha <= todayAR() ? plan.fecha : fecha;
+      const yaCargado = medios.some(m => m.monto.trim() !== "") || retenciones.length > 0;
+      const fechaOp = yaCargado ? fecha : fechaPlan;
+      if (!yaCargado) { setFecha(fechaOp); setCotizacionFecha(diaHabilAnterior(fechaOp)); }
+      else if (fechaPlan !== fecha) avisos.push(`La fecha de la operación quedó en la del primer comprobante (${formatDate(fecha)}); este trae ${formatDate(fechaPlan)}: corregila si hace falta.`);
 
       // USD a cancelar y tipo de cambio que usó el cliente.
       if (plan.incluidas.length) {
@@ -170,11 +179,28 @@ export function FxSettlementDialog({ kind, sociedadId, counterpartyId, documents
         .filter(m => permitidos.includes(m.tipo));
       if (mediosOk.length < plan.medios.length) avisos.push("La orden incluye medios que este formulario no registra (cheques en pagos u otros): revisalos.");
       if (mediosOk.some(m => m.tipo === "cheque_recibido")) avisos.push("La orden incluye cheques o eCheqs: se imputan a la factura, pero no quedan en la cartera de Cheques. Cargalos en Finanzas > Cheques (eso no genera otro cobro).");
-      if (mediosOk.length) setMedios(mediosOk.map(m => ({ tipo: m.tipo, monto: toDecimalInput(m.monto), fecha: fechaOp, referencia: [m.chequeTipo === "echeq" ? "eCheq" : m.chequeTipo ? "Cheque" : "", m.tipo === "cheque_recibido" ? m.referencia : "", plan.referencia && `OP ${plan.referencia}`, m.banco].filter(Boolean).join(" · ") || m.referencia })));
+      const mediosLeidos: Medio[] = mediosOk.map(m => ({ tipo: m.tipo, monto: toDecimalInput(m.monto), fecha: fechaOp, referencia: [m.chequeTipo === "echeq" ? "eCheq" : m.chequeTipo ? "Cheque" : "", m.tipo === "cheque_recibido" ? m.referencia : "", plan.referencia && `OP ${plan.referencia}`, m.banco].filter(Boolean).join(" · ") || m.referencia }));
 
       const retOk = plan.retenciones.filter(r => retentionTypes.some(t => t.value === r.tipo));
       if (retOk.length < plan.retenciones.length) avisos.push("Hay percepciones u otros descuentos que este formulario no admite: revisalos.");
-      setRetenciones(retOk.map(r => ({ tipo: r.tipo, monto: toDecimalInput(r.monto), certificado: r.certificado })));
+      const retencionesLeidas: Retencion[] = retOk.map(r => ({ tipo: r.tipo, monto: toDecimalInput(r.monto), certificado: r.certificado }));
+
+      // Un segundo comprobante suma lo que falta y no borra lo del primero; lo que ya estaba se avisa y no se suma de nuevo
+      // (como el cobro en pesos y la OP: lib/comprobante-medios.ts).
+      const pagoDe = (x: Medio) => ({ tipo: x.tipo, monto: parseNum(x.monto), numero: x.referencia, fecha: x.fecha });
+      const mismoMedio = (a: Medio, b: Medio) => mismoPago(pagoDe(a), pagoDe(b));
+      const retDe = (x: Retencion) => ({ tipo: x.tipo, monto: parseNum(x.monto), certificado: x.certificado });
+      const mismaRet = (a: Retencion, b: Retencion) => mismaRetencion(retDe(a), retDe(b));
+      const sinPlaceholder = (cur: Medio[]) => (cur.length === 1 && !cur[0].monto.trim() && !cur[0].referencia.trim() ? [] : cur);
+      const mediosRepetidos = sinRepetir(sinPlaceholder(medios), mediosLeidos, mismoMedio).repetidos;
+      const retencionesRepetidas = sinRepetir(retenciones, retencionesLeidas, mismaRet).repetidos;
+      if (mediosLeidos.length) setMedios(cur => { const base = sinPlaceholder(cur); return [...base, ...sinRepetir(base, mediosLeidos, mismoMedio).agregar]; });
+      if (retencionesLeidas.length) setRetenciones(cur => [...cur, ...sinRepetir(cur, retencionesLeidas, mismaRet).agregar]);
+      const repetidos = [
+        ...mediosRepetidos.map(x => `${medioLabel[x.tipo] || x.tipo} ${ars(parseNum(x.monto))}`),
+        ...retencionesRepetidas.map(x => `${retentionTypes.find(t => t.value === x.tipo)?.label || x.tipo} ${ars(parseNum(x.monto))}`),
+      ];
+      if (repetidos.length) avisos.push(`Ya estaba cargado y no se sumó de nuevo: ${repetidos.join(" · ")}.`);
       if (retOk.some(r => !r.certificado)) avisos.push("Alguna retención vino sin número de certificado: completalo antes de confirmar.");
 
       setOpConOtras(plan.otras.length && !ordenPagoAvisos ? parsed : null);
@@ -307,6 +333,16 @@ export function FxSettlementDialog({ kind, sociedadId, counterpartyId, documents
       if (rpcError) throw new Error(rpcError.message || "No se pudo registrar la liquidación.");
       if (data?.success === false) throw new Error(data.error || "La liquidación no fue confirmada.");
       localStorage.removeItem(scope);
+      // Cartel verde (auditoría UX 27/10, arreglo 2): antes en US$ no aparecía ningún mensaje. Cobro → N° de recibo; pago → N° de OP.
+      // Si el número no se puede leer, el cartel sale igual sin número.
+      if (kind === "cobro") {
+        const numeros = await numerosDeRecibo({ liquidacionFxId: data?.id });
+        const docs = sentPayload.current?.p_documentos;
+        toast.success(textoCobro(numeros, Array.isArray(docs) ? docs.length : 0));
+      } else {
+        const opNumero = await numeroDeOP(data?.orden_pago_id);
+        toast.success(opNumero ? textoOP(opNumero, false) : "Pago en US$ registrado");
+      }
       await onSuccess();
       });
     } catch (e) { setError(`${e instanceof Error ? e.message : "No se pudo confirmar la liquidación."}${sentPayload.current ? " El reintento conserva la misma operación para evitar duplicados; no se cambiarán sus datos." : ""}`); }
@@ -316,8 +352,7 @@ export function FxSettlementDialog({ kind, sociedadId, counterpartyId, documents
   // 26/10/2026 (auditoría UX, arreglo 3): con algo cargado, Escape, el clic afuera y la X preguntan antes de cerrar (como Presupuestos).
   // «Cerrar» cierra directo. Una operación ya enviada se recupera sola al volver a abrir: no pregunta.
   const hayCargado = !submitted && (Object.values(allocations).some(v => v.trim() !== "") || medios.some(m => m.monto.trim() !== "" || m.referencia.trim() !== "") || retenciones.length > 0);
-  return <Modal open onClose={() => { if (!saving) onClose(); }} confirmarCierre={!saving && hayCargado ? "¿Estás seguro que deseas salir sin guardar? Se pierde lo que cargaste en esta liquidación." : undefined} size="xl" title={`${kind === "cobro" ? "Cobrar" : "Pagar"} facturas USD en pesos`} description="La cotización de esta liquidación no modifica la factura original." footer={<><button type="button" className={button} disabled={saving} onClick={onClose}>Cerrar</button><button type="button" className="rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50" disabled={saving || loadingQuote} onClick={guardar}>{saving ? "Registrando…" : submitted ? "Reintentar la misma operación" : "Confirmar liquidación"}</button></>}>
-    {error && <p role="alert" className="mb-4 rounded-lg border border-red-300 p-3 text-sm text-red-700 dark:text-red-400">{error}</p>}
+  return <Modal open onClose={() => { if (!saving) onClose(); }} confirmarCierre={!saving && hayCargado ? "¿Estás seguro que deseas salir sin guardar? Se pierde lo que cargaste en esta liquidación." : undefined} size="xl" title={`${kind === "cobro" ? "Cobrar" : "Pagar"} facturas USD en pesos`} description="La cotización de esta liquidación no modifica la factura original." footer={<div className="flex w-full flex-col gap-2">{error && <p role="alert" className="rounded-lg border border-red-300 p-3 text-sm text-red-700 dark:text-red-400">{error}</p>}{loadingQuote && !saving && <p className="text-right text-xs text-amber-700 dark:text-amber-400">⚠️ No se puede confirmar todavía: se está consultando la cotización del BNA.</p>}<div className="flex justify-end gap-2"><button type="button" className={button} disabled={saving} onClick={onClose}>Cerrar</button><button type="button" className="rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50" disabled={saving || loadingQuote} onClick={guardar}>{saving ? "Registrando…" : submitted ? "Reintentar la misma operación" : "Confirmar liquidación"}</button></div></div>}>
     {submitted && <p className="mb-3 text-sm text-amber-700 dark:text-amber-400">Operación enviada: los datos quedan bloqueados hasta confirmar su resultado. Reintentar no genera una liquidación nueva.</p>}
     <fieldset disabled={saving || submitted} className="space-y-5 dark:text-zinc-200">
       <ZonaArchivos onArchivos={(files) => void leerOrdenPago(files)} disabled={leyendoOp || saving || submitted} className="p-3">

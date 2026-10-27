@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { coincideNumeroCheque, depositadoSegunBanco, enFecha, estaEnFecha, estadoCheque, opsDeCheques, ordenCheques, proximaSemana, proximasSemanas, resumenPorEstado, situacionPago, type ChequeFL } from "../src/lib/cheques-lazza";
+import { coincideNumeroCheque, depositadoSegunBanco, rangoProximaSemana, enFecha, estaEnFecha, estadoCheque, opsDeCheques, ordenCheques, proximaSemana, proximasSemanas, resumenPorEstado, situacionPago, type ChequeFL } from "../src/lib/cheques-lazza";
 
 const ch = (x: Partial<ChequeFL> & { id: string }): ChequeFL => ({ numero: x.id, direccion: "emitido", estado: "entregado", fecha_pago: "2026-10-19", monto: 100, moneda: "ARS", ...x });
 const hoy = "2026-10-19"; // lunes
@@ -134,5 +134,13 @@ assert.equal(coincideNumeroCheque(["74"], "00000074"), true);
 assert.equal(coincideNumeroCheque(["4074"], "74"), true, "sin ceros: parte del N°, como cualquier búsqueda");
 assert.equal(coincideNumeroCheque(["00003587"], "0003587"), true);
 assert.equal(coincideNumeroCheque(["3587"], "003587"), true);
+
+// Una sola «próxima semana» (arreglo 10, 27/10/2026): de mañana a 7 días, la misma para el inicio y para Cheques
+assert.deepEqual(rangoProximaSemana("2026-10-27"), { desde: "2026-10-28", hasta: "2026-11-03" });
+{
+  const p = proximaSemana([], "2026-10-27");
+  assert.equal(p.desde, rangoProximaSemana("2026-10-27").desde);
+  assert.equal(p.hasta, rangoProximaSemana("2026-10-27").hasta);
+}
 
 console.log("test-cheques-lazza OK");

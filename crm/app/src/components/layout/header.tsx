@@ -24,6 +24,7 @@ import { createBrowserClient } from "@supabase/ssr";
 import { formatDateTime } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { useUser } from "@/lib/auth-context";
+import { EVENTO_ABRIR_FINANZAS, linkDeAlertaFinanzas } from "@/lib/finanzas-destino";
 
 interface HeaderProps {
   title: string;
@@ -43,6 +44,7 @@ interface AlertRow {
   read: boolean;
   created_at: string;
   entity_id: string | null;
+  entity_type?: string | null;
   sociedad_id: string | null;
 }
 
@@ -333,9 +335,14 @@ export function Header({ title, subtitle, action }: HeaderProps) {
       remitos: "/remitos",
       proveedores: "/proveedores",
     };
-    const route = moduleRoutes[alert.module] || `/${alert.module}`;
+    // Avisos de finanzas: al ítem (ficha del cliente, Cheques, Revisar), no a Finanzas en general (auditoría UX 27/10, arreglo 8).
+    const route = alert.module === "finanzas" ? linkDeAlertaFinanzas(alert.entity_type, alert.entity_id) : moduleRoutes[alert.module] || `/${alert.module}`;
     markOneRead(alert.id);
     setAlertsOpen(false);
+    // Ya estando en Finanzas la pantalla no se vuelve a montar: se le avisa para que abra la sección.
+    if (alert.module === "finanzas" && window.location.pathname === "/finanzas" && route.startsWith("/finanzas?")) {
+      window.dispatchEvent(new CustomEvent(EVENTO_ABRIR_FINANZAS, { detail: route }));
+    }
     router.push(route);
   }
 

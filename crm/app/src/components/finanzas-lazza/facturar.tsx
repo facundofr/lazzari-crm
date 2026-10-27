@@ -19,6 +19,8 @@ import { comprobanteVenta } from "@/lib/finanzas-lazza";
 import { esNotaCredito } from "@/lib/ventas-documentos";
 import { detalleDePr, enBandeja, etapaVenta, fechaParaFacturar } from "@/lib/ventas-etapas";
 import { detalleResto } from "@/lib/resto-facturar";
+import { saldoClienteEn } from "@/lib/saldo-clientes";
+import { useSaldosClientes } from "./use-saldos-clientes";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -107,7 +109,7 @@ async function traerRestos(sociedadId: string): Promise<FilaFacturar[]> {
   });
 }
 
-async function traerParaFacturar(sociedadId: string, hoy: string): Promise<FilaFacturar[]> {
+export async function traerParaFacturar(sociedadId: string, hoy: string): Promise<FilaFacturar[]> {
   const restos = traerRestos(sociedadId);
   const prs = await traerTodo<any>(() => db.from("presupuestos").select(CAMPOS_PR)
     .in("estado", ["aprobado", "facturar", "facturado"]).neq("eliminado", true).eq("sociedad_id", sociedadId).order("id"));
@@ -169,6 +171,8 @@ export function FinanzasLazzaFacturar({ sociedadId }: { sociedadId: string }) {
   const [recarga, setRecarga] = useState(0);
   const [texto, setTexto] = useState("");
   const [emitir, setEmitir] = useState<FilaFacturar | null>(null);
+  // «Límite de crédito alcanzado» al facturar (arreglo 12, 27/10/2026): el saldo del cliente se trae al abrir la ventana de factura.
+  const saldosClientes = useSaldosClientes(sociedadId, !!emitir);
 
   useEffect(() => {
     let vivo = true;
@@ -277,6 +281,7 @@ Sale de esta lista; el PR y su factura quedan como están.`)) return;
         <EmitirFacturaModal
           presupuesto={emitir.presupuesto}
           arcaCertOk={arcaStatus?.certOk}
+          saldoClienteArs={(id) => (saldosClientes ? saldoClienteEn(saldosClientes, id, "ARS") : null)}
           onClose={() => setEmitir(null)}
           onEmitted={() => setRecarga((n) => n + 1)}
         />

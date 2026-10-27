@@ -34,6 +34,7 @@ const gastos = [
   { fecha: "2026-10-01", monto: 1000, moneda: "ARS", tipo_recurrencia: "fijo" },
   { fecha: "2026-10-02", monto: 500, moneda: "ARS", tipo_recurrencia: "eventual", gasto_fijo_id: "gf" }, // atado a un fijo
   { fecha: "2026-10-03", monto: 700, moneda: "ARS", tipo_recurrencia: "eventual" },
+  { fecha: "2026-10-04", monto: 200, moneda: "ARS", tipo_recurrencia: "mensual" }, // «Fijo» de la pantalla Gastos se guarda como mensual: cuenta como fijo (arreglo 10)
   { fecha: "2026-10-14", monto: 10, moneda: "USD", tipo_recurrencia: "eventual" },
   { fecha: "2026-09-03", monto: 99999, moneda: "ARS", tipo_recurrencia: "eventual" },
 ];
@@ -49,10 +50,10 @@ assert.equal(r.costo.iva, 126 + 15225 - 63 + 147);
 // Avisos: d sin PR, h con artículo sin costo
 assert.deepEqual(r.avisos.map((a) => a.facturaId).sort(), ["d", "h"]);
 assert.equal(r.avisos.find((a) => a.facturaId === "h")!.prNumero, "PR-8");
-// Gastos: fijos 1500, eventuales 700 + 10×1500
-assert.deepEqual(r.gastos, { fijos: 1500, eventuales: 15700, total: 17200, enUsdSinCotizacion: 0 });
+// Gastos: fijos 1500 + 200 (mensual), eventuales 700 + 10×1500
+assert.deepEqual(r.gastos, { fijos: 1700, eventuales: 15700, total: 17400, enUsdSinCotizacion: 0 });
 // Resultado = neto venta − neto costo − gastos
-assert.equal(r.resultado, 148700 - 74200 - 17200);
+assert.equal(r.resultado, 148700 - 74200 - 17400);
 
 // NC cuya factura de origen es de otro mes: usa `origenes`
 const r2 = reporteBasico({ periodo: "2026-10", facturas: [fv({ id: "n", tipo: "NCA", subtotal: 5000, iva: 1050, total: 6050, factura_origen_id: "g" })], origenes: [facturas[6]], idsAnulados: [], items: [{ presupuesto_id: "pg", cantidad: 1, precio_costo: 4000, costo_moneda: "ARS", iva_porcentaje: 21 }], prNumero: {}, gastos: [], tcDia });

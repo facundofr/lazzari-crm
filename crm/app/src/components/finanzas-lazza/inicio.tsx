@@ -5,14 +5,16 @@
 // Cada dato se calcula aparte (si uno falla, esa tarjeta queda con "—" y el resto anda). Solo lectura.
 import { useEffect, useState } from "react";
 import {
-  BarChart3, HandCoins, Wallet, Building2, FileSpreadsheet, Files, List, Percent, Receipt, ReceiptText, ShoppingBag, Target, Users,
+  BarChart3, FilePlus, HandCoins, Wallet, Building2, FileSpreadsheet, Files, List, Percent, Receipt, ReceiptText, ShoppingBag, Users,
   type LucideIcon,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
-import { formatCurrency, todayAR } from "@/lib/utils";
-import { armarRetenciones, ivaDelMes, reporteBasico, type ReporteBasico } from "@/lib/finanzas-lazza";
+import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
+import { rangoProximaSemana } from "@/lib/cheques-lazza";
+import { armarRetenciones, ivaDelMes, reporteBasico } from "@/lib/finanzas-lazza";
 import { esCobroDeCliente } from "@/lib/tipos-movimiento";
+import { traerParaFacturar } from "./facturar";
 import { CargaDiaria } from "./carga-diaria";
 import { traerComprasDelMes, traerDatosReporte, traerDeudas, traerIvaACuenta, traerTcDelDia, traerVentasDelMes, rangoMes } from "./datos";
 
@@ -23,12 +25,16 @@ export type SeccionFL =
   | "facturas" | "cuentas" | "vencimientos"
   | "ordenes_pago" | "recibos" | "retenciones" | "iva"
   | "bancos" | "cheques" | "gastos" | "movimientos"
-  | "objetivos" | "reportes";
+  | "objetivos" | "reportes"
+  // Atajos que no son tarjeta (auditoría UX 27/10, arreglo 8): Objetivos está adentro de Reportes y sigue abriendo por link;
+  // "movimientos_banco" = Bancos en la pestaña Movimientos.
+  | "facturar" | "movimientos_banco";
 
 type Grupo = "acciones" | "ventas" | "pagos" | "tesoreria" | "informes";
 export interface TarjetaDef { id: SeccionFL; nombre: string; que: string; icono: LucideIcon; grupo: Grupo }
 
 export const TARJETAS: TarjetaDef[] = [
+  { id: "facturar", nombre: "Facturar", que: "Armar y emitir facturas", icono: FilePlus, grupo: "acciones" },
   { id: "cobrar", nombre: "Cobrar", que: "Facturas de venta a cobrar", icono: HandCoins, grupo: "acciones" },
   { id: "pagar", nombre: "Pagar", que: "Facturas de compra a pagar", icono: Wallet, grupo: "acciones" },
   { id: "facturas", nombre: "Facturas", que: "Venta y compra, una por una", icono: Files, grupo: "ventas" },
@@ -40,7 +46,6 @@ export const TARJETAS: TarjetaDef[] = [
   { id: "bancos", nombre: "Bancos", que: "Efectivo, tarjetas, préstamos", icono: Building2, grupo: "tesoreria" },
   { id: "gastos", nombre: "Gastos", que: "Fijos y eventuales", icono: ShoppingBag, grupo: "tesoreria" },
   { id: "movimientos", nombre: "Movimientos", que: "Historial de todo", icono: List, grupo: "tesoreria" },
-  { id: "objetivos", nombre: "Objetivos", que: "Mínimo 64 · Bueno 80 · Muy bueno 96M", icono: Target, grupo: "informes" },
   { id: "reportes", nombre: "Reportes", que: "Venta − costo − gastos", icono: BarChart3, grupo: "informes" },
 ];
 
@@ -52,9 +57,9 @@ const GRUPOS: { id: Grupo; nombre: string; icono: string; borde: string }[] = [
   { id: "informes", nombre: "Informes", icono: "bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300", borde: "hover:border-amber-300" },
 ];
 
-/** Filas del inicio: Cobrar y pagar + Ventas comparten la primera (4 tarjetas cada fila). */
-const FILAS: { nombre: string; grupos: Grupo[] }[] = [
-  { nombre: "Cobrar, pagar y ventas", grupos: ["acciones", "ventas"] },
+/** Filas del inicio: Cobrar y pagar + Ventas comparten la primera (4 tarjetas cada fila; la primera, con Facturar, son 5). */
+const FILAS: { nombre: string; grupos: Grupo[]; cols?: string }[] = [
+  { nombre: "Cobrar, pagar y ventas", grupos: ["acciones", "ventas"], cols: "lg:grid-cols-5" },
   { nombre: "Pagos, cobros e impuestos", grupos: ["pagos"] },
   { nombre: "Tesorería", grupos: ["tesoreria"] },
   { nombre: "Informes", grupos: ["informes"] },
@@ -68,21 +73,20 @@ const mas = (ars: number, usd: number) => `${millones(ars)}${Math.abs(usd) >= 1 
 
 /** Tarjetas que llena cada loader (mismo orden que `loaders`): si uno falla, esas quedan con "—". */
 const TARJETAS_DE_LOADER: SeccionFL[][] = [
-  ["reportes", "gastos", "objetivos"], ["vencimientos", "cuentas", "cobrar", "pagar"], ["iva", "facturas"],
-  ["ordenes_pago", "retenciones"], ["recibos", "movimientos"], ["bancos"],
+  ["reportes", "gastos"], ["vencimientos", "cuentas", "cobrar", "pagar"], ["iva", "facturas"],
+  ["ordenes_pago", "retenciones"], ["recibos", "movimientos"], ["bancos"], ["facturar"],
 ];
 
 /** Cada loader devuelve los datos de una o más tarjetas. */
-function loaders(sociedadId: string, periodo: string, hoy: string): (() => Promise<Partial<Record<SeccionFL, Dato | { objetivo: ReporteBasico["objetivo"] }>>>)[] {
+function loaders(sociedadId: string, periodo: string, hoy: string): (() => Promise<Partial<Record<SeccionFL, Dato>>>)[] {
   const { desde, hasta } = rangoMes(periodo);
   return [
-    // Reportes, gastos y objetivos (misma cuenta que Reportes).
+    // Reportes y gastos (misma cuenta que Reportes; el objetivo del mes está adentro de Reportes).
     async () => {
       const r = reporteBasico({ periodo, ...(await traerDatosReporte(sociedadId, periodo)) });
       return {
         reportes: { valor: formatCurrency(Math.round(r.resultado)).replace(/,00$/, ""), sub: "resultado del mes (neto)", tono: r.resultado >= 0 ? "verde" : "rojo" },
         gastos: { valor: millones(r.gastos.total), sub: "del mes" },
-        objetivos: { objetivo: r.objetivo },
       };
     },
     // Vencimientos y cuentas corrientes.
@@ -145,19 +149,26 @@ function loaders(sociedadId: string, periodo: string, hoy: string): (() => Promi
     },
     // Bancos. 26/10/2026 (Augusto): el saldo del banco no se muestra por ahora; la tarjeta queda con los cheques propios de la semana.
     async () => {
-      // Cheques propios a debitar en los próximos 7 días (23/10: la tarjeta Cheques se fue a Bancos y este dato viene con ella).
-      const hasta7 = new Date(Date.parse(`${hoy}T12:00:00Z`) + 7 * 86_400_000).toISOString().slice(0, 10);
+      // Cheques propios a debitar la próxima semana (23/10: la tarjeta Cheques se fue a Bancos y este dato viene con ella).
+      // 27/10 (arreglo 10): la misma «próxima semana» que Cheques (de mañana a 7 días), no «hoy a 7 días».
+      const sem = rangoProximaSemana(hoy);
+      const corto = (f: string) => formatDate(f).slice(0, 5);
       const ch = await db.from("echeqs").select("id, monto").eq("sociedad_id", sociedadId).eq("direccion", "emitido")
-        .in("estado", ["pendiente", "entregado"]).gte("fecha_pago", hoy).lte("fecha_pago", hasta7);
+        .in("estado", ["pendiente", "entregado"]).gte("fecha_pago", sem.desde).lte("fecha_pago", sem.hasta);
       const filas: any[] = ch.error ? [] : ch.data || [];
       const aDebitar = filas.reduce((s: number, c: any) => s + Number(c.monto || 0), 0);
-      return { bancos: { valor: filas.length ? millones(aDebitar) : "—", sub: filas.length ? `${filas.length} cheques propios a debitar en los próximos 7 días` : "sin cheques propios esta semana", tono: filas.length ? "naranja" : undefined } };
+      return { bancos: { valor: filas.length ? millones(aDebitar) : "—", sub: filas.length ? `${filas.length} cheques propios a debitar la próxima semana (${corto(sem.desde)} al ${corto(sem.hasta)})` : "sin cheques propios la próxima semana", tono: filas.length ? "naranja" : undefined } };
+    },
+    // Facturar (arreglo 8): cuántos PR aprobados y restos esperan factura (la misma lista de la pestaña Facturar).
+    async () => {
+      const porFacturar = await traerParaFacturar(sociedadId, hoy);
+      return { facturar: { valor: `${porFacturar.length} por facturar`, sub: "PR aprobados y restos", tono: porFacturar.length ? "naranja" : undefined } };
     },
   ];
 }
 
 export function FinanzasLazzaInicio({ sociedadId, onAbrir }: { sociedadId: string; onAbrir: (s: SeccionFL) => void }) {
-  const [datos, setDatos] = useState<Partial<Record<SeccionFL, Dato | { objetivo: ReporteBasico["objetivo"] }>>>({});
+  const [datos, setDatos] = useState<Partial<Record<SeccionFL, Dato>>>({});
   const hoy = todayAR();
   const periodo = hoy.slice(0, 7);
 
@@ -176,10 +187,8 @@ export function FinanzasLazzaInicio({ sociedadId, onAbrir }: { sociedadId: strin
   }, [sociedadId, periodo, hoy]);
 
   const tarjeta = (t: TarjetaDef, g: (typeof GRUPOS)[number]) => {
-    const d = datos[t.id];
+    const dato = datos[t.id] ?? null;
     const Icono = t.icono;
-    const objetivo = d && typeof d === "object" && "objetivo" in d ? d.objetivo : null;
-    const dato = d && typeof d === "object" && "valor" in d ? d : null;
     return (
       <button key={t.id} type="button" onClick={() => onAbrir(t.id)}
         className={`flex min-h-[88px] flex-col justify-between rounded-xl border border-zinc-200 bg-white p-3 text-left transition-colors dark:border-zinc-800 dark:bg-zinc-900 ${g.borde}`}>
@@ -190,24 +199,12 @@ export function FinanzasLazzaInicio({ sociedadId, onAbrir }: { sociedadId: strin
             <span className="block text-[11px] text-zinc-500">{t.que}</span>
           </span>
         </span>
-        {objetivo ? (
-          <span className="mt-2 block">
-            <span className="block text-lg font-semibold text-zinc-900 dark:text-white">
-              {{ debajo: "Debajo del mínimo", minimo: "Mínimo", bueno: "Bueno", muy_bueno: "Muy bueno" }[objetivo.nivel]}
-              <span className="ml-2 text-xs font-normal text-zinc-500">{objetivo.proximo ? `faltan ${millones(objetivo.proximo.falta)} para ${objetivo.proximo.nombre}` : "¡superado!"}</span>
-            </span>
-            <span className="mt-2 block h-2 rounded-full bg-zinc-100 dark:bg-zinc-800">
-              <span className={`block h-2 rounded-full ${objetivo.nivel === "debajo" ? "bg-orange-400" : "bg-emerald-500"}`} style={{ width: `${Math.min(100, (objetivo.neto / 96_000_000) * 100)}%` }} />
-            </span>
+        <span className="mt-2 block">
+          <span className={`block text-lg font-semibold ${dato?.tono === "rojo" ? "text-red-600" : dato?.tono === "naranja" ? "text-orange-600" : dato?.tono === "verde" ? "text-emerald-700 dark:text-emerald-400" : "text-zinc-900 dark:text-white"}`}>
+            {dato ? dato.valor : <span className="inline-block h-5 w-20 animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />}
           </span>
-        ) : (
-          <span className="mt-2 block">
-            <span className={`block text-lg font-semibold ${dato?.tono === "rojo" ? "text-red-600" : dato?.tono === "naranja" ? "text-orange-600" : dato?.tono === "verde" ? "text-emerald-700 dark:text-emerald-400" : "text-zinc-900 dark:text-white"}`}>
-              {dato ? dato.valor : <span className="inline-block h-5 w-20 animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />}
-            </span>
-            <span className="block text-[11px] text-zinc-400">{dato?.sub ?? " "}</span>
-          </span>
-        )}
+          <span className="block text-[11px] text-zinc-400">{dato?.sub ?? " "}</span>
+        </span>
       </button>
     );
   };
@@ -216,13 +213,13 @@ export function FinanzasLazzaInicio({ sociedadId, onAbrir }: { sociedadId: strin
   return (
     <div className="space-y-3">
       {/* 25/10, Augusto: si falta cargar algún extracto o reporte del banco, avisa apenas se abre Finanzas. */}
-      <CargaDiaria sociedadId={sociedadId} hoy={todayAR()} soloSiFalta onIr={() => onAbrir("bancos")} />
+      <CargaDiaria sociedadId={sociedadId} hoy={todayAR()} soloSiFalta onIr={() => onAbrir("movimientos_banco")} />
       {FILAS.map((fila) => {
         const lista = TARJETAS.filter((t) => fila.grupos.includes(t.grupo));
         return (
           <section key={fila.nombre}>
             <p className="mb-1 text-xs font-semibold text-zinc-500">{fila.nombre}</p>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <div className={`grid grid-cols-1 gap-2 sm:grid-cols-2 ${fila.cols || "lg:grid-cols-4"}`}>
               {lista.map((t) => {
                 const g = GRUPOS.find((x) => x.id === t.grupo)!;
                 return <div key={t.id} className={`grid ${t.grupo === "informes" ? "lg:col-span-2" : ""}`}>{tarjeta(t, g)}</div>;

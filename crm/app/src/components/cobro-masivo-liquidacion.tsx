@@ -12,6 +12,9 @@ import { fuentesSaldoFavorCliente, repartirSaldoFavorCliente, faltaSegunOrden, c
 import { claveArchivo, mismaRetencion, mismoPago, sinRepetir } from "@/lib/comprobante-medios";
 import { guardarRevisar } from "@/components/dejar-revisar";
 import { ZonaArchivos } from "@/components/ui/zona-archivos";
+import { useToast } from "@/components/ui/toast";
+import { textoCobro } from "@/lib/cartel-guardado";
+import { numerosDeRecibo } from "@/lib/recibo-numero";
 
 // ── Types ────────────────────────────────────────────────
 export interface LiquidacionFactura {
@@ -115,6 +118,7 @@ function buildDesc(prefix: string, ref: string, obs: string, opRef: string): str
 export default function CobroMasivoLiquidacion({
   facturas, clienteId, clienteNombre, sociedadId, moneda, onClose, onSuccess, ordenPago, ordenPagoAvisos, onCobrarOrdenCompleta,
 }: Props) {
+  const { toast } = useToast();
   const [opReferencia, setOpReferencia] = useState("");
   const [medios, setMedios] = useState<MedioPago[]>([newMedio()]);
   const [retenciones, setRetenciones] = useState<RetencionLinea[]>([]);
@@ -458,8 +462,7 @@ export default function CobroMasivoLiquidacion({
           : rpcErr.message);
       }
 
-      const movCount = data?.movimientos_count || mediosPayload.length + retencionesPayload.length;
-      let notaRevisar = "";
+      let avisoRevisar: { texto: string; falló: boolean } | null = null;
       if (hayDiferencia && dejarEnRevisar) {
         const conSaldo = reparto.filas.filter((f) => f.queda > 0);
         const ultima = conSaldo[conSaldo.length - 1] || reparto.filas[reparto.filas.length - 1];
@@ -483,10 +486,15 @@ export default function CobroMasivoLiquidacion({
                 : `Sobran ${fc(reparto.sobra, m)}: quedaron como saldo a favor del cliente en su cuenta corriente.`,
           ].filter(Boolean).join(" "),
         });
-        notaRevisar = errRevisar ? `\n\nNo se pudo anotar en Revisar: ${errRevisar}` : "\n\nQuedó anotado en Finanzas > Hoy > Revisar.";
+        avisoRevisar = errRevisar
+          ? { texto: `El cobro quedó guardado, pero no se pudo anotar la diferencia en Revisar: ${errRevisar}`, falló: true }
+          : { texto: "La diferencia quedó anotada en Revisar (se abre en /finanzas-vieja?tab=revisar).", falló: false };
       }
-      const notaSF = aplicacionesSF.length ? `\n\nSaldo a favor aplicado: ${aplicacionesSF.map((a) => `${fc(a.monto, m)} a la ${a.numero}`).join("; ")}.` : "";
-      alert(`Cobro registrado: ${movCount} movimiento${movCount > 1 ? "s" : ""} para ${facturas.length} factura${facturas.length > 1 ? "s" : ""}${notaSF}${notaRevisar}`);
+      // Cartel verde (auditoría UX 27/10, arreglo 2): el N° de recibo lo arma la base al guardar; si no se puede leer, sale sin número.
+      const numerosRecibo = await numerosDeRecibo({ movimientoIds: data?.inserted_ids });
+      const notaSF = aplicacionesSF.length ? ` · saldo a favor aplicado ${fc(totalSFAplicado, m)}` : "";
+      toast.success(`${textoCobro(numerosRecibo, facturas.length)}${notaSF}`);
+      if (avisoRevisar) (avisoRevisar.falló ? toast.warning : toast.info)(avisoRevisar.texto);
       onSuccess();
     } catch (err: any) {
       setError(err.message || "Error al registrar el cobro");

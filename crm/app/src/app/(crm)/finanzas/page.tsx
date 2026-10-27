@@ -18,7 +18,7 @@ import { ArrowLeft, ChevronLeft, ChevronRight, Hammer } from "lucide-react";
 import { Header } from "@/components/layout/header";
 import { useUser } from "@/lib/auth-context";
 import { todayAR } from "@/lib/utils";
-import { esSeccionLazza, traducirLinkViejo } from "@/lib/finanzas-destino";
+import { esSeccionLazza, EVENTO_ABRIR_FINANZAS, traducirLinkViejo } from "@/lib/finanzas-destino";
 import { periodoDeFecha, sumarMeses } from "@/lib/reportes-comprobantes";
 import { FinanzasLazzaInicio, TARJETAS, type SeccionFL } from "@/components/finanzas-lazza/inicio";
 import { FinanzasLazzaObjetivos, FinanzasLazzaReportes } from "@/components/finanzas-lazza/reportes";
@@ -32,6 +32,9 @@ import { FinanzasLazzaMovimientos, FinanzasLazzaOrdenesPago, FinanzasLazzaRecibo
 
 /** Pantallas nuevas que todavía no están (se diseñan con Augusto en las próximas tandas). */
 const EN_ARMADO: Partial<Record<SeccionFL, string>> = {};
+
+/** Secciones que abren por link pero no tienen tarjeta propia: el título sale de acá (Objetivos está adentro de Reportes). */
+const NOMBRE_SIN_TARJETA: Partial<Record<SeccionFL, string>> = { objetivos: "Objetivos" };
 
 const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 const nombreMes = (p: string) => `${MESES[Number(p.slice(5, 7)) - 1]} ${p.slice(0, 4)}`;
@@ -56,6 +59,21 @@ export default function FinanzasLazzaPage() {
     if (destino.startsWith("/finanzas?") && esSeccionLazza(seccion)) setVista(seccion as SeccionFL);
     router.replace(destino);
   }, [router]);
+  // Cliente cuya ficha se abre sola en Cuentas corrientes (la campana lleva al ítem: arreglo 8, 27/10/2026).
+  const [clienteLink, setClienteLink] = useState<string | null>(() => (typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("cliente")));
+  // Ya estando en Finanzas, la campana no vuelve a montar la pantalla: avisa con un evento y se abre la sección pedida.
+  useEffect(() => {
+    const abrir = (e: Event) => {
+      const q = new URLSearchParams(String((e as CustomEvent).detail || "").split("?")[1] || "");
+      const seccion = q.get("seccion");
+      if (!esSeccionLazza(seccion)) return;
+      setClienteLink(q.get("cliente"));
+      setVista(seccion as SeccionFL);
+      window.scrollTo(0, 0);
+    };
+    window.addEventListener(EVENTO_ABRIR_FINANZAS, abrir);
+    return () => window.removeEventListener(EVENTO_ABRIR_FINANZAS, abrir);
+  }, []);
   const mesActual = periodoDeFecha(todayAR());
   const [periodo, setPeriodo] = useState(mesActual);
 
@@ -70,7 +88,8 @@ export default function FinanzasLazzaPage() {
   }
 
   const sociedadId = sociedadActiva?.id;
-  const tarjeta = vista ? TARJETAS.find((t) => t.id === (vista === "cheques" ? "bancos" : vista)) : null;
+  // Cheques y Movimientos del banco viven en Bancos; Facturar es una pestaña de Facturas.
+  const tarjeta = vista ? TARJETAS.find((t) => t.id === (vista === "cheques" || vista === "movimientos_banco" ? "bancos" : vista === "facturar" ? "facturas" : vista)) : null;
   const conMes = vista === "reportes" || vista === "iva" || vista === "objetivos" || vista === "gastos";
 
   const contenido = () => {
@@ -88,7 +107,8 @@ export default function FinanzasLazzaPage() {
       case "cobrar": return <FinanzasLazzaFacturas key="cobrar" sociedadId={sociedadId} ladoInicial="venta" />;
       case "pagar": return <FinanzasLazzaFacturas key="pagar" sociedadId={sociedadId} ladoInicial="compra" />;
       case "facturas": return <FinanzasLazzaFacturas key="facturas" sociedadId={sociedadId} ladoInicial="venta" />;
-      case "cuentas": return <FinanzasLazzaCuentasCorrientes sociedadId={sociedadId} />;
+      case "facturar": return <FinanzasLazzaFacturas key="facturar" sociedadId={sociedadId} ladoInicial="facturar" />;
+      case "cuentas": return <FinanzasLazzaCuentasCorrientes sociedadId={sociedadId} abrirCliente={clienteLink} />;
       case "vencimientos": return <FinanzasLazzaVencimientos sociedadId={sociedadId} />;
       case "ordenes_pago": return <FinanzasLazzaOrdenesPago sociedadId={sociedadId} />;
       case "recibos": return <FinanzasLazzaRecibos sociedadId={sociedadId} />;
@@ -97,6 +117,8 @@ export default function FinanzasLazzaPage() {
       case "bancos": return <FinanzasLazzaBancos sociedadId={sociedadId} />;
       // Cheques ya no es una tarjeta: vive en Bancos > Cheques (23/10). El link ?seccion=cheques sigue funcionando y abre esa pestaña.
       case "cheques": return <FinanzasLazzaBancos key="cheques" sociedadId={sociedadId} pestanaInicial="cheques" />;
+      // «Ir a Bancos» del aviso «Falta cargar» abre Movimientos, que es donde se suben los archivos del banco (arreglo 8).
+      case "movimientos_banco": return <FinanzasLazzaBancos key="movimientos_banco" sociedadId={sociedadId} pestanaInicial="extracto" />;
       case "movimientos": return <FinanzasLazzaMovimientos sociedadId={sociedadId} />;
       case "objetivos": return <FinanzasLazzaObjetivos sociedadId={sociedadId} periodo={periodo} />;
       case "reportes": return <FinanzasLazzaReportes sociedadId={sociedadId} periodo={periodo} />;
@@ -116,7 +138,7 @@ export default function FinanzasLazzaPage() {
                 className="inline-flex items-center gap-1 rounded-lg border border-zinc-200 bg-white px-2.5 py-1 text-sm text-zinc-600 hover:border-orange-300 hover:text-orange-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
                 <ArrowLeft className="h-4 w-4" /> Finanzas
               </button>
-              <h2 className="text-base font-semibold text-zinc-800 dark:text-zinc-100">{tarjeta?.nombre}</h2>
+              <h2 className="text-base font-semibold text-zinc-800 dark:text-zinc-100">{tarjeta?.nombre ?? NOMBRE_SIN_TARJETA[vista]}</h2>
             </div>
             {conMes && (
               <div className="flex items-center gap-1 text-sm">
