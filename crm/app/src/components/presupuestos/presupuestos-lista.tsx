@@ -1092,6 +1092,16 @@ export default function PresupuestosLista() {
     })();
   }, [selected?.id]);
 
+  // Al recargar la lista (ej. después de editar y guardar), el PR abierto toma los datos nuevos:
+  // si no, el panel y el PDF seguían con los precios de antes hasta volver a abrirlo.
+  useEffect(() => {
+    setSelected(prev => {
+      if (!prev) return prev;
+      const fresco = presupuestos.find(p => p.id === prev.id);
+      return fresco && fresco.items.length > 0 ? fresco : prev;
+    });
+  }, [presupuestos]);
+
   // Check approved PRs for missing costs
   useEffect(() => {
     async function checkAprobadosSinCostos() {
