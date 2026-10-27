@@ -6,8 +6,11 @@
 // acompaña (gestionar_cobro "editar"); al borrar, el pago se anula. Si el gasto ya está cruzado con el banco: aviso, nunca frena.
 // Débitos automáticos: al abrir el mes en curso se cargan solos los del día ya pasado (cargar_debitos_automaticos, migración
 // 20261020150000), con aviso y Deshacer. Lógica pura en lib/gastos-lazza.ts.
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ArrowDown, ArrowUp, ChevronsUpDown, Loader2, Pencil, Plus, Search, Trash2, Undo2, X } from "lucide-react";
+// Arreglo 17 (26/10/2026), lo que había en Finanzas vieja: "Leer VEP (IA)" en la ventana del gasto (/api/parse-vep, lib/vep.ts:
+// completa y adjunta el PDF, nunca guarda solo) y el fijo con "SICORE auto" (calculo 'sicore'): su monto son las retenciones
+// de Ganancias del mes anterior, las mismas del TXT SICORE (montoSicore).
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { AlertTriangle, ArrowDown, ArrowUp, ChevronsUpDown, Loader2, Paperclip, Pencil, Plus, Search, Sparkles, Trash2, Undo2, X } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { useUser } from "@/lib/auth-context";
@@ -18,6 +21,9 @@ import {
   GRUPOS, MEDIOS, nombreGrupo, armarFilasGastos, etiquetaMedio, filtrarGastos, fijosSinCargar, grupoDe, totalesPorGrupo,
   type FijoRow, type FilaGasto, type GastoRow, type Grupo,
 } from "@/lib/gastos-lazza";
+import { montoSicore, sugerirGastoFijo } from "@/lib/gasto-fijo-factura";
+import { gastoConVep, type DatosVep } from "@/lib/vep";
+import { sumarMeses } from "@/lib/reportes-comprobantes";
 import { rangoMes } from "./datos";
 
 const db = supabase as any;
@@ -34,8 +40,11 @@ const opcionesMedio = Object.entries(MEDIOS).map(([value, label]) => ({ value, l
 const faltaFuncion = (e: any) => e && (e.code === "PGRST202" || e.code === "42883" || /Could not find the function|does not exist/i.test(String(e.message || "")));
 const plata = (m: { ARS: number; USD: number }) => [m.ARS > 0.005 || !m.USD ? formatCurrency(m.ARS) : "", m.USD > 0.005 ? formatCurrency(m.USD, "USD") : ""].filter(Boolean).join(" + ");
 
-interface Borrador { id: string | null; fecha: string; grupo: Grupo; detalle: string; fijo: boolean; medio: string; monto: string; moneda: "ARS" | "USD"; fijoId: string | null }
+// archivo y nota: el VEP leído por la IA (se adjunta y su vencimiento/organismo va a las notas al guardar).
+interface Borrador { id: string | null; fecha: string; grupo: Grupo; detalle: string; fijo: boolean; medio: string; monto: string; moneda: "ARS" | "USD"; fijoId: string | null; archivo?: File | null; nota?: string }
 interface PagoGasto { id: string; gasto_manual_id: string; monto: number; conciliado: boolean; cruzado: boolean }
+interface Sicore { mes: string; monto: number }
+const nombreDeMes = (mes: string) => `${MESES[Number(mes.slice(5, 7)) - 1]} ${mes.slice(0, 4)}`;
 
 export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: string; periodo: string }) {
   const { profile } = useUser();
@@ -43,6 +52,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
   const [gastos, setGastos] = useState<GastoRow[] | null>(null);
   const [fijos, setFijos] = useState<FijoRow[]>([]);
   const [pagos, setPagos] = useState<PagoGasto[]>([]);
+  const [sicore, setSicore] = useState<Sicore | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sinMigracion, setSinMigracion] = useState(false);
   const [cargadosSolos, setCargadosSolos] = useState<{ gasto_id: string; descripcion: string; monto: number }[]>([]);
@@ -59,7 +69,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
   const [orden, setOrden] = useState<{ col: ColOrden; dir: 1 | -1 }>({ col: "fecha", dir: -1 });
   const hoy = todayAR();
   const esMesActual = periodo === hoy.slice(0, 7);
-  const nombreMes = `${MESES[Number(periodo.slice(5, 7)) - 1]} ${periodo.slice(0, 4)}`;
+  const nombreMes = nombreDeMes(periodo);
 
   useEffect(() => {
     let vivo = true;
@@ -73,10 +83,18 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
         else if (vivo && Array.isArray(data) && data.length) setCargadosSolos(data);
       }
       const { desde, hasta } = rangoMes(periodo);
-      const [gs, fs] = await Promise.all([
+      const anterior = rangoMes(sumarMeses(periodo, -1));
+      const [gs, fs, ops, directos] = await Promise.all([
         traerTodo<GastoRow>(() => db.from("gastos_manuales").select("*").eq("sociedad_id", sociedadId).gte("fecha", desde).lt("fecha", hasta).order("id")),
         traerTodo<FijoRow>(() => db.from("gastos_fijos").select("*").eq("sociedad_id", sociedadId).order("id")),
+        // Fijo "SICORE auto": retenciones de Ganancias del mes anterior, OP y pagos directos (como el TXT SICORE).
+        traerTodo<any>(() => db.from("ordenes_pago").select("id, fecha, estado, retencion_ganancias_monto").eq("sociedad_id", sociedadId).gte("fecha", anterior.desde).lt("fecha", anterior.hasta).gt("retencion_ganancias_monto", 0).order("id")),
+        traerTodo<any>(() => db.from("movimientos").select("id, fecha, anulado, retencion_ganancias_monto").eq("sociedad_id", sociedadId).eq("tipo", "pago").gte("fecha", anterior.desde).lt("fecha", anterior.hasta).gt("retencion_ganancias_monto", 0).order("id")),
       ]);
+      const retenciones = [
+        ...ops.map((o: any) => ({ fecha: String(o.fecha).slice(0, 10), estado: o.estado, retencion: Number(o.retencion_ganancias_monto) })),
+        ...directos.map((m: any) => ({ fecha: String(m.fecha).slice(0, 10), estado: m.anulado ? "anulada" : null, retencion: Number(m.retencion_ganancias_monto) })),
+      ];
       const ids = gs.map((g) => g.id);
       const ps: PagoGasto[] = [];
       for (let i = 0; i < ids.length; i += 200) {
@@ -90,7 +108,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
         for (const p of ps) if (cruz.has(p.id)) p.cruzado = true;
       }
       if (!vivo) return;
-      setGastos(gs); setFijos(fs); setPagos(ps);
+      setGastos(gs); setFijos(fs); setPagos(ps); setSicore(montoSicore(retenciones, `${periodo}-01`));
     })().catch((e) => { console.error("Finanzas Lazza · Gastos:", e); if (vivo) setError("No se pudieron cargar los gastos. Recargá la página."); });
     return () => { vivo = false; };
   }, [sociedadId, periodo, esMesActual, recarga]);
@@ -119,6 +137,9 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
   const totalVisible = useMemo(() => ({ ARS: visibles.filter((x) => x.moneda === "ARS").reduce((s, x) => s + x.monto, 0), USD: visibles.filter((x) => x.moneda === "USD").reduce((s, x) => s + x.monto, 0) }), [visibles]);
   const pendientes = useMemo(() => fijosSinCargar(fijos, gastos || [], periodo), [fijos, gastos, periodo]);
   const pagosDe = useCallback((gastoId: string) => pagos.filter((p) => p.gasto_manual_id === gastoId), [pagos]);
+  /** Monto con que se carga el fijo: el "SICORE auto" toma las retenciones del mes anterior; los demás, su monto. */
+  const montoFijo = (f: FijoRow) => (f.calculo === "sicore" && sicore ? sicore.monto : Number(f.monto || 0));
+  const tituloSicore = sicore ? `Automático: retenciones de Ganancias de ${nombreDeMes(sicore.mes)} (las del TXT SICORE)` : "";
 
   // ── Guardar / borrar (mismas reglas que Finanzas vieja) ──
   async function guardar(b: Borrador) {
@@ -139,7 +160,18 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
         fecha: b.fecha, descripcion: b.detalle.trim(), grupo: b.grupo, monto, moneda: b.moneda, medio_pago: b.medio || "transferencia",
         tipo_recurrencia: b.fijo ? "mensual" : "eventual",
       };
+      // El VEP leído se adjunta al gasto. Si no se puede subir, el gasto se guarda igual (aviso, nunca frena).
+      if (b.archivo) {
+        const ruta = `${sociedadId}/gastos/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${(b.archivo.name.split(".").pop() || "pdf").toLowerCase()}`;
+        const { error: eS } = await supabase.storage.from("comprobantes").upload(ruta, b.archivo, { upsert: false });
+        if (eS) toast.warning(`El gasto se guarda sin el VEP adjunto: ${eS.message}`);
+        else datos.comprobante_url = supabase.storage.from("comprobantes").getPublicUrl(ruta).data.publicUrl;
+      }
       if (b.id) {
+        const antes = (gastos || []).find((g) => g.id === b.id);
+        const notasAntes = String(antes?.notas || "");
+        if (b.nota && !notasAntes.includes(b.nota)) datos.notas = [notasAntes, b.nota].filter(Boolean).join(" · ");
+        if (antes && (antes.gasto_fijo_id || null) !== b.fijoId) datos.gasto_fijo_id = b.fijoId; // tocó "Usar" en la sugerencia del VEP
         const { error: e } = await db.from("gastos_manuales").update(datos).eq("id", b.id).eq("sociedad_id", sociedadId);
         if (e) throw e;
         for (const p of pagosDe(b.id)) {
@@ -148,7 +180,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
         }
       } else {
         const { data: nuevo, error: e } = await db.from("gastos_manuales").insert({
-          ...datos, sociedad_id: sociedadId, categoria: b.grupo, tipo_gasto: "general", notas: "", gasto_fijo_id: b.fijoId, created_by: profile?.id || null,
+          ...datos, sociedad_id: sociedadId, categoria: b.grupo, tipo_gasto: "general", notas: b.nota || "", gasto_fijo_id: b.fijoId, created_by: profile?.id || null,
         }).select("id").single();
         if (e) throw e;
         const { error: e2 } = await db.from("movimientos").insert({
@@ -195,7 +227,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
   };
   const desdeFijo = (f: (typeof pendientes)[number]): Borrador => ({
     id: null, fecha: f.vence && f.vence <= hoy ? f.vence : esMesActual ? hoy : f.vence || `${periodo}-01`, grupo: f.grupoFinal,
-    detalle: `${f.descripcion || ""} — ${nombreMes}`, fijo: true, medio: f.medio_pago || "transferencia", monto: String(Number(f.monto || 0)),
+    detalle: `${f.descripcion || ""} — ${nombreMes}`, fijo: true, medio: f.medio_pago || "transferencia", monto: montoFijo(f) > 0 ? String(montoFijo(f)) : "",
     moneda: String(f.moneda).toUpperCase() === "USD" ? "USD" : "ARS", fijoId: f.id,
   });
 
@@ -256,7 +288,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
         <button type="button" onClick={() => setVerFijos((v) => !v)} className="text-xs text-orange-600 hover:underline">{verFijos ? "Ocultar gastos fijos" : "Editar gastos fijos"}</button>
       </div>
 
-      {borrador && !borrador.id && <Editor b={borrador} cambiar={setBorrador} guardar={guardar} cancelar={() => setBorrador(null)} guardando={guardando} titulo={borrador.fijoId ? "Cargar gasto fijo" : "Nuevo gasto"} />}
+      {borrador && !borrador.id && <Editor b={borrador} cambiar={setBorrador} guardar={guardar} cancelar={() => setBorrador(null)} guardando={guardando} titulo={borrador.fijoId ? "Cargar gasto fijo" : "Nuevo gasto"} fijos={fijos} />}
 
       {!gastos ? (
         <p className="flex items-center gap-2 py-6 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Cargando…</p>
@@ -275,12 +307,14 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
             <tbody>
               {visibles.map((f) => borrador?.id === f.id ? (
                 <tr key={f.id}><td colSpan={7} className="p-1"><Editor b={borrador} cambiar={setBorrador} guardar={guardar} cancelar={() => setBorrador(null)} guardando={guardando} titulo="Editar gasto"
-                  aviso={pagosDe(f.id).some((p) => p.cruzado || p.conciliado) ? "Ya está cruzado con el banco: si cambiás el monto, la línea del banco no va a coincidir (se puede guardar igual)." : undefined} /></td></tr>
+                  aviso={pagosDe(f.id).some((p) => p.cruzado || p.conciliado) ? "Ya está cruzado con el banco: si cambiás el monto, la línea del banco no va a coincidir (se puede guardar igual)." : undefined}
+                  fijos={fijos} original={f} /></td></tr>
               ) : (
                 <tr key={f.id} onClick={() => setBorrador(desdeFila(f))} className="cursor-pointer border-t border-zinc-100 hover:bg-orange-50/40 dark:border-zinc-800 dark:hover:bg-zinc-800/50">
                   <td className="whitespace-nowrap px-2 py-1.5">{formatDate(f.fecha)}</td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-xs">{nombreGrupo(f.grupo)}</td>
-                  <td className="px-2 py-1.5">{f.detalle}{f.cargadoSolo && <span className="ml-1 text-[10px] text-blue-600">(cargado solo)</span>}</td>
+                  <td className="px-2 py-1.5">{f.detalle}{f.cargadoSolo && <span className="ml-1 text-[10px] text-blue-600">(cargado solo)</span>}
+                    {f.comprobante && <a href={f.comprobante} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} title="Ver el VEP o comprobante adjunto" className="ml-1 inline-flex align-middle text-orange-500 hover:text-orange-700"><Paperclip className="h-3.5 w-3.5" /></a>}</td>
                   <td className="px-2 py-1.5 text-xs">{f.fijo ? "Fijo" : "Eventual"}</td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-xs">{etiquetaMedio(f.medio)}{pagosDe(f.id).some((p) => p.cruzado || p.conciliado) && <span className="ml-1 text-emerald-600" title="Cruzado con el banco">✓ banco</span>}</td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-right font-mono font-semibold">{formatCurrency(f.monto, f.moneda)}</td>
@@ -308,7 +342,10 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
                 <span className="w-24 text-xs text-zinc-500">{f.vence ? `vence ${formatDate(f.vence)}` : "sin día"}</span>
                 <span className="w-36 truncate text-xs">{nombreGrupo(f.grupoFinal)}</span>
                 <span className="min-w-[160px] flex-1">{f.descripcion}{f.medio_pago === "debito_automatico" && <span className="ml-1 text-xs">🔁</span>}</span>
-                <span className="font-mono text-xs">{formatCurrency(Number(f.monto || 0), String(f.moneda).toUpperCase() === "USD" ? "USD" : "ARS")}</span>
+                <span className="font-mono text-xs" title={f.calculo === "sicore" ? tituloSicore : undefined}>
+                  {f.calculo === "sicore" && <span className="mr-1 font-sans text-[10px] text-zinc-400">auto</span>}
+                  {formatCurrency(montoFijo(f), String(f.moneda).toUpperCase() === "USD" ? "USD" : "ARS")}
+                </span>
                 <button type="button" onClick={() => setBorrador(desdeFijo(f))} className="rounded-lg border border-orange-300 px-2 py-0.5 text-xs font-medium text-orange-700 hover:bg-orange-50 dark:border-orange-800 dark:text-orange-300">Cargar</button>
               </div>
             ))}
@@ -316,19 +353,73 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
         </div>
       )}
 
-      {verFijos && <FijosEditables fijos={fijos} sociedadId={sociedadId} onCambio={recargar} />}
+      {verFijos && <FijosEditables fijos={fijos} sociedadId={sociedadId} onCambio={recargar} sicore={sicore} tituloSicore={tituloSicore} />}
     </div>
   );
 }
 
-/** Formulario de un gasto (nuevo o editar), en una línea. */
-function Editor({ b, cambiar, guardar, cancelar, guardando, titulo, aviso }: {
-  b: Borrador; cambiar: (b: Borrador) => void; guardar: (b: Borrador) => void; cancelar: () => void; guardando: boolean; titulo: string; aviso?: string;
+/** Formulario de un gasto (nuevo o editar), en una línea. "Leer VEP (IA)" lo completa y adjunta el archivo; no guarda solo. */
+function Editor({ b, cambiar, guardar, cancelar, guardando, titulo, aviso, fijos, original }: {
+  b: Borrador; cambiar: Dispatch<SetStateAction<Borrador | null>>; guardar: (b: Borrador) => void; cancelar: () => void; guardando: boolean; titulo: string; aviso?: string;
+  fijos: FijoRow[]; original?: FilaGasto;
 }) {
+  const { toast } = useToast();
+  const [leyendo, setLeyendo] = useState(false);
+  const [leido, setLeido] = useState<{ texto: string; otroMonto: number | null; sugerido: string | null } | null>(null);
   const set = (k: Partial<Borrador>) => cambiar({ ...b, ...k });
+  const otroMonto = leido?.otroMonto ?? null;
+  const fijoSugerido = leido?.sugerido ? fijos.find((f) => f.id === leido.sugerido) : undefined;
+
+  async function leerVep(archivo: File) {
+    const { id, fijoId } = b;
+    const montoAntes = Number(String(b.monto).replace(",", ".")) || 0;
+    setLeyendo(true); setLeido(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", archivo);
+      const res = await fetch("/api/parse-vep", { method: "POST", body: fd });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) throw new Error(json?.error || "No se pudo leer el VEP");
+      const d = json.data as DatosVep;
+      // Editando: el detalle sale del guardado (si se lee dos veces no se repite) y la fecha y el monto del pago quedan.
+      const r = gastoConVep(d, { detalle: original ? original.detalle : b.detalle, fecha: b.fecha, monto: montoAntes, editando: !!original });
+      // Solo si sigue abierto el mismo gasto (la IA tarda unos segundos).
+      cambiar((x) => (x && x.id === id && x.fijoId === fijoId ? {
+        ...x, detalle: r.detalle, grupo: "Impuestos", archivo, nota: r.nota,
+        fecha: r.fecha && r.fecha !== b.fecha ? r.fecha : x.fecha,
+        monto: r.monto > 0 && r.monto !== montoAntes ? String(r.monto) : x.monto,
+        moneda: original ? x.moneda : "ARS",
+      } : x));
+      setLeido({
+        texto: `✨ Leído por la IA: ${d.concepto}${d.periodo ? ` ${d.periodo.slice(5)}/${d.periodo.slice(0, 4)}` : ""}${d.numero ? ` · VEP ${d.numero}` : ""}. Revisá y guardá.`,
+        otroMonto: r.otroMonto,
+        sugerido: fijoId ? null : sugerirGastoFijo(`${d.concepto} ${d.detalle}`, fijos.map((f) => ({ id: f.id, descripcion: f.descripcion || "", activo: f.activo !== false }))),
+      });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLeyendo(false);
+    }
+  }
+
   return (
     <div className="space-y-1.5 rounded-lg border border-orange-300 bg-orange-50/60 p-2 dark:border-orange-800 dark:bg-orange-950/20" onClick={(e) => e.stopPropagation()}>
-      <p className="text-xs font-semibold text-orange-800 dark:text-orange-300">{titulo}</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs font-semibold text-orange-800 dark:text-orange-300">{titulo}</p>
+        <label title="Subí el PDF o la foto del VEP: completa impuesto, período, N° de VEP y monto, y lo adjunta. No guarda solo."
+          className={`inline-flex h-6 cursor-pointer items-center gap-1 rounded-md border border-orange-300 bg-white px-2 text-[11px] font-medium text-orange-700 hover:bg-orange-100 dark:border-orange-800 dark:bg-zinc-900 dark:text-orange-300 ${leyendo ? "pointer-events-none opacity-60" : ""}`}>
+          {leyendo ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />} {leyendo ? "Leyendo…" : "Leer VEP (IA)"}
+          <input type="file" accept="application/pdf,image/png,image/jpeg,image/webp" className="hidden" disabled={leyendo}
+            onChange={(e) => { const a = e.target.files?.[0]; if (a) void leerVep(a); e.target.value = ""; }} />
+        </label>
+        {b.archivo ? (
+          <span className="inline-flex items-center gap-1 text-[11px] text-zinc-600 dark:text-zinc-300"><Paperclip className="h-3 w-3" /> {b.archivo.name}
+            <button type="button" title="No adjuntarlo" onClick={() => set({ archivo: null })} className="rounded p-0.5 hover:bg-orange-100 dark:hover:bg-zinc-800"><X className="h-3 w-3" /></button>
+          </span>
+        ) : original?.comprobante ? (
+          <a href={original.comprobante} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[11px] text-orange-600 hover:underline"><Paperclip className="h-3 w-3" /> Ver el adjunto</a>
+        ) : null}
+      </div>
       <div className="flex flex-wrap items-center gap-1.5">
         <input type="date" value={b.fecha} onChange={(e) => set({ fecha: e.target.value })} className={control} />
         <div className="w-44"><Select value={b.grupo} onChange={(e) => set({ grupo: e.target.value as Grupo })} options={opcionesGrupo} className={sel} /></div>
@@ -340,13 +431,28 @@ function Editor({ b, cambiar, guardar, cancelar, guardando, titulo, aviso }: {
         <button type="button" disabled={guardando} onClick={() => guardar(b)} className="rounded-lg bg-orange-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">{guardando ? "Guardando…" : "Guardar"}</button>
         <button type="button" onClick={cancelar} className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm text-zinc-600 dark:border-zinc-600 dark:text-zinc-300">Cancelar</button>
       </div>
+      {leido && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+          <span className="text-emerald-700 dark:text-emerald-400">{leido.texto}</span>
+          {otroMonto != null && (
+            <span className="inline-flex flex-wrap items-center gap-1 text-amber-700 dark:text-amber-300">
+              <AlertTriangle className="h-3 w-3" /> El VEP es por {formatCurrency(otroMonto)} y el gasto por {formatCurrency(Number(String(b.monto).replace(",", ".")) || 0, b.moneda)}: el monto no se cambió.
+              <button type="button" onClick={() => { set({ monto: String(otroMonto) }); setLeido((l) => l && { ...l, otroMonto: null }); }} className="font-medium underline">Usar el del VEP</button>
+            </span>
+          )}
+          {fijoSugerido && (b.fijoId === fijoSugerido.id
+            ? <span className="text-zinc-600 dark:text-zinc-300">✓ Queda como pago del fijo «{fijoSugerido.descripcion}»</span>
+            : <button type="button" onClick={() => set({ fijoId: fijoSugerido.id, fijo: true })} className="font-medium text-orange-600 hover:underline">✨ ¿Es el pago del fijo «{fijoSugerido.descripcion}»? Usar</button>)}
+        </div>
+      )}
       {aviso && <p className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-300"><AlertTriangle className="h-3.5 w-3.5" /> {aviso}</p>}
     </div>
   );
 }
 
-/** Los gastos fijos (lo que se repite todos los meses): grupo, detalle, monto, día, pago (🔁) y activo, todo editable. */
-function FijosEditables({ fijos, sociedadId, onCambio }: { fijos: FijoRow[]; sociedadId: string; onCambio: () => void }) {
+/** Los gastos fijos (lo que se repite todos los meses): grupo, detalle, monto, día, pago (🔁) y activo, todo editable.
+ *  Los de Impuestos pueden llevar "SICORE auto": se cargan con las retenciones de Ganancias del mes anterior. */
+function FijosEditables({ fijos, sociedadId, onCambio, sicore, tituloSicore }: { fijos: FijoRow[]; sociedadId: string; onCambio: () => void; sicore: Sicore | null; tituloSicore: string }) {
   const { toast } = useToast();
   const [edit, setEdit] = useState<Record<string, Partial<FijoRow>>>({});
   const [guardando, setGuardando] = useState<string | null>(null);
@@ -378,7 +484,16 @@ function FijosEditables({ fijos, sociedadId, onCambio }: { fijos: FijoRow[]; soc
               <td className="px-1 py-1"><input value={String(val(f, "descripcion") || "")} onChange={(e) => set(f.id, { descripcion: e.target.value })} className={`${control} w-full min-w-[220px]`} /></td>
               <td className="px-1 py-1"><div className="w-48"><Select value={String(val(f, "medio_pago") || "")} onChange={(e) => set(f.id, { medio_pago: e.target.value || null })} options={opcionesMedio} placeholder="Sin definir" className={sel} /></div></td>
               <td className="px-1 py-1"><input type="number" min={1} max={31} value={val(f, "dia_vencimiento") ?? ""} onChange={(e) => set(f.id, { dia_vencimiento: e.target.value ? Number(e.target.value) : null })} className={`${control} w-16`} /></td>
-              <td className="px-1 py-1 text-right"><span className="mr-1 text-xs text-zinc-400">{String(f.moneda).toUpperCase() === "USD" ? "US$" : "$"}</span><input type="number" step="0.01" value={String(val(f, "monto") ?? "")} onChange={(e) => set(f.id, { monto: e.target.value })} className={`${control} w-28 text-right`} /></td>
+              <td className="whitespace-nowrap px-1 py-1 text-right">
+                {(grupoDe({ grupo: val(f, "grupo"), categoria: f.categoria }) === "Impuestos" || val(f, "calculo") === "sicore") && (
+                  <label title="Monto automático SICORE: retenciones de Ganancias del mes anterior (las del TXT SICORE)" className="mr-2 inline-flex items-center gap-1 text-[11px] text-zinc-500">
+                    <input type="checkbox" checked={val(f, "calculo") === "sicore"} onChange={(e) => set(f.id, { calculo: e.target.checked ? "sicore" : null })} className="h-3.5 w-3.5 accent-orange-500" /> SICORE auto
+                  </label>
+                )}
+                {val(f, "calculo") === "sicore"
+                  ? <span title={tituloSicore} className="inline-block w-32 font-mono text-xs"><span className="mr-1 font-sans text-[10px] text-zinc-400">auto</span>{formatCurrency(sicore?.monto ?? 0)}</span>
+                  : <><span className="mr-1 text-xs text-zinc-400">{String(f.moneda).toUpperCase() === "USD" ? "US$" : "$"}</span><input type="number" step="0.01" value={String(val(f, "monto") ?? "")} onChange={(e) => set(f.id, { monto: e.target.value })} className={`${control} w-28 text-right`} /></>}
+              </td>
               <td className="px-1 py-1">{edit[f.id] && <button type="button" disabled={guardando === f.id} onClick={() => guardar(f)} className="rounded-lg bg-orange-500 px-2 py-1 text-xs font-medium text-white hover:bg-orange-600 disabled:opacity-50">{guardando === f.id ? "…" : "Guardar"}</button>}</td>
             </tr>
           ))}

@@ -39,6 +39,27 @@ export async function traerRecibos(sociedadId: string): Promise<Recibo[]> {
   });
 }
 
+/** Un solo recibo, para abrirlo desde el resumen de cuenta sin traer todos (arreglo 22). */
+export async function traerRecibo(sociedadId: string, reciboId: string): Promise<Recibo | null> {
+  const { data: recibo } = await db.from("recibos").select("id, numero, fecha, cliente_id").eq("sociedad_id", sociedadId).eq("id", reciboId).maybeSingle();
+  if (!recibo) return null;
+  const { data: vinculos } = await db.from("recibo_movimientos").select("recibo_id, movimiento_id").eq("recibo_id", reciboId);
+  const movIds = (vinculos || []).map((v: any) => v.movimiento_id);
+  if (!movIds.length) return null;
+  const [{ data: movimientos }, { data: aplicaciones }, { data: cliente }] = await Promise.all([
+    db.from("movimientos").select("id, tipo, monto, monto_original, moneda, descripcion, anulado, conciliado, factura_id").eq("sociedad_id", sociedadId).in("id", movIds),
+    db.from("cobro_aplicaciones").select("id, movimiento_id, factura_id, monto").in("movimiento_id", movIds),
+    recibo.cliente_id ? db.from("clientes").select("id, razon_social").eq("id", recibo.cliente_id).maybeSingle() : Promise.resolve({ data: null }),
+  ]);
+  const facIds = [...new Set([...(movimientos || []).map((m: any) => m.factura_id), ...(aplicaciones || []).map((a: any) => a.factura_id)].filter(Boolean))];
+  const { data: facturas } = facIds.length ? await db.from("facturas").select("id, tipo, punto_venta, numero").in("id", facIds) : { data: [] };
+  return armarRecibos({
+    recibos: [recibo], vinculos: vinculos || [], movimientos: movimientos || [], aplicaciones: aplicaciones || [],
+    comprobantes: Object.fromEntries((facturas || []).map((f: any) => [f.id, comprobanteVenta(f)])),
+    clientes: cliente ? { [cliente.id]: cliente.razon_social } : {},
+  })[0] || null;
+}
+
 /** PDF del recibo: el mismo de Finanzas, con N°, cada medio y retención y las facturas cobradas. */
 export function htmlRecibo(r: Recibo, sociedad: Sociedad): string {
   const moneda: "ARS" | "USD" = r.total.USD > 0.005 && r.total.ARS <= 0.005 ? "USD" : "ARS";

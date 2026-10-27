@@ -1,7 +1,8 @@
 // Finanzas Lazza: lecturas de la base (solo SELECT, nada se guarda). Las cuentas están en lib/finanzas-lazza.
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
-import { armarTcDelDia, armarVencimientos, comprobanteVenta, saldoFacturaCompra, type FacturaCompraFL, type FacturaVentaFL, type FilaVencimiento, type GastoFL, type ItemCostoFL, type PagoDirectoFC, type TcDelDia } from "@/lib/finanzas-lazza";
+import { armarTcDelDia, armarVencimientos, comprobanteVenta, saldoFacturaCompra, type FacturaCompraFL, type FacturaVentaFL, type FilaVencimiento, type GastoFL, type GastoVepFL, type ItemCostoFL, type PagoDirectoFC, type RetencionIvaFL, type TcDelDia } from "@/lib/finanzas-lazza";
+import type { LineaMov } from "@/lib/movimientos-banco";
 import { calcularSaldosClientes, cobradoPorFactura, saldoFacturaVenta, traerDatosSaldoClientes, type SaldoCliente } from "@/lib/saldo-clientes";
 import { calcularSaldosProveedores, traerCreditosProveedores, type SaldoProveedor } from "@/lib/saldo-proveedores";
 import { sentidoAjuste } from "@/lib/tipos-movimiento";
@@ -85,10 +86,38 @@ export async function traerComprasDelMes(sociedadId: string, periodo: string): P
   const { desde, hasta } = rangoMes(periodo);
   const armar = (campos: string) => () => db.from("facturas_compra").select(campos)
     .eq("sociedad_id", sociedadId).gte("fecha", desde).lt("fecha", hasta).order("id");
-  const base = "id, fecha, tipo_comprobante, estado, moneda, subtotal, iva, total, numero_factura, proveedores(razon_social)";
+  const base = "id, fecha, tipo_comprobante, estado, moneda, subtotal, iva, percepciones, total, numero_factura, proveedores(razon_social)";
   // solo_iva puede no existir en alguna base vieja: sin la columna, se trae igual.
   const rows = await traerTodo<any>(armar(`${base}, solo_iva`)).catch(() => traerTodo<any>(armar(base)));
   return rows.map((r) => ({ ...r, fecha: String(r.fecha).slice(0, 10), proveedor: r.proveedores?.razon_social ?? "" }));
+}
+
+/**
+ * Lo que el IVA del mes tiene a cuenta (arreglo 16, 27/10/2026): las retenciones de IVA que nos hicieron los clientes,
+ * las líneas del banco del mes (ivaDelMes se queda con las de IVA) y los gastos del mes y de los 2 siguientes,
+ * donde están los VEP que pagan el IVA del mes.
+ */
+export async function traerIvaACuenta(sociedadId: string, periodo: string): Promise<{ retenciones: RetencionIvaFL[]; lineasBanco: LineaMov[]; gastos: GastoVepFL[] }> {
+  const { desde, hasta } = rangoMes(periodo);
+  const [retenciones, cuentas, gastos] = await Promise.all([
+    traerTodo<any>(() => db.from("movimientos").select("id, fecha, monto, moneda, anulado, descripcion, clientes(razon_social)")
+      .eq("sociedad_id", sociedadId).eq("tipo", "retencion_iva").not("cliente_id", "is", null).gte("fecha", desde).lt("fecha", hasta).order("id")),
+    db.from("cuentas_financieras").select("id").eq("sociedad_id", sociedadId),
+    traerTodo<any>(() => db.from("gastos_manuales").select("id, fecha, monto, moneda, descripcion")
+      .eq("sociedad_id", sociedadId).gte("fecha", desde).lt("fecha", `${sumarMeses(periodo, 3)}-01`).order("id")),
+  ]);
+  if (cuentas.error) throw cuentas.error;
+  const ids: string[] = (cuentas.data || []).map((c: { id: string }) => c.id);
+  const lineas = ids.length
+    ? await traerTodo<any>(() => db.from("extracto_movimientos").select("id, fecha, descripcion, monto, tipo, clasificacion, subtipo")
+        .in("cuenta_id", ids).gte("fecha", desde).lt("fecha", hasta).order("id"))
+    : [];
+  const dia = (f: unknown) => String(f).slice(0, 10);
+  return {
+    retenciones: retenciones.map((m) => ({ ...m, fecha: dia(m.fecha), cliente: m.clientes?.razon_social ?? "" })),
+    lineasBanco: lineas.map((l) => ({ ...l, fecha: dia(l.fecha), monto: Number(l.monto) })),
+    gastos: gastos.map((g) => ({ ...g, fecha: dia(g.fecha) })),
+  };
 }
 
 export interface Deudas {

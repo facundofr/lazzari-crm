@@ -7,7 +7,7 @@
 // Órdenes de pago (19/10): "Nueva OP" → la misma ventana de OP de Finanzas (pagar.tsx). 20/10: Anular (y "Anular y pagar de nuevo").
 // Mismos datos y reglas que las pestañas de Finanzas; acá solo se miran, con filtros y orden por columna.
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Ban, Download, Eye, HandCoins, Loader2, Mail, MailCheck, Plus, Search, Wallet } from "lucide-react";
+import { AlertTriangle, Ban, Download, Eye, HandCoins, Loader2, Mail, MailCheck, Plus, Search, Wallet } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
@@ -21,6 +21,8 @@ import { descargarOP, EnviarOrdenPago, verOP } from "@/components/finanzas-lazza
 import { CobrarCliente } from "@/components/finanzas-lazza/cobrar";
 import { PagarProveedor } from "@/components/finanzas-lazza/pagar";
 import { NuevoMovimiento } from "@/components/finanzas-lazza/nuevo-movimiento";
+import { Modal } from "@/components/ui/modal";
+import { pctTexto, type AvisosSicore } from "@/lib/certificado-retencion";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -34,6 +36,18 @@ const TIPO_LABEL: Record<string, string> = {
   retencion_iva: "Ret. IVA", retencion_ganancias: "Ret. Ganancias", retencion_iibb: "Ret. IIBB", retencion_suss: "Ret. SUSS",
 };
 const MEDIO_LABEL: Record<string, string> = { transferencia: "Transf.", cheque: "Cheque", cheque_propio: "Ch. propio", echeq: "E-Cheq", deposito: "Depósito", tarjeta: "Tarjeta", efectivo: "Efectivo" };
+
+/**
+ * Columna "Banco": conciliado (verde), registrado (gris) o pendiente (ámbar). Desde Finanzas simple las transferencias
+ * no se cruzan con el banco: quedan "Registrado", no "Pendiente" para siempre (auditoría UX 26/10/2026, arreglo 6).
+ */
+function EstadoBanco({ anulado = false, banco }: { anulado?: boolean; banco: "conciliado" | "registrado" | "pendiente" }) {
+  if (anulado) return <span className="text-xs text-red-600">Anulado</span>;
+  if (banco === "conciliado") return <span className="text-xs text-emerald-600">Conciliado</span>;
+  if (banco === "registrado") return <span className="text-xs text-zinc-500" title="Transferencia: se registra y no se cruza con el banco">Registrado</span>;
+  return <span className="text-xs text-amber-600">Pendiente</span>;
+}
+const ORDEN_BANCO = { pendiente: 1, registrado: 2, conciliado: 3 } as const;
 
 /** Carga con aviso de error y "Cargando…". */
 function useCarga<T>(cargar: () => Promise<T>, deps: unknown[]): { datos: T | null; error: string | null } {
@@ -237,6 +251,7 @@ export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string })
 // ── Movimientos (base de Recibos y Movimientos) ─────────────────────
 
 interface Mov { id: string; tipo: string; fecha: string; monto: number; montoOriginal: number | null; moneda: "ARS" | "USD"; descripcion: string; conciliado: boolean; anulado: boolean; nombre: string; clase: ClaseMovimiento; cobro: boolean; facturaVenta: boolean; facturaCompra: boolean }
+const bancoDeMov = (m: Mov): "conciliado" | "registrado" | "pendiente" => (m.conciliado ? "conciliado" : m.tipo === "transferencia" ? "registrado" : "pendiente");
 
 async function traerMovimientos(sociedadId: string): Promise<Mov[]> {
   const rows = await traerTodo<any>(() => db.from("movimientos")
@@ -268,7 +283,7 @@ function RecibosPorMovimiento({ sociedadId }: { sociedadId: string }) {
     { key: "descripcion", label: "Detalle", sortable: true, sortValue: (m) => m.descripcion, render: (m) => <span className="text-xs">{m.descripcion || "Cobro de cliente"}</span> },
     { key: "tipo", label: "Medio", sortable: true, sortValue: (m) => m.tipo, render: (m) => <span className="text-xs">{TIPO_LABEL[m.tipo] || m.tipo}</span> },
     { key: "monto", label: "Importe", sortable: true, sortValue: (m) => m.monto, className: "text-right", render: (m) => <span className="whitespace-nowrap font-mono font-semibold text-emerald-700 dark:text-emerald-400">{formatCurrency(m.monto, m.moneda)}</span> },
-    { key: "conciliado", label: "Banco", sortable: true, sortValue: (m) => (m.conciliado ? 1 : 0), render: (m) => <span className={`text-xs ${m.conciliado ? "text-emerald-600" : "text-amber-600"}`}>{m.conciliado ? "Conciliado" : "Pendiente"}</span> },
+    { key: "conciliado", label: "Banco", sortable: true, sortValue: (m) => ORDEN_BANCO[bancoDeMov(m)], render: (m) => <EstadoBanco banco={bancoDeMov(m)} /> },
   ];
   return (
     <>
@@ -336,7 +351,7 @@ export function FinanzasLazzaRecibos({ sociedadId }: { sociedadId: string }) {
     { key: "total", label: "Importe", sortable: true, sortValue: (r) => r.total.ARS + r.total.USD * 1000, className: "text-right", render: (r) => (
       <span className={`whitespace-nowrap font-mono font-semibold ${r.anulado ? "text-zinc-400 line-through" : "text-emerald-700 dark:text-emerald-400"}`}>{textoTotalRecibo(r.total, (v, m) => formatCurrency(v, m))}</span>
     ) },
-    { key: "estado", label: "Banco", sortable: true, sortValue: (r) => (r.anulado ? 0 : r.conciliado ? 2 : 1), render: (r) => <span className={`text-xs ${r.anulado ? "text-red-600" : r.conciliado ? "text-emerald-600" : "text-amber-600"}`}>{r.anulado ? "Anulado" : r.conciliado ? "Conciliado" : "Pendiente"}</span> },
+    { key: "estado", label: "Banco", sortable: true, sortValue: (r) => (r.anulado ? 0 : ORDEN_BANCO[r.banco]), render: (r) => <EstadoBanco anulado={r.anulado} banco={r.banco} /> },
     { key: "acciones", label: "", render: (r) => (
       <span className="flex justify-end gap-0.5">
         <button type="button" title="Ver el recibo (se abre en otra pestaña, sin descargar)" onClick={(e) => { e.stopPropagation(); pdf(r, true); }}
@@ -403,7 +418,7 @@ export function FinanzasLazzaMovimientos({ sociedadId }: { sociedadId: string })
       const sale = m.clase === "egreso";
       return <span className={`whitespace-nowrap font-mono ${entra ? "text-emerald-700 dark:text-emerald-400" : sale ? "text-red-600" : ""}`}>{entra ? "+" : sale ? "−" : ""}{formatCurrency(m.monto, m.moneda)}</span>;
     } },
-    { key: "estado", label: "Estado", sortable: true, sortValue: (m) => (m.anulado ? "a" : m.conciliado ? "c" : "p"), render: (m) => <span className={`text-xs ${m.anulado ? "text-red-600" : m.conciliado ? "text-emerald-600" : "text-amber-600"}`}>{m.anulado ? "Anulado" : m.conciliado ? "Conciliado" : "Pendiente"}</span> },
+    { key: "estado", label: "Estado", sortable: true, sortValue: (m) => (m.anulado ? 0 : ORDEN_BANCO[bancoDeMov(m)]), render: (m) => <EstadoBanco anulado={m.anulado} banco={bancoDeMov(m)} /> },
   ];
   return (
     <>
@@ -434,17 +449,27 @@ const REGIMEN_TEXTO: Record<string, string> = { "078": "Bienes", "094": "Servici
 /**
  * Exportar las retenciones de Ganancias practicadas (lo que se presenta en SICORE) del rango de fechas:
  * TXT con el formato de importación de SICORE (/api/sicore, el mismo de Finanzas) y Excel con esos mismos renglones.
+ * Antes del TXT, un control que solo avisa (auditoría UX 26/10/2026, arreglo 13): proveedores sin concepto y
+ * retenciones calculadas con otro % o mínimo que el del concepto de hoy. "Bajar el TXT igual" lo baja sin cambios.
  */
 function ExportarSicore({ sociedadId, desde, hasta }: { sociedadId: string; desde: string; hasta: string }) {
   const [bajando, setBajando] = useState<"" | "txt" | "excel">("");
-  const bajar = async (formato: "txt" | "excel") => {
+  const [avisos, setAvisos] = useState<AvisosSicore | null>(null);
+  const bajar = async (formato: "txt" | "excel", revisado = false) => {
     if (!desde) { alert("Elegí la fecha desde."); return; }
     const h = hasta || todayAR();
     setBajando(formato);
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      const r = await fetch(`/api/sicore?desde=${desde}&hasta=${h}&sociedad_id=${sociedadId}${formato === "excel" ? "&formato=json" : ""}`,
+      const pedir = (json: boolean) => fetch(`/api/sicore?desde=${desde}&hasta=${h}&sociedad_id=${sociedadId}${json ? "&formato=json" : ""}`,
         { headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {} });
+      if (formato === "txt" && !revisado) {
+        const c = await pedir(true);
+        if (!c.ok) { const j = await c.json().catch(() => ({})); alert(j.error || "No se pudo armar el archivo."); return; }
+        const { avisos: a } = await c.json() as { avisos?: AvisosSicore };
+        if (a && (a.distintos.length > 0 || a.sinConcepto.length > 0)) { setAvisos(a); return; }
+      }
+      const r = await pedir(formato === "excel");
       if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || "No se pudo armar el archivo."); return; }
       const nombre = `Retenciones SICORE ${desde} a ${h}`;
       if (formato === "txt") {
@@ -469,6 +494,9 @@ function ExportarSicore({ sociedadId, desde, hasta }: { sociedadId: string; desd
     } finally { setBajando(""); }
   };
   const boton = "flex h-8 items-center gap-1 rounded-lg border px-2.5 text-xs font-medium disabled:opacity-50";
+  // Solo lo que no coincide: "al 2 % con mínimo $ 224.000,00".
+  const como = (d: AvisosSicore["distintos"][number], pct: number, minimo: number | null) =>
+    [d.difPct ? `al ${pctTexto(pct)}` : "", d.difMinimo && minimo !== null ? `con mínimo ${formatCurrency(minimo, "ARS")}` : ""].filter(Boolean).join(" ");
   return (
     <>
       <button type="button" disabled={!!bajando} onClick={() => void bajar("txt")} title="Retenciones de Ganancias practicadas del rango, en el formato para importar en SICORE"
@@ -479,6 +507,35 @@ function ExportarSicore({ sociedadId, desde, hasta }: { sociedadId: string; desd
         className={`${boton} border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-300`}>
         {bajando === "excel" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />} Excel
       </button>
+      <Modal open={!!avisos} onClose={() => setAvisos(null)} title="Antes de bajar el TXT SICORE" size="lg"
+        footer={<>
+          <button type="button" onClick={() => setAvisos(null)} className="rounded-lg border border-zinc-200 px-3 py-1.5 text-sm dark:border-zinc-700">Cancelar</button>
+          <button type="button" onClick={() => { setAvisos(null); void bajar("txt", true); }} className="rounded-lg bg-orange-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-600">Bajar el TXT igual</button>
+        </>}>
+        {avisos && <div className="space-y-4 text-sm">
+          {avisos.distintos.length > 0 && <div>
+            <p className="flex items-center gap-1.5 font-semibold text-amber-700 dark:text-amber-400">
+              <AlertTriangle className="h-4 w-4 shrink-0" /> {avisos.distintos.length === 1 ? "1 retención se calculó" : `${avisos.distintos.length} retenciones se calcularon`} con otro concepto que el que el proveedor tiene hoy
+            </p>
+            <p className="mt-0.5 text-xs text-zinc-500">El TXT las manda con el concepto de hoy. Miralo con el contador antes de presentar.</p>
+            <ul className="mt-2 space-y-1.5">
+              {avisos.distintos.map((d, i) => (
+                <li key={i} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs dark:border-amber-800 dark:bg-amber-950/30">
+                  <b>{d.comprobante}</b> · {d.proveedor} · {formatDate(d.fecha)}: se retuvo {como(d, d.pct, d.minimo)}; hoy está como {REGIMEN_TEXTO[d.regimen] || "otro concepto"} (régimen {Number(d.regimen)}), que corresponde {como(d, d.pctHoy, d.minimoHoy)}.
+                </li>
+              ))}
+            </ul>
+          </div>}
+          {avisos.sinConcepto.length > 0 && <div>
+            <p className="font-semibold text-zinc-800 dark:text-zinc-200">
+              {avisos.sinConcepto.length === 1 ? "1 proveedor sin concepto" : `${avisos.sinConcepto.length} proveedores sin concepto`} de Ganancias: van como régimen 78 (bienes)
+            </p>
+            <p className="mt-0.5 text-xs text-zinc-500">Si alguno no vende bienes (servicios, transporte, alquiler), cargale el concepto en Proveedores antes de bajar el TXT.</p>
+            <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-300">{avisos.sinConcepto.map((p) => `${p.proveedor} (${formatCurrency(p.retenido, "ARS")})`).join(" · ")}</p>
+          </div>}
+          <p className="text-xs text-zinc-500">Es solo un aviso: el TXT sale igual, sin cambios.</p>
+        </div>}
+      </Modal>
     </>
   );
 }

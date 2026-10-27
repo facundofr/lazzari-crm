@@ -31,6 +31,19 @@ export const REGIMEN_RG830: Record<string, string> = {
 /** Código de régimen del concepto (sin concepto o desconocido → 078 bienes, como en la línea). */
 export const regimenSicore = (concepto?: string | null) => REGIMEN_RG830[concepto || "compraventa_bienes"] || "078";
 
+/** Nombre de cada régimen, para el certificado de retención (tabla de regímenes de SICORE, impuesto 217). */
+export const REGIMEN_NOMBRE: Record<string, string> = {
+  "078": "Enajenación de bienes muebles y bienes de cambio",
+  "094": "Locaciones de obra y/o servicios no ejecutados en relación de dependencia",
+  "095": "Operaciones de transporte de carga nacional e internacional",
+  "116": "Honorarios y profesiones liberales",
+  "031": "Alquileres de inmuebles urbanos",
+  "030": "Alquileres de bienes muebles",
+  "019": "Intereses por operaciones en entidades financieras",
+  "021": "Intereses de otras operaciones",
+  "025": "Comisiones de comisionistas, rematadores, consignatarios y demás auxiliares de comercio",
+};
+
 /** Texto a la izquierda, relleno con espacios a la derecha, cortado al largo. */
 const izq = (s: string, len: number) => s.slice(0, len).padEnd(len, " ");
 /** Número a la derecha, relleno con ceros a la izquierda. */

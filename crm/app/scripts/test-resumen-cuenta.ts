@@ -1,7 +1,7 @@
 // npx tsx scripts/test-resumen-cuenta.ts
 // Resumen de cuenta corriente (Finanzas Lazza): todos los movimientos con saldo acumulado, mismas reglas que la ficha.
 import assert from "node:assert/strict";
-import { resumenCliente, resumenProveedor, diferenciaResumen, detalleCortoCobro } from "../src/lib/resumen-cuenta";
+import { resumenCliente, resumenProveedor, diferenciaResumen, detalleCortoCobro, resumenDesde } from "../src/lib/resumen-cuenta";
 import { sentidoAjuste } from "../src/lib/tipos-movimiento";
 
 // ── Cliente tipo Del Sol: cobro aplicado, factura anulada pagada (sobrante sin aplicar), NC que la anula,
@@ -162,6 +162,108 @@ import { sentidoAjuste } from "../src/lib/tipos-movimiento";
   assert.equal(r.saldo.ARS, -10110492.35, "a favor del cliente");
   // Sin las aplicaciones (como antes), la NC queda solo con su factura de origen.
   assert.equal(resumenCliente(facturas, movimientos as any, []).renglones.find((x) => x.id === "nc25")!.nota, "anula FA 0015-00000010 · a favor $ 10.110.492,35");
+}
+
+// ── Arreglo 22: cobro FX tipo Termo (recibo 1041), qué abre cada renglón y el resumen "desde".
+{
+  const facturas = [
+    { id: "fa7", tipo: "FA", punto_venta: 15, numero: 7, fecha: "2026-09-10", total: 834.77, total_acreditado: 0, moneda: "USD", estado: "pagada" },
+    { id: "fa9", tipo: "FA", punto_venta: 15, numero: 9, fecha: "2026-10-20", total: 1000, total_acreditado: 0, moneda: "ARS", estado: "emitida" },
+  ];
+  const movimientos = [
+    { id: "fx", tipo: "cobro", monto: 1241525.26, fecha: "2026-10-03", moneda: "ARS", descripcion: "Cobro FX — transferencia OP Termo" },
+    { id: "rg", tipo: "retencion_ganancias", monto: 17201.04, fecha: "2026-10-03", moneda: "ARS", descripcion: "Cobro FX — retencion_ganancias 000000002302 | TC 1530" },
+    { id: "ri", tipo: "retencion_iibb", monto: 18471.8, fecha: "2026-10-03", moneda: "ARS" },
+    { id: "suelta", tipo: "retencion_iva", monto: 100, fecha: "2026-10-05", moneda: "ARS" },
+    { id: "aj", tipo: "ajuste", monto: 50, fecha: "2026-10-21", moneda: "ARS", ajuste_sentido: "debito" },
+  ];
+  const info = new Map([["fx", { recibo: 1041, reciboId: "r1041" }], ["rg", { recibo: 1041, reciboId: "r1041" }], ["ri", { recibo: 1041, reciboId: "r1041" }], ["suelta", { recibo: 1050, reciboId: "r1050" }]]);
+  const r = resumenCliente(facturas, movimientos as any, [{ movimiento_id: "fx", factura_id: "fa7", monto: 834.77 }], info);
+  const ret = (id: string) => r.renglones.find((x) => x.id === id)!;
+  assert.equal(ret("rg").nota, "incluida en el cobro en US$ del recibo 1041", "la retención del cobro FX ya está en lo aplicado en US$");
+  assert.equal(ret("ri").nota, "incluida en el cobro en US$ del recibo 1041");
+  assert.equal(ret("rg").suma, false, "sigue sin sumar aparte");
+  assert.equal(ret("suelta").nota, "sin factura aplicada: no suma", "una retención de otro recibo sigue igual");
+  assert.equal(r.saldo.USD, 0);
+  // Qué abre cada renglón.
+  assert.deepEqual(ret("fa7").doc, { tipo: "factura_venta", id: "fa7" });
+  assert.deepEqual(ret("fx").doc, { tipo: "recibo", id: "r1041" });
+  assert.equal(ret("aj").doc, undefined, "el ajuste no abre nada");
+  // Desde el 15/10: lo anterior queda en el saldo anterior; el saldo final no cambia.
+  const d = resumenDesde(r, "2026-10-15");
+  assert.deepEqual(d.renglones.map((x) => x.id), ["fa9", "aj"]);
+  assert.deepEqual(d.anterior, { ARS: 0, USD: 0 });
+  assert.equal(d.renglones.at(-1)!.saldo, r.saldo.ARS);
+  const d2 = resumenDesde(r, "2026-10-21");
+  assert.deepEqual(d2.anterior, { ARS: 1000, USD: 0 }, "antes del 21/10 debía la FA 15-9");
+  assert.deepEqual(resumenDesde(r, ""), { renglones: r.renglones, anterior: null }, "sin fecha, todo");
+}
+
+// ── Arreglo 22, proveedor: la factura, la OP y el pago directo abren su documento.
+{
+  const facturas = [{ id: "fc1", numero_factura: "1-10", tipo_comprobante: "FC A", fecha: "2026-10-01", total: 300, moneda: "ARS", estado: "emitida" }];
+  const ordenes = [{ id: "op1", numero: "OP-000090", fecha: "2026-10-05", monto_bruto: 100, moneda: "ARS", estado: "pagada", op_facturas_compra: [{ factura_compra_id: "fc1", monto: 100 }] }];
+  const movimientos = [
+    { id: "p1", tipo: "pago", monto: 100, fecha: "2026-10-05", moneda: "ARS", orden_pago_id: "op1" },
+    { id: "pd", tipo: "pago", monto: 50, fecha: "2026-10-06", moneda: "ARS", factura_compra_id: "fc1" },
+  ];
+  const r = resumenProveedor(facturas, ordenes, movimientos as any, sentidoAjuste);
+  assert.deepEqual(r.renglones.find((x) => x.id === "fc1")!.doc, { tipo: "factura_compra", id: "fc1" });
+  assert.deepEqual(r.renglones.find((x) => x.id === "op1")!.doc, { tipo: "op", id: "op1" });
+  assert.deepEqual(r.renglones.find((x) => x.id === "pd")!.doc, { tipo: "factura_compra", id: "fc1" }, "el pago directo abre su factura");
+  assert.equal(r.saldo.ARS, 150);
+}
+
+// ── Arreglo 23: el ajuste manual vigente se puede anular desde la ficha (`ajusteId`); el saldo a favor que deja un
+//    cobro, no. El anulado (gestionar_cobro: monto 0, "[ANULADO]" adelante) queda tachado, con quién y cuándo.
+{
+  const facturas = [{ id: "fa", tipo: "FA", punto_venta: 15, numero: 70, fecha: "2026-10-01", total: 1000, total_acreditado: 0, moneda: "ARS", estado: "parcial" }];
+  const movimientos = [
+    { id: "deb", tipo: "ajuste", monto: 272250, fecha: "2026-08-20", moneda: "ARS", ajuste_sentido: "debito", descripcion: "[Ajuste manual] Factura impaga del sistema anterior." },
+    { id: "auto", tipo: "ajuste", monto: 9630, fecha: "2026-10-05", moneda: "ARS", ajuste_sentido: "credito", descripcion: "Saldo a favor: pagó de más — Facturas: FA 0015-00000001" },
+    { id: "apl", tipo: "ajuste", monto: 400, fecha: "2026-10-02", moneda: "ARS", ajuste_sentido: "credito", factura_id: "fa", descripcion: "[Ajuste manual] Diferencia — aplicado a la FA 0015-00000070" },
+    { id: "anu", tipo: "ajuste", monto: 0, monto_original: 500, fecha: "2026-10-10", moneda: "ARS", ajuste_sentido: "debito", anulado: true,
+      anulado_at: "2026-10-27T18:40:00Z", anulado_por: "u1", anulado_por_nombre: "Augusto Lazzari", descripcion: "[ANULADO] [Ajuste manual] Cargo duplicado" },
+  ];
+  const r = resumenCliente(facturas, movimientos as any, []);
+  const ren = (id: string) => r.renglones.find((x) => x.id === id)!;
+  assert.equal(ren("deb").ajusteId, "deb", "el ajuste manual vigente se puede anular");
+  assert.equal(ren("auto").ajusteId, undefined, "el saldo a favor de un cobro no");
+  assert.equal(ren("apl").ajusteId, "apl");
+  assert.deepEqual(ren("apl").aplicadoA, ["FA 0015-00000070"], "si se anula, esa factura vuelve a deber");
+  assert.equal(ren("deb").aplicadoA, undefined);
+  const anu = ren("anu");
+  assert.equal(anu.anulado, true);
+  assert.equal(anu.suma, false);
+  assert.equal(anu.ajusteId, undefined, "ya anulado: sin botón");
+  assert.equal(anu.importe, 500, "el importe que tenía, tachado");
+  assert.equal(anu.detalle, "[Ajuste manual] Cargo duplicado", "sin el [ANULADO] repetido");
+  assert.equal(anu.nota, "anulado", "el PDF y el Excel siguen diciendo «anulado»");
+  assert.deepEqual(anu.anulacion, { por: "Augusto Lazzari", el: "2026-10-27T18:40:00Z" });
+  assert.equal(ren("auto").anulacion, undefined);
+  // FA 1.000 − 400 aplicados + 272.250 de cargo − 9.630 a favor; el anulado no suma.
+  assert.equal(r.saldo.ARS, 263220);
+  // Un cobro anulado sigue como antes: sin quién ni cuándo.
+  const c = resumenCliente([], [{ id: "c", tipo: "transferencia", monto: 0, monto_original: 10, fecha: "2026-10-01", moneda: "ARS", anulado: true, anulado_at: "2026-10-02T12:00:00Z", anulado_por_nombre: "Augusto Lazzari", descripcion: "[ANULADO] Cobro" }] as any, []);
+  assert.equal(c.renglones[0].anulacion, undefined);
+}
+
+// ── Arreglo 23, proveedor (tipo Manuel Gubia): ajuste manual a favor del proveedor vigente y uno anulado.
+{
+  const movimientos = [
+    { id: "gubia", tipo: "ajuste", monto: 497355.41, fecha: "2026-10-17", moneda: "ARS", ajuste_sentido: "credito", descripcion: "[Ajuste manual] Sistema anterior — OP-000001 pagó facturas del sistema anterior" },
+    { id: "anu", tipo: "ajuste", monto: 0, monto_original: 100, fecha: "2026-10-18", moneda: "ARS", ajuste_sentido: "debito", anulado: true,
+      anulado_at: "2026-10-27T18:40:00Z", anulado_por_nombre: null, descripcion: "[ANULADO] [Ajuste manual] Cargo mal cargado" },
+  ];
+  const r = resumenProveedor([], [], movimientos as any, sentidoAjuste);
+  const gubia = r.renglones.find((x) => x.id === "gubia")!;
+  assert.equal(gubia.ajusteId, "gubia");
+  assert.equal(gubia.debe, 497355.41, "a favor del proveedor: le debemos");
+  const anu = r.renglones.find((x) => x.id === "anu")!;
+  assert.equal(anu.detalle, "[Ajuste manual] Cargo mal cargado");
+  assert.deepEqual(anu.anulacion, { por: null, el: "2026-10-27T18:40:00Z" }, "sin nombre: igual dice cuándo");
+  assert.equal(anu.ajusteId, undefined);
+  assert.equal(r.saldo.ARS, 497355.41);
 }
 
 console.log("test-resumen-cuenta OK");

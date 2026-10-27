@@ -61,7 +61,8 @@ export function FxSettlementDialog({ kind, sociedadId, counterpartyId, documents
   const [loadingQuote, setLoadingQuote] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [leyendoOp, setLeyendoOp] = useState(false);
-  const [opMensaje, setOpMensaje] = useState<{ ok: boolean; lineas: string[] } | null>(null);
+  // aviso: lo leído trae algo para revisar → ámbar, no verde (auditoría UX 26/10/2026, arreglo 6).
+  const [opMensaje, setOpMensaje] = useState<{ ok: boolean; lineas: string[]; aviso?: boolean } | null>(null);
   const [opConOtras, setOpConOtras] = useState<OpParsed | null>(null);
   const opFileRef = useRef<HTMLInputElement>(null);
   const quoteRequest = useRef(0);
@@ -132,6 +133,7 @@ export function FxSettlementDialog({ kind, sociedadId, counterpartyId, documents
     try {
       const plan = buildOrdenPagoPlan(parsed, documents.map(d => ({ id: d.id, numero: d.numero })));
       const lineas: string[] = [];
+      const avisos: string[] = [];
       const ars = (n: number) => formatCurrency(n, "ARS");
 
       // Fecha de la operación = fecha del pago (nunca futura).
@@ -166,25 +168,25 @@ export function FxSettlementDialog({ kind, sociedadId, counterpartyId, documents
       const mediosOk = plan.medios
         .map(m => (esCheque(m.tipo) && permitidos.includes("cheque_recibido") ? { ...m, tipo: "cheque_recibido", chequeTipo: m.tipo } : { ...m, chequeTipo: "" }))
         .filter(m => permitidos.includes(m.tipo));
-      if (mediosOk.length < plan.medios.length) lineas.push("La orden incluye medios que este formulario no registra (cheques en pagos u otros): revisalos.");
-      if (mediosOk.some(m => m.tipo === "cheque_recibido")) lineas.push("La orden incluye cheques o eCheqs: se imputan a la factura, pero no quedan en la cartera de Cheques. Cargalos en Finanzas > Cheques (eso no genera otro cobro).");
+      if (mediosOk.length < plan.medios.length) avisos.push("La orden incluye medios que este formulario no registra (cheques en pagos u otros): revisalos.");
+      if (mediosOk.some(m => m.tipo === "cheque_recibido")) avisos.push("La orden incluye cheques o eCheqs: se imputan a la factura, pero no quedan en la cartera de Cheques. Cargalos en Finanzas > Cheques (eso no genera otro cobro).");
       if (mediosOk.length) setMedios(mediosOk.map(m => ({ tipo: m.tipo, monto: toDecimalInput(m.monto), fecha: fechaOp, referencia: [m.chequeTipo === "echeq" ? "eCheq" : m.chequeTipo ? "Cheque" : "", m.tipo === "cheque_recibido" ? m.referencia : "", plan.referencia && `OP ${plan.referencia}`, m.banco].filter(Boolean).join(" · ") || m.referencia })));
 
       const retOk = plan.retenciones.filter(r => retentionTypes.some(t => t.value === r.tipo));
-      if (retOk.length < plan.retenciones.length) lineas.push("Hay percepciones u otros descuentos que este formulario no admite: revisalos.");
+      if (retOk.length < plan.retenciones.length) avisos.push("Hay percepciones u otros descuentos que este formulario no admite: revisalos.");
       setRetenciones(retOk.map(r => ({ tipo: r.tipo, monto: toDecimalInput(r.monto), certificado: r.certificado })));
-      if (retOk.some(r => !r.certificado)) lineas.push("Alguna retención vino sin número de certificado: completalo antes de confirmar.");
+      if (retOk.some(r => !r.certificado)) avisos.push("Alguna retención vino sin número de certificado: completalo antes de confirmar.");
 
       setOpConOtras(plan.otras.length && !ordenPagoAvisos ? parsed : null);
-      if (ordenPagoAvisos) lineas.push(...ordenPagoAvisos);
+      if (ordenPagoAvisos) avisos.push(...ordenPagoAvisos);
       else for (const o of plan.otras) {
         const det = o.retenciones.map(r => `${retentionTypes.find(t => t.value === r.tipo)?.label || r.tipo} ${ars(r.monto)}`).join(", ");
-        lineas.push(`La orden también paga ${o.comprobante} por ${ars(o.importe)}: cobrala aparte con ${ars(o.medios)} del pago${det ? ` + retenciones ${det}` : ""}.`);
+        avisos.push(`La orden también paga ${o.comprobante} por ${ars(o.importe)}: cobrala aparte con ${ars(o.medios)} del pago${det ? ` + retenciones ${det}` : ""}.`);
       }
       // Una transferencia o un cheque suelto no trae detalle de facturas: ese aviso es solo para órdenes de pago.
       const esOrden = !!parsed.orden_pago_cliente || (parsed.facturas_pagadas || []).length > 0;
-      lineas.push(...(esOrden ? plan.avisos : plan.avisos.filter(a => !a.startsWith("La IA no encontró el detalle de facturas"))));
-      setOpMensaje({ ok: true, lineas: [`IA leyó la orden de pago${plan.referencia ? ` N° ${plan.referencia}` : ""}. Revisá los datos antes de confirmar.`, ...lineas] });
+      avisos.push(...(esOrden ? plan.avisos : plan.avisos.filter(a => !a.startsWith("La IA no encontró el detalle de facturas"))));
+      setOpMensaje({ ok: true, aviso: avisos.length > 0, lineas: [`IA leyó la orden de pago${plan.referencia ? ` N° ${plan.referencia}` : ""}. Revisá los datos antes de confirmar.`, ...lineas, ...avisos] });
     } catch (e) {
       setOpMensaje({ ok: false, lineas: [e instanceof Error ? e.message : "No se pudo aplicar la orden de pago."] });
     }
@@ -311,7 +313,10 @@ export function FxSettlementDialog({ kind, sociedadId, counterpartyId, documents
     finally { inFlight.current = false; setSaving(false); }
   }
 
-  return <Modal open onClose={() => { if (!saving) onClose(); }} size="xl" title={`${kind === "cobro" ? "Cobrar" : "Pagar"} facturas USD en pesos`} description="La cotización de esta liquidación no modifica la factura original." footer={<><button type="button" className={button} disabled={saving} onClick={onClose}>Cerrar</button><button type="button" className="rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50" disabled={saving || loadingQuote} onClick={guardar}>{saving ? "Registrando…" : submitted ? "Reintentar la misma operación" : "Confirmar liquidación"}</button></>}>
+  // 26/10/2026 (auditoría UX, arreglo 3): con algo cargado, Escape, el clic afuera y la X preguntan antes de cerrar (como Presupuestos).
+  // «Cerrar» cierra directo. Una operación ya enviada se recupera sola al volver a abrir: no pregunta.
+  const hayCargado = !submitted && (Object.values(allocations).some(v => v.trim() !== "") || medios.some(m => m.monto.trim() !== "" || m.referencia.trim() !== "") || retenciones.length > 0);
+  return <Modal open onClose={() => { if (!saving) onClose(); }} confirmarCierre={!saving && hayCargado ? "¿Estás seguro que deseas salir sin guardar? Se pierde lo que cargaste en esta liquidación." : undefined} size="xl" title={`${kind === "cobro" ? "Cobrar" : "Pagar"} facturas USD en pesos`} description="La cotización de esta liquidación no modifica la factura original." footer={<><button type="button" className={button} disabled={saving} onClick={onClose}>Cerrar</button><button type="button" className="rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50" disabled={saving || loadingQuote} onClick={guardar}>{saving ? "Registrando…" : submitted ? "Reintentar la misma operación" : "Confirmar liquidación"}</button></>}>
     {error && <p role="alert" className="mb-4 rounded-lg border border-red-300 p-3 text-sm text-red-700 dark:text-red-400">{error}</p>}
     {submitted && <p className="mb-3 text-sm text-amber-700 dark:text-amber-400">Operación enviada: los datos quedan bloqueados hasta confirmar su resultado. Reintentar no genera una liquidación nueva.</p>}
     <fieldset disabled={saving || submitted} className="space-y-5 dark:text-zinc-200">
@@ -321,7 +326,7 @@ export function FxSettlementDialog({ kind, sociedadId, counterpartyId, documents
           <button type="button" className={`${button} inline-flex items-center gap-2 border-orange-400 text-orange-700 dark:text-orange-400`} disabled={leyendoOp} onClick={() => opFileRef.current?.click()}><Sparkles className="h-4 w-4" />{leyendoOp ? "Leyendo comprobante…" : "Adjuntar comprobante y leer con IA"}</button>
           <input ref={opFileRef} type="file" accept="application/pdf,image/png,image/jpeg,image/webp" multiple className="hidden" onChange={e => void leerOrdenPago(Array.from(e.target.files || []))} />
         </div>
-        {opMensaje && <ul className={`mt-2 list-disc space-y-1 pl-5 text-xs ${opMensaje.ok ? "text-emerald-700 dark:text-emerald-400" : "text-red-700 dark:text-red-400"}`}>{opMensaje.lineas.map((l, i) => <li key={i}>{l}</li>)}</ul>}
+        {opMensaje && <ul className={`mt-2 list-disc space-y-1 pl-5 text-xs ${!opMensaje.ok ? "text-red-700 dark:text-red-400" : opMensaje.aviso ? "font-medium text-amber-700 dark:text-amber-300" : "text-emerald-700 dark:text-emerald-400"}`}>{opMensaje.lineas.map((l, i) => <li key={i}>{l}</li>)}</ul>}
         {opConOtras && onCobrarOrdenCompleta && <button type="button" className="mt-2 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white" onClick={() => onCobrarOrdenCompleta(opConOtras)}>Cobrar todas las facturas de esta orden de pago</button>}
       </ZonaArchivos>
       <div className="grid gap-3 sm:grid-cols-3"><label className="text-sm">Fecha de la operación<input className={input} type="date" value={fecha} onChange={e => { const v = e.target.value; setFecha(v); setMedios(p => p.map(m => ({ ...m, fecha: v }))); changeQuote(); setCotizacionFecha(diaHabilAnterior(v)); }} /></label><label className="text-sm">Fecha de cotización<input className={input} type="date" value={cotizacionFecha} onChange={e => { changeQuote(); setCotizacionFecha(e.target.value); }} /></label><label className="text-sm">Cotización ARS por USD<input className={input} type="text" inputMode="decimal" placeholder="Ej: 1.530,50" value={cotizacion} readOnly={modalidad !== "manual"} onChange={e => { tcElegido.current = true; setCotizacion(e.target.value); }} /></label></div>

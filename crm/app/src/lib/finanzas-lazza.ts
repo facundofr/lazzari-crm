@@ -11,12 +11,16 @@
  * - GASTOS del mes (gastos_manuales): fijos (tipo fijo o atados a un gasto fijo) y eventuales.
  * - OBJETIVOS sobre el NETO facturado.
  * IVA: débito de ventas (libro: factura anulada con CAE sigue y se compensa con su NC) − crédito de compras
- * (facturas de compra no anuladas; las NC de compra restan). Diferencia solo como referencia.
+ * (facturas de compra no anuladas; las NC de compra restan) y del IVA de las comisiones del banco.
+ * Estimado (arreglo 16, 27/10/2026): menos las retenciones de IVA sufridas con N° de certificado; las que no lo tienen
+ * y las percepciones (IVA e IIBB juntos) van aparte. Los VEP de IVA de Gastos se comparan con el estimado. Solo referencia.
  * Vencimientos: facturas de venta y de compra con saldo, por fecha de vencimiento.
  *
  * Prueba: npx tsx scripts/test-finanzas-lazza.ts
  */
-import { esNotaCredito, filtrarParaGestion, incluirEnLibroIVACompras, incluirEnLibroIVAVentas, normalizarMoneda, periodoDeFecha } from "./reportes-comprobantes";
+import { esNotaCredito, filtrarParaGestion, incluirEnLibroIVACompras, incluirEnLibroIVAVentas, normalizarMoneda, periodoDeFecha, sumarMeses } from "./reportes-comprobantes";
+import { clasificarMovimiento, type LineaMov } from "./movimientos-banco";
+import { sinCodigoBanco } from "./bbva-codigos";
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const num = (v: unknown) => Number(v || 0) || 0;
@@ -287,6 +291,8 @@ export interface FacturaCompraFL {
   moneda: string | null;
   subtotal?: number | string | null;
   iva: number | string | null;
+  /** IVA, IIBB y otras percepciones en un solo número (la base no las separa). */
+  percepciones?: number | string | null;
   total?: number | string | null;
   solo_iva?: boolean | null;
   numero_factura?: string | null;
@@ -297,17 +303,84 @@ export interface FacturaCompraFL {
   op_facturas_compra?: Array<{ monto: number | string | null; ordenes_pago?: { estado?: string | null } | null }> | null;
 }
 
+/** Renglón de los "Ver …" de la pantalla IVA. `iva` es el importe del renglón: IVA, retención, percepción o VEP. */
 export interface FilaIva { id: string; fecha: string; comprobante: string; nombre: string; iva: number; soloIva?: boolean; aviso?: string }
+
+/** Retención de IVA que nos hizo un cliente (movimiento retencion_iva con cliente). */
+export interface RetencionIvaFL { id: string; fecha: string; monto: number | string | null; moneda?: string | null; anulado?: boolean | null; descripcion?: string | null; cliente?: string | null }
+
+/** Gasto de Gastos (ahí se cargan los VEP pagados). */
+export interface GastoVepFL { id: string; fecha: string; monto: number | string | null; moneda?: string | null; descripcion?: string | null }
 
 export interface IvaMes {
   ventas: { facturas: number; nc: number; debito: number; filas: FilaIva[] };
-  compras: { facturas: number; nc: number; credito: number; deSoloIva: number; filas: FilaIva[] };
-  /** débito − crédito (positivo = a pagar), solo referencia. */
+  /** crédito = facturas − NC + banco (IVA de las comisiones del banco, menos sus devoluciones). */
+  compras: { facturas: number; nc: number; banco: number; credito: number; deSoloIva: number; filas: FilaIva[]; filasBanco: FilaIva[] };
+  /** débito − crédito (positivo = a pagar). */
   diferencia: number;
+  /** Retenciones de IVA sufridas en el mes: se restan solo las que tienen N° de certificado. */
+  retenciones: { conCertificado: number; sinCertificado: number; filas: FilaIva[] };
+  /** diferencia − retenciones con certificado: positivo = a pagar, negativo = a favor. Sin saldo de meses anteriores. */
+  estimado: number;
+  /**
+   * VEP de IVA de este período cargados en Gastos. diferencia = pagado − estimado (null sin VEP); coincide = menos de
+   * TOLERANCIA_VEP_IVA de diferencia. sinImpuesto = VEP del mes siguiente que no dicen qué impuesto pagaron.
+   */
+  vep: { pagado: number; filas: FilaIva[]; diferencia: number | null; coincide: boolean; sinImpuesto: { monto: number; filas: FilaIva[] } };
+  /** Percepciones de las facturas de compra del mes (IVA e IIBB en un solo número): aparte, no se restan. */
+  percepciones: { monto: number; filas: FilaIva[] };
   sinCotizacion: string[];
 }
 
-export function ivaDelMes(input: { periodo: string; ventas: FacturaVentaFL[]; compras: FacturaCompraFL[]; tcDia: TcDelDia }): IvaMes {
+/** Diferencia entre el VEP y el estimado que se toma como redondeo ($). */
+export const TOLERANCIA_VEP_IVA = 1000;
+
+const MESES_IVA = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+
+/**
+ * N° de certificado escrito en la descripción de una retención sufrida ("certificado 0000-00074421", "Cert: 34539").
+ * null si no dice ninguno o dice que falta ("certificado pendiente", "Cert. A CONFIRMAR", "a pedir").
+ */
+export function certificadoDeRetencion(descripcion: string | null | undefined): string | null {
+  const m = String(descripcion || "").match(/\bcert(?:ificado)?\b\.?\s*(?:n(?:ro|°|º)?\.?\s*)?:?\s*(\d(?:[\d-]*\d)?)/i);
+  return m ? m[1] : null;
+}
+
+/** Período escrito en un texto sin acentos: "período 09/2026", "09/2026", "septiembre 2026" o "2026-09". Las fechas no cuentan. */
+function periodoEscrito(t: string): string | null {
+  const armar = (mes: number, anio: string) => (mes >= 1 && mes <= 12 ? `${anio}-${String(mes).padStart(2, "0")}` : null);
+  let m = t.match(/periodo\s*:?\s*(\d{1,2})[/-](20\d{2})\b/) || t.match(/(?:^|[^\d/])(\d{1,2})[/-](20\d{2})\b/);
+  if (m) return armar(Number(m[1]), m[2]);
+  m = t.match(/\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)\s+(?:de\s+)?(20\d{2})\b/);
+  if (m) return armar(m[1] === "setiembre" ? 9 : MESES_IVA.indexOf(m[1]) + 1, m[2]);
+  m = t.match(/\b(20\d{2})-(\d{2})\b(?!-\d)/);
+  return m ? armar(Number(m[2]), m[1]) : null;
+}
+
+/**
+ * Período (YYYY-MM) del IVA que pagó un gasto, o null si no es un VEP de IVA.
+ * Es VEP de IVA si dice IVA y VEP, ARCA, AFIP, DDJJ o F.2002 (no cuentan "Compra crédito fiscal IVA" ni planes de pago).
+ * El período es el escrito; si no dice, el mes anterior al pago (el IVA se paga el mes siguiente).
+ */
+export function periodoVepIva(g: Pick<GastoVepFL, "fecha" | "descripcion">): string | null {
+  const t = sinAcentos(String(g.descripcion || ""));
+  if (!/\biva\b/.test(t) || !/\b(vep|arca|afip|ddjj)\b|f\.?\s?2002/.test(t) || /credito fiscal|\bcompra\b|plan de (pagos|facilidades)|\bcuota\b/.test(t)) return null;
+  const pago = periodoDeFecha(g.fecha);
+  return periodoEscrito(t) ?? (pago ? sumarMeses(pago, -1) : null);
+}
+
+/** VEP que no dice qué impuesto pagó ("ARCA VEP — pago 17/09 (BBVA OP8721)"): se completa con «Leer VEP (IA)» en Gastos. */
+export function esVepSinImpuesto(descripcion: string | null | undefined): boolean {
+  const t = sinAcentos(String(descripcion || ""));
+  return /\bvep\b/.test(t)
+    && !/\b(iva|sicore|sire|ganancias|autonomos|iibb|ingresos brutos|arba|bienes personales|monotributo|suss|seguridad social|anticipo|plan|credito fiscal)\b|f\.?\s?931\b/.test(t);
+}
+
+export function ivaDelMes(input: {
+  periodo: string; ventas: FacturaVentaFL[]; compras: FacturaCompraFL[]; tcDia: TcDelDia;
+  /** A cuenta del mes (arreglo 16). Sin esto, el estimado es débito − crédito de las facturas, como antes. */
+  retenciones?: RetencionIvaFL[]; lineasBanco?: LineaMov[]; gastos?: GastoVepFL[];
+}): IvaMes {
   const { periodo, tcDia } = input;
   const sinCotizacion: string[] = [];
   const v = { facturas: 0, nc: 0, debito: 0, filas: [] as FilaIva[] };
@@ -320,7 +393,8 @@ export function ivaDelMes(input: { periodo: string; ventas: FacturaVentaFL[]; co
     if (esNotaCredito(f.tipo)) v.nc += iva; else v.facturas += iva;
     v.filas.push({ id: f.id, fecha: f.fecha, comprobante: comp, nombre: f.cliente || "", iva: r2(esNotaCredito(f.tipo) ? -iva : iva) });
   }
-  const c = { facturas: 0, nc: 0, credito: 0, deSoloIva: 0, filas: [] as FilaIva[] };
+  const c = { facturas: 0, nc: 0, banco: 0, credito: 0, deSoloIva: 0, filas: [] as FilaIva[], filasBanco: [] as FilaIva[] };
+  const percepciones = { monto: 0, filas: [] as FilaIva[] };
   for (const f of input.compras) {
     if (periodoDeFecha(f.fecha) !== periodo || !incluirEnLibroIVACompras(f)) continue;
     const comp = `${f.tipo_comprobante || "FC"} ${f.numero_factura || "S/N"}`;
@@ -331,12 +405,52 @@ export function ivaDelMes(input: { periodo: string; ventas: FacturaVentaFL[]; co
     if (nc) c.nc += iva; else c.facturas += iva;
     if (f.solo_iva) c.deSoloIva += nc ? -iva : iva;
     c.filas.push({ id: f.id, fecha: f.fecha, comprobante: comp, nombre: f.proveedor || "", iva: r2(nc ? -iva : iva), soloIva: !!f.solo_iva });
+    const perc = num(f.percepciones) * tc * (nc ? -1 : 1);
+    if (perc) { percepciones.monto += perc; percepciones.filas.push({ id: f.id, fecha: f.fecha, comprobante: comp, nombre: f.proveedor || "", iva: r2(perc) }); }
+  }
+  // IVA de las comisiones del banco (la misma clasificación que Bancos > Ver por tipo): es crédito fiscal; una devolución resta.
+  for (const l of input.lineasBanco || []) {
+    if (periodoDeFecha(l.fecha) !== periodo) continue;
+    const cl = clasificarMovimiento(l);
+    if (cl.tipo !== "impuestos_comisiones" || cl.categoria !== "IVA") continue;
+    const iva = Math.abs(num(l.monto)) * (cl.devolucion ? -1 : 1);
+    c.banco += iva;
+    c.filasBanco.push({ id: l.id, fecha: l.fecha, comprobante: cl.devolucion ? "Devolución" : "Banco", nombre: sinCodigoBanco(l.descripcion), iva: r2(iva) });
+  }
+  // Retenciones de IVA que nos hicieron los clientes: sin N° de certificado no se restan (Augusto 27/10).
+  const retenciones = { conCertificado: 0, sinCertificado: 0, filas: [] as FilaIva[] };
+  for (const m of input.retenciones || []) {
+    if (m.anulado || periodoDeFecha(m.fecha) !== periodo) continue;
+    const cert = certificadoDeRetencion(m.descripcion);
+    const fila: FilaIva = { id: m.id, fecha: m.fecha, comprobante: cert ? `Cert. ${cert}` : "Sin certificado", nombre: m.cliente || "", iva: 0, aviso: cert ? undefined : "no se resta" };
+    const tc = tcComprobante(m.moneda, null, m.fecha, tcDia);
+    if (!tc) { sinCotizacion.push(`Retención ${fila.nombre}`.trim()); retenciones.filas.push({ ...fila, aviso: "US$ sin cotización" }); continue; }
+    fila.iva = r2(num(m.monto) * tc);
+    if (cert) retenciones.conCertificado += fila.iva; else retenciones.sinCertificado += fila.iva;
+    retenciones.filas.push(fila);
+  }
+  // VEP de IVA de este período (se pagan el mes siguiente) y VEP del mes siguiente que no dicen qué impuesto pagaron.
+  const vep = { pagado: 0, filas: [] as FilaIva[], diferencia: null as number | null, coincide: false, sinImpuesto: { monto: 0, filas: [] as FilaIva[] } };
+  const mesDePago = sumarMeses(periodo, 1);
+  for (const g of input.gastos || []) {
+    const deEste = periodoVepIva(g) === periodo;
+    if (!deEste && !(periodoDeFecha(g.fecha) === mesDePago && esVepSinImpuesto(g.descripcion))) continue;
+    const tc = tcComprobante(g.moneda, null, g.fecha, tcDia);
+    if (!tc) { sinCotizacion.push(g.descripcion || "VEP"); continue; }
+    const fila: FilaIva = { id: g.id, fecha: g.fecha, comprobante: "VEP", nombre: g.descripcion || "", iva: r2(num(g.monto) * tc) };
+    if (deEste) { vep.pagado += fila.iva; vep.filas.push(fila); } else { vep.sinImpuesto.monto += fila.iva; vep.sinImpuesto.filas.push(fila); }
   }
   v.debito = r2(v.facturas - v.nc); v.facturas = r2(v.facturas); v.nc = r2(v.nc);
-  c.credito = r2(c.facturas - c.nc); c.facturas = r2(c.facturas); c.nc = r2(c.nc); c.deSoloIva = r2(c.deSoloIva);
+  c.credito = r2(c.facturas - c.nc + c.banco); c.facturas = r2(c.facturas); c.nc = r2(c.nc); c.banco = r2(c.banco); c.deSoloIva = r2(c.deSoloIva);
+  const diferencia = r2(v.debito - c.credito);
+  retenciones.conCertificado = r2(retenciones.conCertificado); retenciones.sinCertificado = r2(retenciones.sinCertificado);
+  const estimado = r2(diferencia - retenciones.conCertificado);
+  vep.pagado = r2(vep.pagado); vep.sinImpuesto.monto = r2(vep.sinImpuesto.monto);
+  if (vep.filas.length) { vep.diferencia = r2(vep.pagado - estimado); vep.coincide = Math.abs(vep.diferencia) < TOLERANCIA_VEP_IVA; }
+  percepciones.monto = r2(percepciones.monto);
   const orden = (a: FilaIva, b: FilaIva) => a.fecha.localeCompare(b.fecha) || a.comprobante.localeCompare(b.comprobante);
-  v.filas.sort(orden); c.filas.sort(orden);
-  return { ventas: v, compras: c, diferencia: r2(v.debito - c.credito), sinCotizacion };
+  for (const filas of [v.filas, c.filas, c.filasBanco, retenciones.filas, vep.filas, vep.sinImpuesto.filas, percepciones.filas]) filas.sort(orden);
+  return { ventas: v, compras: c, diferencia, retenciones, estimado, vep, percepciones, sinCotizacion };
 }
 
 // ── Vencimientos ────────────────────────────────────────────────────

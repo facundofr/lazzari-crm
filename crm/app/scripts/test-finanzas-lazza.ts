@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { armarRetenciones, armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, armarTcDelDia, armarVencimientos, filtrarVencimientos, ivaDelMes, nivelObjetivo, reporteBasico, saldoFacturaCompra, unificarMoneda, sumarDias, conVencimiento, facturasACobrar, monedaDelCobro, clientesACobrar, proveedoresAPagar, type FacturaVentaFL, type FilaVencimiento } from "../src/lib/finanzas-lazza";
+import { armarRetenciones, armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, armarTcDelDia, armarVencimientos, filtrarVencimientos, ivaDelMes, certificadoDeRetencion, periodoVepIva, esVepSinImpuesto, nivelObjetivo, reporteBasico, saldoFacturaCompra, unificarMoneda, sumarDias, conVencimiento, facturasACobrar, monedaDelCobro, clientesACobrar, proveedoresAPagar, type FacturaVentaFL, type FilaVencimiento } from "../src/lib/finanzas-lazza";
 
 const tcDia = armarTcDelDia([{ fecha: "2026-10-09", valor_venta: 1400 }, { fecha: "2026-10-14", valor_venta: 1500 }]);
 assert.equal(tcDia("2026-10-14"), 1500);
@@ -94,6 +94,76 @@ assert.equal(iva.ventas.debito, 210 + 30450);
 assert.equal(iva.compras.credito, 500 - 100 + 3000 + 300);
 assert.equal(iva.compras.deSoloIva, 300);
 assert.equal(iva.diferencia, 210 + 30450 - 3700);
+// Sin nada a cuenta, el estimado es débito − crédito, como antes
+assert.deepEqual([iva.estimado, iva.compras.banco, iva.vep.diferencia, iva.percepciones.monto], [iva.diferencia, 0, null, 0]);
+
+// IVA estimado (arreglo 16): textos reales de la base (retenciones de Corteva y Soychu, VEP de Gastos)
+assert.equal(certificadoDeRetencion("Retención IVA — certificado 0000-00074421 (IVA 50 % s/ IVA $ 1.993.039,22) — CORTEVA AGRISCIENCE ARGENTINA SRL"), "0000-00074421");
+assert.equal(certificadoDeRetencion("Retención IVA — certificado 34539 — Frigorífico de Aves Soychu SAICFIA — FA A 0008-00000660 (sistema anterior)"), "34539");
+assert.equal(certificadoDeRetencion("Retención IVA — Cert: 123-45 — Obs"), "123-45"); // como lo arma la liquidación de cobro
+assert.equal(certificadoDeRetencion("Retención IVA — Cert. N° 777"), "777");
+assert.equal(certificadoDeRetencion("Retención IVA — 50 % s/ IVA $ 286.121,37 — certificado pendiente — CORTEVA AGRISCIENCE ARGENTINA SRL — FA 0015"), null);
+assert.equal(certificadoDeRetencion("Cobro FX — retencion_iva Cert. A CONFIRMAR — IVA 50 % s/ IVA $ 2.962.042,52 — Corteva Payment Advice 20.10.2026 ref 01671600159017 [cor-20/10] | TC 1524.5 del 2026-10-20"), null);
+assert.equal(certificadoDeRetencion("Retención IIBB — certificado a pedir"), null);
+assert.equal(certificadoDeRetencion(null), null);
+
+assert.equal(periodoVepIva({ fecha: "2026-10-21", descripcion: "ARCA VEP — VEP IVA — pago 21/10 (BBVA OP1396)" }), "2026-09"); // sin período: el mes anterior al pago
+assert.equal(periodoVepIva({ fecha: "2026-10-21", descripcion: "ARCA VEP — IVA — pago 21/10/2026" }), "2026-09"); // la fecha de pago no es el período
+assert.equal(periodoVepIva({ fecha: "2026-11-20", descripcion: "IVA - DDJJ - período 10/2026 (VEP 123)" }), "2026-10"); // como lo arma «Leer VEP (IA)»
+assert.equal(periodoVepIva({ fecha: "2026-12-02", descripcion: "VEP IVA septiembre 2026" }), "2026-09");
+assert.equal(periodoVepIva({ fecha: "2026-09-29", descripcion: "Compra crédito fiscal IVA — FC 00005-00019878" }), null);
+assert.equal(periodoVepIva({ fecha: "2026-10-21", descripcion: "ARCA VEP — SICORE septiembre 2026 — retenciones de Ganancias (VEP 1696995778) — pago 21/10" }), null);
+assert.equal(periodoVepIva({ fecha: "2026-09-30", descripcion: "Banco Nación — liquidación mensual septiembre 2026: comisión $ 11.600 + IVA 10,5 % $ 1.218" }), null);
+assert.equal(periodoVepIva({ fecha: "2026-10-05", descripcion: "ARCA VEP — IVA plan de facilidades cuota 3" }), null);
+assert.equal(esVepSinImpuesto("ARCA VEP — pago 16/10 (BBVA OP8808)"), true);
+assert.equal(esVepSinImpuesto("ARCA VEP — Anticipo de Ganancias 2 (VEP 1696573116) — pago 21/10 (BBVA OP3708)"), false);
+assert.equal(esVepSinImpuesto("ARCA VEP — SICORE octubre 2026 — pago a cuenta de Ganancias — pago 21/10 (BBVA OP5532)"), false);
+assert.equal(esVepSinImpuesto("ARCA VEP — VEP IVA — pago 21/10 (BBVA OP1396)"), false);
+assert.equal(esVepSinImpuesto("ARCA Autónomos — período 09/2026, categoría 302 (transacción 3236)"), false);
+
+const ivaEst = ivaDelMes({
+  periodo: "2026-09",
+  ventas: [fv({ id: "v1", fecha: "2026-09-10", iva: 10000, subtotal: 47619.05, total: 57619.05 })],
+  compras: [
+    { id: "c1", fecha: "2026-09-12", tipo_comprobante: "FC A", estado: "pendiente", moneda: "ARS", iva: 2000, percepciones: 300 },
+    { id: "c2", fecha: "2026-09-13", tipo_comprobante: "NC A", estado: "pendiente", moneda: "ARS", iva: 100, percepciones: 30 },
+    { id: "c3", fecha: "2026-09-14", tipo_comprobante: "FC A", estado: "anulada", moneda: "ARS", iva: 999, percepciones: 999 },
+  ],
+  tcDia,
+  lineasBanco: [
+    { id: "b1", fecha: "2026-09-05", descripcion: "IVA TASA GRA #236", monto: 210, tipo: "debito", clasificacion: "impuesto", subtipo: "iva" },
+    { id: "b2", fecha: "2026-09-06", descripcion: "IVA TASA GENERAL #236", monto: 21, tipo: "credito", clasificacion: null, subtipo: null }, // devolución: resta
+    { id: "b3", fecha: "2026-09-07", descripcion: "COMISION #037", monto: 1000, tipo: "debito", clasificacion: null, subtipo: null }, // comisión, no IVA
+    { id: "b4", fecha: "2026-09-08", descripcion: "IVA S/COMISION", monto: 50, tipo: "debito", clasificacion: "impuesto", subtipo: "iva" }, // sin código, clasificada a mano
+    { id: "b5", fecha: "2026-10-01", descripcion: "IVA TASA GRA #236", monto: 999, tipo: "debito", clasificacion: null, subtipo: null }, // otro mes
+  ],
+  retenciones: [
+    { id: "r1", fecha: "2026-09-03", monto: 3000, moneda: "ARS", descripcion: "Retención IVA — certificado 0000-00074421 — CORTEVA", cliente: "Corteva" },
+    { id: "r2", fecha: "2026-09-20", monto: 500, moneda: "ARS", descripcion: "Retención IVA — certificado pendiente — CORTEVA", cliente: "Corteva" },
+    { id: "r3", fecha: "2026-09-21", monto: 777, moneda: "ARS", anulado: true, descripcion: "Retención IVA — certificado 1" },
+    { id: "r4", fecha: "2026-10-02", monto: 888, moneda: "ARS", descripcion: "Retención IVA — certificado 2" }, // otro mes
+  ],
+  gastos: [
+    { id: "g1", fecha: "2026-10-21", monto: 4000, moneda: "ARS", descripcion: "ARCA VEP — VEP IVA — pago 21/10 (BBVA OP1396)" },
+    { id: "g2", fecha: "2026-10-16", monto: 2520000, moneda: "ARS", descripcion: "ARCA VEP — pago 16/10 (BBVA OP8808)" },
+    { id: "g3", fecha: "2026-09-17", monto: 507390, moneda: "ARS", descripcion: "ARCA VEP — pago 17/09 (BBVA OP8721)" }, // sin impuesto, pero pagado en el mismo mes: es de agosto
+    { id: "g4", fecha: "2026-09-29", monto: 1616059.2, moneda: "ARS", descripcion: "Compra crédito fiscal IVA — FC 00005-00019878" },
+    { id: "g5", fecha: "2026-11-20", monto: 9999, moneda: "ARS", descripcion: "ARCA VEP — VEP IVA — pago 20/11" }, // IVA de octubre
+  ],
+});
+assert.equal(ivaEst.ventas.debito, 10000);
+assert.deepEqual([ivaEst.compras.banco, ivaEst.compras.filasBanco.length], [210 - 21 + 50, 3]);
+assert.equal(ivaEst.compras.credito, 2000 - 100 + 239);
+assert.equal(ivaEst.diferencia, 10000 - 2139);
+assert.deepEqual([ivaEst.retenciones.conCertificado, ivaEst.retenciones.sinCertificado, ivaEst.retenciones.filas.length], [3000, 500, 2]);
+assert.equal(ivaEst.estimado, 10000 - 2139 - 3000); // la de sin certificado no se resta
+assert.deepEqual([ivaEst.vep.pagado, ivaEst.vep.filas.map((f) => f.id), ivaEst.vep.diferencia, ivaEst.vep.coincide], [4000, ["g1"], 4000 - 4861, true]);
+assert.deepEqual([ivaEst.vep.sinImpuesto.monto, ivaEst.vep.sinImpuesto.filas.map((f) => f.id)], [2520000, ["g2"]]);
+assert.deepEqual([ivaEst.percepciones.monto, ivaEst.percepciones.filas.length], [270, 2]);
+// A favor y VEP que no coincide (caso septiembre: el estimado da a favor y se pagó un VEP)
+const ivaFavor = ivaDelMes({ periodo: "2026-09", ventas: [], compras: [], tcDia, retenciones: [{ id: "r", fecha: "2026-09-03", monto: 5000, descripcion: "certificado 9" }],
+  gastos: [{ id: "g", fecha: "2026-10-21", monto: 1500, descripcion: "ARCA VEP — VEP IVA — pago 21/10" }] });
+assert.deepEqual([ivaFavor.estimado, ivaFavor.vep.diferencia, ivaFavor.vep.coincide], [-5000, 6500, false]);
 
 // Vencimientos
 const fc = { id: "p1", fecha: "2026-10-01", fecha_vencimiento: "2026-10-20", tipo_comprobante: "FC A", estado: "pendiente", moneda: "ARS", iva: 0, total: 1000, total_acreditado: 100,

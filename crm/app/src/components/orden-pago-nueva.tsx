@@ -22,6 +22,7 @@ import { calcularPagoParcial } from "@/lib/op-parcial";
 import { pesosDeUsd, brutoPesosDeUsd, cotizacionValida } from "@/lib/op-usd-pesos";
 import { diaHabilAnterior } from "@/lib/dias-habiles";
 import { parseDecimalInput, toDecimalInput } from "@/lib/decimal-input";
+import { claveArchivo, mismoPago, sinRepetir } from "@/lib/comprobante-medios";
 import { FileText, Minimize2, Maximize2, X, Search, Loader2, Sparkles, ShieldCheck, Landmark, Plus, Trash2, Paperclip } from "lucide-react";
 
 export interface ProveedorOption {
@@ -80,6 +81,8 @@ export interface OpMedioPago {
   aviso_cheque?: string;
   /** El selector de cheques queda escondido: solo si se pide "elegir a mano". */
   elegir_a_mano?: boolean;
+  /** 26/10/2026: comprobante del que salió (claveArchivo), para no sumarlo dos veces si se vuelve a subir. */
+  archivo?: string;
 }
 const BANCOS_ARGENTINA = [
   "Banco Galicia", "Banco Nación", "Banco Provincia", "Banco Santander",
@@ -314,7 +317,12 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
           const tildada = esDirecta || (!pagoParcialDirecto && !!facturaIds?.includes(fc.id));
           return { id: fc.id, numero: fc.numero_factura || "S/N", tipo_comprobante: fc.tipo_comprobante || "FC", fecha: fc.fecha, total: Number(fc.total), subtotal: Number(fc.subtotal || 0), iva: Number(fc.iva || 0), percepciones: Number(fc.percepciones || 0), saldo_pendiente: saldo, moneda: fc.moneda || "ARS", selected: tildada, monto_a_pagar: tildada ? saldo : 0 };
         }).filter((fc: any) => fc.saldo_pendiente > 0);
-        setOpFCPendientes(pendientes);
+        // Cambiar la fecha vuelve a traer el acumulado del mes, pero no borra lo tildado ni lo escrito en «A pagar»
+        // (auditoría UX 26/10/2026, arreglo 3). Otro proveedor no tiene facturas en común: arranca de cero.
+        setOpFCPendientes((prev) => pendientes.map((p: OpFCPendiente) => {
+          const antes = prev.find((x) => x.id === p.id);
+          return antes ? { ...p, selected: antes.selected, monto_a_pagar: Math.min(antes.monto_a_pagar, p.saldo_pendiente) } : p;
+        }));
         // Sin facturas pendientes: abre directo como pago a cuenta (Augusto 19/10). Se puede apagar.
         if (!pendientes.length && !pagoParcialDirecto) setOpForm(prev => prev.usar_monto_manual ? prev : { ...prev, usar_monto_manual: true, monto_manual: 0 });
 
@@ -330,11 +338,15 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
             const { data: ncMovs } = await (supabase as any).from("movimientos").select("nota_credito_compra_id, monto, anulado").in("nota_credito_compra_id", ncIds);
             (ncMovs || []).forEach((m: any) => { if (!m.anulado) aplicadoPorNC[m.nota_credito_compra_id] = (aplicadoPorNC[m.nota_credito_compra_id] || 0) + Number(m.monto || 0); });
           }
-          if (!cancelled) setOpNCDisponibles((ncData || []).map((n: any) => ({
+          if (!cancelled) setOpNCDisponibles((prev) => (ncData || []).map((n: any) => ({
             id: n.id, numero: n.numero_factura || "S/N", tipo_comprobante: n.tipo_comprobante || "NC", fecha: n.fecha,
             total: Number(n.total || 0), subtotal: Number(n.subtotal || 0), moneda: n.moneda || "ARS",
             disponible: roundPaymentMoney(Math.max(0, Number(n.total || 0) - (aplicadoPorNC[n.id] || 0))), selected: false, monto_a_aplicar: 0,
-          })).filter((n: OpNCDisponible) => n.disponible > 0.005));
+          })).filter((n: OpNCDisponible) => n.disponible > 0.005).map((n: OpNCDisponible) => {
+            // Igual que las facturas: cambiar la fecha no destilda las NC elegidas.
+            const antes = prev.find((x) => x.id === n.id);
+            return antes ? { ...n, selected: antes.selected, monto_a_aplicar: Math.min(antes.monto_a_aplicar, n.disponible) } : n;
+          }));
         } catch { if (!cancelled) setOpNCDisponibles([]); }
 
         // Acumulado mensual de PAGOS (OPs) a este proveedor — Art. 26 RG 830
@@ -569,7 +581,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
    * Por cada cheque leído se busca en el CRM (número + monto): de cartera → ese (al guardar pasa a endosado); propio ya cargado o
    * de una OP anulada a este proveedor → ese, sin crear otro. Si no está, se avisa (nunca se traba). Regla en lib/cheque-comprobante-op.ts.
    */
-  async function chequesDelComprobante(medios: OpMedioPago[]): Promise<OpMedioPago[]> {
+  async function chequesDelComprobante(medios: OpMedioPago[], archivo?: string): Promise<OpMedioPago[]> {
     const conCheque = medios.filter((m) => ["cheque", "cheque_propio", "echeq"].includes(m.tipo) && numeroSinCeros(m.numero_cheque));
     if (!conCheque.length) return medios;
     const db = supabase as any;
@@ -592,7 +604,8 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
     } catch {
       return medios.map((m) => conCheque.includes(m) ? { ...m, aviso_cheque: "No se pudo buscar el cheque en el CRM: revisalo antes de guardar." } : m);
     }
-    const usados = opMedios.map((m) => m.echeq_id).filter(Boolean) as string[];
+    // Los cheques del mismo comprobante subido otra vez se reemplazan: no cuentan como ya usados.
+    const usados = opMedios.filter((m) => !archivo || m.archivo !== archivo).map((m) => m.echeq_id).filter(Boolean) as string[];
     return medios.map((m) => {
       if (!conCheque.includes(m)) return m;
       const r = chequeDelComprobante({ numero: m.numero_cheque, monto: Number(m.monto), moneda: m.moneda, direccion: (m as OpMedioPago & { direccion?: string | null }).direccion ?? null }, candidatos, opForm.proveedor_id, usados);
@@ -617,7 +630,9 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
   }
 
   async function handleParseComprobante(f: File) {
-    setOpFiles(prev => [...prev, f]);
+    // 26/10/2026 (auditoría UX, arreglo 3): el mismo archivo otra vez reemplaza al anterior (no se adjunta ni se suma dos veces).
+    const archivo = claveArchivo(f);
+    setOpFiles(prev => [...prev.filter(p => claveArchivo(p) !== archivo), f]);
     setOpParsingCount(prev => prev + 1);
     try {
       const formData = new FormData();
@@ -641,17 +656,30 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
           // cliente solo puede ingresarse seleccionandolo desde cartera.
           origen_cheque: tipo === "echeq" || tipo === "cheque_propio" ? (fields.direccion === "recibido" ? "cartera" : "propio") : undefined,
           banco_otro: "",
+          archivo,
         };
       });
-      const conCheques = await chequesDelComprobante(mapped);
+      // Lo que ya está cargado no se suma de nuevo: lo leído del mismo archivo se reemplaza; de otro comprobante
+      // se agrega solo lo que no estaba (ej. transferencia + cheque). Lo repetido se avisa (lib/comprobante-medios.ts).
+      const comparable = (m: OpMedioPago) => ({ tipo: m.tipo, monto: Number(m.monto), numero: m.numero_cheque, fecha: m.fecha_cobro || m.fecha });
+      const igual = (a: OpMedioPago, b: OpMedioPago) => mismoPago(comparable(a), comparable(b));
+      const { agregar, repetidos } = sinRepetir(opMedios.filter(m => m.archivo !== archivo), mapped, igual);
+      const conCheques = await chequesDelComprobante(agregar, archivo);
       setOpMedios(prev => {
-        const hasOnlyEmptyDefault = prev.length === 1
-          && prev[0].monto === 0
-          && !prev[0].banco
-          && !prev[0].numero_cheque
-          && !prev[0].echeq_id;
-        return hasOnlyEmptyDefault ? conCheques : [...prev, ...conCheques];
+        const otros = prev.filter(m => m.archivo !== archivo);
+        const hasOnlyEmptyDefault = otros.length === 1
+          && otros[0].monto === 0
+          && !otros[0].banco
+          && !otros[0].numero_cheque
+          && !otros[0].echeq_id;
+        const base = hasOnlyEmptyDefault ? [] : otros;
+        const lista = [...base, ...sinRepetir(base, conCheques, igual).agregar];
+        return lista.length ? lista : [makeOpMedio(opForm.moneda)];
       });
+      if (repetidos.length) {
+        const texto: Record<string, string> = { transferencia: "transferencia", deposito: "depósito", cheque: "cheque", cheque_propio: "cheque", echeq: "eCheq", efectivo: "efectivo", tarjeta: "tarjeta" };
+        setOpAviso(`Ya estaba cargado y no se sumó de nuevo: ${repetidos.map(m => `${texto[m.tipo] || m.tipo}${m.numero_cheque ? ` ${m.numero_cheque}` : ""} ${formatCurrency(Number(m.monto), m.moneda)}`).join(" · ")}.`);
+      }
       setOpFCPendientes((prev) => {
         const allocation = parsedPaymentForSingleInvoice(mapped, prev);
         if (!allocation) return prev;
@@ -948,6 +976,18 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
       })
     : proveedoresOptions;
 
+  // 26/10/2026 (auditoría UX, arreglo 3): con algo cargado, el clic afuera y la X preguntan antes de cerrar (como Presupuestos, 21/10).
+  // «Cancelar» cierra directo; mientras guarda no se cierra.
+  const tildadaAlAbrir = (id: string) => (pagoParcialDirecto ? id === pagoParcialFCId : !!facturaIds?.includes(id));
+  const opHayCargado = opFiles.length > 0 || opMedios.some(m => Number(m.monto) > 0) || !!opForm.notas.trim()
+    || (opForm.usar_monto_manual && Number(opForm.monto_manual) > 0) || opNCDisponibles.some(n => n.selected)
+    || opFCPendientes.some(f => f.selected !== tildadaAlAbrir(f.id) || (f.selected && Math.abs(f.monto_a_pagar - f.saldo_pendiente) > 0.005));
+  function pedirCierre() {
+    if (opSaving) return;
+    if (opHayCargado && !confirm(`¿Estás seguro que deseas salir sin guardar? Se pierde lo que cargaste en ${pagoParcialDirecto ? "este pago" : "esta orden de pago"}.`)) return;
+    onClose();
+  }
+
   if (fxPago) return (
     <FxSettlementDialog
     kind="pago" counterpartyId={fxPago.proveedorId} sociedadId={sociedadId}
@@ -960,7 +1000,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
   return (
     <>
     <>
-      <div className="fixed inset-0 z-50 bg-black/40" onClick={onClose} />
+      <div className="fixed inset-0 z-50 bg-black/40" onClick={pedirCierre} />
       <div className={`fixed z-50 overflow-y-auto rounded-2xl bg-white p-4 shadow-2xl dark:bg-zinc-900 transition-all ${opModalFullscreen ? "inset-2 max-h-[calc(100vh-1rem)]" : "inset-4 m-auto h-fit max-h-[90vh] w-full max-w-4xl"}`}>
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
@@ -969,7 +1009,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
           </div>
           <div className="flex items-center gap-1">
             <button onClick={() => setOpModalFullscreen(f => !f)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800" title={opModalFullscreen ? "Reducir" : "Maximizar"}>{opModalFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button>
-            <button onClick={onClose} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+            <button onClick={pedirCierre} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
           </div>
         </div>
         {opError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{opError}</div>}

@@ -10,11 +10,16 @@
  * Clientes: Debe = facturas (y ajustes débito); Haber = NC, cobros y retenciones aplicados (y ajustes crédito).
  * Proveedores: Debe = facturas (y ajustes a favor del proveedor); Haber = NC, OP (bruto) y pagos directos.
  * Saldo positivo = nos debe (cliente) / le debemos (proveedor). ARS y US$ siempre por separado.
+ * Arreglo 22 (26/10/2026): cada renglón dice qué documento abre (`doc`) y `resumenDesde` arma el resumen desde una fecha.
+ * Arreglo 23 (27/10/2026): el ajuste manual vigente lleva `ajusteId` (se anula desde la ficha) y el anulado, quién y cuándo (`anulacion`).
  *
  * Prueba: npx tsx scripts/test-resumen-cuenta.ts
  */
 
 export type MonedaRC = "ARS" | "USD";
+
+/** El documento que abre un renglón: factura o NC de venta, recibo, OP o factura de compra (los ajustes no tienen). */
+export interface DocResumen { tipo: "factura_venta" | "factura_compra" | "op" | "recibo"; id: string }
 
 export interface RenglonResumen {
   id: string;
@@ -35,6 +40,13 @@ export interface RenglonResumen {
   anulado: boolean;
   /** Saldo acumulado de su moneda después de este renglón. */
   saldo: number;
+  doc?: DocResumen;
+  /** Ajuste manual vigente (cargado con «Ajuste manual»): el movimiento que se anula desde la ficha. */
+  ajusteId?: string;
+  /** Facturas a las que está aplicado ese ajuste: si se anula, vuelven a deber. */
+  aplicadoA?: string[];
+  /** Ajuste manual anulado: quién y cuándo. Solo en pantalla (el PDF va al cliente). */
+  anulacion?: { por: string | null; el: string | null };
 }
 
 export interface ResumenCuenta {
@@ -89,6 +101,9 @@ export interface MovimientoRC {
   descripcion?: string | null;
   anulado?: boolean | null;
   anulado_at?: string | null;
+  anulado_por?: string | null;
+  /** Nombre de quien anuló (profiles): lo completa la pantalla. */
+  anulado_por_nombre?: string | null;
   created_at?: string | null;
   factura_id?: string | null;
   ajuste_sentido?: string | null;
@@ -109,9 +124,13 @@ const esRetencion = (t: string | null | undefined) => String(t || "").startsWith
 /** Marca que deja rechazar_cheque_recibido en la descripción del cobro que anula. */
 const CHEQUE_RECHAZADO = /^\s*\[ANULADO · cheque rechazado\]\s*/i;
 const textoMov = (m: MovimientoRC) => String(m.descripcion || m.tipo || "Movimiento").replace(/\s*\[[a-z]+-\d+\/\d+\]\s*$/i, "");
+/** Ajuste cargado con «Ajuste manual» (ajuste-manual.tsx). Al anularlo, gestionar_cobro le pone "[ANULADO]" adelante. */
+const AJUSTE_MANUAL = /^\s*(?:\[ANULADO\]\s*)?\[Ajuste manual\]/i;
+const ANULADO = /^\s*\[ANULADO\]\s*/i;
+const anulacionDe = (m: MovimientoRC) => ({ por: m.anulado_por_nombre || null, el: m.anulado_at || null });
 
-/** Recibo y cheque de un cobro (recibo_movimientos y echeqs), para el detalle corto. */
-export interface InfoCobroRC { recibo?: number | null; cheque?: { numero?: string | null; banco?: string | null; estado?: string | null; fecha_deposito?: string | null; fecha_endoso?: string | null } | null }
+/** Recibo y cheque de un cobro (recibo_movimientos y echeqs), para el detalle corto. `reciboId`: para abrir el recibo. */
+export interface InfoCobroRC { recibo?: number | null; reciboId?: string | null; cheque?: { numero?: string | null; banco?: string | null; estado?: string | null; fecha_deposito?: string | null; fecha_endoso?: string | null } | null }
 
 const MEDIO_RC: Record<string, string> = {
   cobro: "Cobro", transferencia: "Transferencia", efectivo: "Efectivo", tarjeta: "Tarjeta", link_pago: "Link de pago", cheque_recibido: "Cheque",
@@ -185,31 +204,39 @@ export function resumenCliente(
     const m = mon(f.moneda);
     const total = n(f.total);
     if (anuladaConNC(f)) {
-      base.push({ id: f.id, fecha: dia(f.fecha), clase: "factura", detalle: comp, nota: `anulada con ${ncsDeFactura.get(f.id)!.join(", ")}`, moneda: m, importe: total, debe: total, haber: 0, suma: true, anulado: false });
+      base.push({ doc: { tipo: "factura_venta", id: f.id }, id: f.id, fecha: dia(f.fecha), clase: "factura", detalle: comp, nota: `anulada con ${ncsDeFactura.get(f.id)!.join(", ")}`, moneda: m, importe: total, debe: total, haber: 0, suma: true, anulado: false });
       continue;
     }
     if (f.estado === "anulada") {
-      base.push({ id: f.id, fecha: dia(f.fecha), clase: esNCTipo(f.tipo) ? "nc" : "factura", detalle: comp, nota: "anulada", moneda: m, importe: total, debe: 0, haber: 0, suma: false, anulado: true });
+      base.push({ doc: { tipo: "factura_venta", id: f.id }, id: f.id, fecha: dia(f.fecha), clase: esNCTipo(f.tipo) ? "nc" : "factura", detalle: comp, nota: "anulada", moneda: m, importe: total, debe: 0, haber: 0, suma: false, anulado: true });
       continue;
     }
     if (!esNCTipo(f.tipo)) {
-      base.push({ id: f.id, fecha: dia(f.fecha), clase: "factura", detalle: comp, moneda: m, importe: total, debe: total, haber: 0, suma: true, anulado: false });
+      base.push({ doc: { tipo: "factura_venta", id: f.id }, id: f.id, fecha: dia(f.fecha), clase: "factura", detalle: comp, moneda: m, importe: total, debe: total, haber: 0, suma: true, anulado: false });
       continue;
     }
     // NC: la parte aplicada baja la factura (total_acreditado) y lo que no se pudo aplicar queda a favor.
     const objetivo = (facturasDeNC.get(f.id) || []).map((id) => facPorId.get(id)!);
     const aFavor = n(f.saldo_a_favor_cliente);
     if (!objetivo.length) {
-      base.push({ id: f.id, fecha: dia(f.fecha), clase: "nc", detalle: comp, nota: "sin factura asociada: queda a favor", moneda: m, importe: total, debe: 0, haber: total, suma: true, anulado: false });
+      base.push({ doc: { tipo: "factura_venta", id: f.id }, id: f.id, fecha: dia(f.fecha), clase: "nc", detalle: comp, nota: "sin factura asociada: queda a favor", moneda: m, importe: total, debe: 0, haber: total, suma: true, anulado: false });
     } else {
       const lista = objetivo.sort((a, b) => dia(a.fecha).localeCompare(dia(b.fecha)) || n(a.numero) - n(b.numero)).map(comprobanteVentaRC).join(", ");
       const verbo = objetivo.some((o) => o.estado === "anulada") ? "anula" : "aplicada a";
-      base.push({ id: f.id, fecha: dia(f.fecha), clase: "nc", detalle: comp, nota: `${verbo} ${lista}${aFavor > 0.005 ? ` · a favor ${pesos(aFavor, m)}` : ""}`, moneda: m, importe: total, debe: 0, haber: total, suma: true, anulado: false });
+      base.push({ doc: { tipo: "factura_venta", id: f.id }, id: f.id, fecha: dia(f.fecha), clase: "nc", detalle: comp, nota: `${verbo} ${lista}${aFavor > 0.005 ? ` · a favor ${pesos(aFavor, m)}` : ""}`, moneda: m, importe: total, debe: 0, haber: total, suma: true, anulado: false });
     }
   }
 
   const apsPorMov = new Map<string, AplicacionRC[]>();
   for (const a of aplicaciones) if (a.movimiento_id && a.factura_id) apsPorMov.set(a.movimiento_id, [...(apsPorMov.get(a.movimiento_id) || []), a]);
+  // Recibos con un cobro en pesos aplicado a una factura en US$ (cobro FX): sus retenciones en pesos ya están dentro de
+  // lo aplicado en US$ (Termo, recibo 1041: ($ 1.241.525,26 + $ 35.672,84 de retenciones) / 1530 = US$ 834,77).
+  const recibosUSD = new Set<number>();
+  for (const mv of movimientos) {
+    const rec = infoCobros.get(mv.id)?.recibo;
+    if (rec && !mv.anulado && !esRetencion(mv.tipo) && mon(mv.moneda) === "ARS"
+      && (apsPorMov.get(mv.id) || []).some((a) => mon(facPorId.get(a.factura_id!)?.moneda) === "USD")) recibosUSD.add(rec);
+  }
 
   // Cobros en orden de fecha: así lo cobrado de más queda en el último que se pasó.
   const movs = [...movimientos].sort((a, b) => dia(a.fecha).localeCompare(dia(b.fecha)) || String(a.created_at || "").localeCompare(String(b.created_at || "")));
@@ -217,8 +244,12 @@ export function resumenCliente(
     const fecha = dia(mv.fecha);
     const mm = mon(mv.moneda);
     const clase = mv.tipo === "ajuste" || mv.ajuste_sentido ? "ajuste" : esRetencion(mv.tipo) ? "retencion" : "cobro";
-    const texto = textoMov(mv).replace(CHEQUE_RECHAZADO, "").trim();
+    // Ajuste manual (arreglo 23): el vigente se anula desde la ficha; el anulado va sin el "[ANULADO]" (ya se tacha).
+    const manual = clase === "ajuste" && AJUSTE_MANUAL.test(String(mv.descripcion || ""));
+    const ajusteId = manual && !mv.anulado ? mv.id : undefined;
+    const texto = (manual ? textoMov(mv).replace(ANULADO, "") : textoMov(mv)).replace(CHEQUE_RECHAZADO, "").trim();
     const info = infoCobros.get(mv.id);
+    const doc: DocResumen | undefined = info?.reciboId ? { tipo: "recibo", id: info.reciboId } : undefined;
     const detalle = detalleCortoCobro(mv, texto, info);
     const completo = detalle !== texto ? texto : undefined;
     const creado = mv.created_at || undefined;
@@ -227,18 +258,18 @@ export function resumenCliente(
     if (mv.anulado && CHEQUE_RECHAZADO.test(String(mv.descripcion || ""))) {
       const importe = n(mv.monto_original ?? mv.monto);
       const nro = String(info?.cheque?.numero || texto.match(/(?:N°|eCheq)\s*(\d+)/i)?.[1] || "").replace(/^0+(?=\d)/, "");
-      base.push({ completo, id: mv.id, fecha, clase, detalle, moneda: mm, importe, debe: 0, haber: importe, suma: true, anulado: false, creado });
-      base.push({ completo, id: `${mv.id}-rechazo`, fecha: dia(mv.anulado_at) || fecha, clase: "rechazo", detalle: `Cheque rechazado${nro ? ` N° ${nro}` : ""}`, nota: "vuelve a deber lo que había cobrado", moneda: mm, importe, debe: importe, haber: 0, suma: true, anulado: false, creado });
+      base.push({ completo, doc, id: mv.id, fecha, clase, detalle, moneda: mm, importe, debe: 0, haber: importe, suma: true, anulado: false, creado });
+      base.push({ completo, doc, id: `${mv.id}-rechazo`, fecha: dia(mv.anulado_at) || fecha, clase: "rechazo", detalle: `Cheque rechazado${nro ? ` N° ${nro}` : ""}`, nota: "vuelve a deber lo que había cobrado", moneda: mm, importe, debe: importe, haber: 0, suma: true, anulado: false, creado });
       continue;
     }
     if (mv.anulado) {
-      base.push({ completo, id: mv.id, fecha, clase, detalle, nota: "anulado", moneda: mm, importe: n(mv.monto_original ?? mv.monto), debe: 0, haber: 0, suma: false, anulado: true, creado });
+      base.push({ completo, doc, id: mv.id, fecha, clase, detalle, nota: "anulado", moneda: mm, importe: n(mv.monto_original ?? mv.monto), debe: 0, haber: 0, suma: false, anulado: true, anulacion: manual ? anulacionDe(mv) : undefined, creado });
       continue;
     }
     if (clase === "ajuste" && !(apsPorMov.get(mv.id)?.length) && !mv.factura_id) {
       const s = mv.ajuste_sentido;
-      if (s === "debito" || s === "credito") base.push({ completo, id: mv.id, fecha, clase, detalle, moneda: mm, importe: n(mv.monto), debe: s === "debito" ? n(mv.monto) : 0, haber: s === "credito" ? n(mv.monto) : 0, suma: true, anulado: false, creado });
-      else base.push({ completo, id: mv.id, fecha, clase, detalle, nota: "ajuste sin sentido: no suma", moneda: mm, importe: n(mv.monto), debe: 0, haber: 0, suma: false, anulado: false, creado });
+      if (s === "debito" || s === "credito") base.push({ completo, doc, id: mv.id, fecha, clase, detalle, moneda: mm, importe: n(mv.monto), debe: s === "debito" ? n(mv.monto) : 0, haber: s === "credito" ? n(mv.monto) : 0, suma: true, anulado: false, ajusteId, creado });
+      else base.push({ completo, doc, id: mv.id, fecha, clase, detalle, nota: "ajuste sin sentido: no suma", moneda: mm, importe: n(mv.monto), debe: 0, haber: 0, suma: false, anulado: false, ajusteId, creado });
       continue;
     }
     // Lo aplicado a cada factura, en la moneda de la factura.
@@ -247,9 +278,12 @@ export function resumenCliente(
       : mv.factura_id ? [{ factura_id: mv.factura_id, monto: n(mv.monto) }] : [];
     if (!aps.length) {
       const anterior = /sistema anterior/i.test(String(mv.descripcion || ""));
-      base.push({ completo, id: mv.id, fecha, clase, detalle, nota: anterior ? "sist. anterior: no suma" : "sin factura aplicada: no suma", moneda: mm, importe: n(mv.monto), debe: 0, haber: 0, suma: false, anulado: false, creado });
+      const enCobroUSD = clase === "retencion" && !!info?.recibo && recibosUSD.has(info.recibo);
+      base.push({ completo, doc, id: mv.id, fecha, clase, detalle, nota: anterior ? "sist. anterior: no suma" : enCobroUSD ? `incluida en el cobro en US$ del recibo ${info!.recibo}` : "sin factura aplicada: no suma", moneda: mm, importe: n(mv.monto), debe: 0, haber: 0, suma: false, anulado: false, creado });
       continue;
     }
+    // Ajuste manual aplicado a facturas (aplicar_saldo_favor_cliente): si se anula, vuelven a deber.
+    const aplicadoA = ajusteId ? [...new Set(aps.map((a) => facPorId.get(a.factura_id)).filter((f): f is FacturaVentaRC => !!f).map(comprobanteVentaRC))] : undefined;
     const porMoneda: Record<MonedaRC, { suma: number; aplicado: number; facturas: string[] }> = { ARS: { suma: 0, aplicado: 0, facturas: [] }, USD: { suma: 0, aplicado: 0, facturas: [] } };
     const notas: string[] = [];
     for (const a of aps) {
@@ -269,7 +303,7 @@ export function resumenCliente(
     }
     const monedas = (["ARS", "USD"] as MonedaRC[]).filter((k) => porMoneda[k].aplicado > 0.005);
     if (!monedas.length) {
-      base.push({ completo, id: mv.id, fecha, clase, detalle, nota: notas.join(" · ") || "no suma", moneda: mm, importe: n(mv.monto), debe: 0, haber: 0, suma: false, anulado: false, creado });
+      base.push({ completo, doc, id: mv.id, fecha, clase, detalle, nota: notas.join(" · ") || "no suma", moneda: mm, importe: n(mv.monto), debe: 0, haber: 0, suma: false, anulado: false, ajusteId, aplicadoA, creado });
       continue;
     }
     for (const k of monedas) {
@@ -279,7 +313,7 @@ export function resumenCliente(
       const sinAplicar = k === mm ? r2(n(mv.monto) - pm.aplicado) : 0;
       if (sinAplicar > 0.005) extra.push(`${pesos(sinAplicar, mm)} sin aplicar: no suma`);
       if (pm.facturas.length) extra.unshift(`aplicado a ${[...new Set(pm.facturas)].join(", ")}`);
-      base.push({ completo, id: `${mv.id}${monedas.length > 1 ? `-${k}` : ""}`, fecha, clase, detalle, nota: extra.join(" · ") || undefined, moneda: k, importe: k === mm ? n(mv.monto) : pm.aplicado, debe: 0, haber: pm.suma, suma: pm.suma > 0.005, anulado: false, creado });
+      base.push({ completo, doc, id: `${mv.id}${monedas.length > 1 ? `-${k}` : ""}`, fecha, clase, detalle, nota: extra.join(" · ") || undefined, moneda: k, importe: k === mm ? n(mv.monto) : pm.aplicado, debe: 0, haber: pm.suma, suma: pm.suma > 0.005, anulado: false, ajusteId, aplicadoA, creado });
     }
   }
   return cerrar(base);
@@ -336,23 +370,23 @@ export function resumenProveedor(
     const total = n(f.total);
     const nc = esNCTipo(f.tipo_comprobante);
     if (f.estado === "anulada") {
-      base.push({ id: f.id, fecha: dia(f.fecha), clase: nc ? "nc" : "factura", detalle: comp, nota: "anulada", moneda: m, importe: total, debe: 0, haber: 0, suma: false, anulado: true });
+      base.push({ doc: { tipo: "factura_compra", id: f.id }, id: f.id, fecha: dia(f.fecha), clase: nc ? "nc" : "factura", detalle: comp, nota: "anulada", moneda: m, importe: total, debe: 0, haber: 0, suma: false, anulado: true });
       continue;
     }
     if (nc) {
-      base.push({ id: f.id, fecha: dia(f.fecha), clase: "nc", detalle: comp, moneda: m, importe: total, debe: 0, haber: total, suma: true, anulado: false });
+      base.push({ doc: { tipo: "factura_compra", id: f.id }, id: f.id, fecha: dia(f.fecha), clase: "nc", detalle: comp, moneda: m, importe: total, debe: 0, haber: total, suma: true, anulado: false });
       continue;
     }
     const ops = (f.op_facturas_compra || []).filter((l) => l?.ordenes_pago && l.ordenes_pago.estado !== "anulada");
     const nros = [...new Set(ops.map((l) => String(l.ordenes_pago?.numero ?? "")).filter(Boolean))];
     // "Pagada" sin ningún pago cargado (compras viejas con tarjeta): la regla del saldo no la cuenta como deuda.
     if (f.estado === "pagada" && !ops.length && !conPagoDirecto.has(f.id) && !ncAplicada.has(f.id) && n(f.total_acreditado) <= 0.005) {
-      base.push({ id: f.id, fecha: dia(f.fecha), clase: "factura", detalle: comp, nota: "pagada sin pago cargado: no suma", moneda: m, importe: total, debe: 0, haber: 0, suma: false, anulado: false });
+      base.push({ doc: { tipo: "factura_compra", id: f.id }, id: f.id, fecha: dia(f.fecha), clase: "factura", detalle: comp, nota: "pagada sin pago cargado: no suma", moneda: m, importe: total, debe: 0, haber: 0, suma: false, anulado: false });
       continue;
     }
     const pagadoOP = ops.reduce((s, l) => s + n(l.monto), 0);
     resto.set(f.id, Math.max(0, total - n(f.total_acreditado) - pagadoOP));
-    base.push({ id: f.id, fecha: dia(f.fecha), clase: "factura", detalle: comp, nota: nros.length ? `${f.estado === "pagada" ? "pagada" : "pagos"} con ${nros.join(", ")}` : f.estado === "pagada" ? "pagada" : undefined, moneda: m, importe: total, debe: total, haber: 0, suma: true, anulado: false });
+    base.push({ doc: { tipo: "factura_compra", id: f.id }, id: f.id, fecha: dia(f.fecha), clase: "factura", detalle: comp, nota: nros.length ? `${f.estado === "pagada" ? "pagada" : "pagos"} con ${nros.join(", ")}` : f.estado === "pagada" ? "pagada" : undefined, moneda: m, importe: total, debe: total, haber: 0, suma: true, anulado: false });
   }
 
   // Lo que salió de verdad en cada OP (pagos + retenciones): si pasó el bruto y quedó como saldo a favor, suma.
@@ -365,7 +399,7 @@ export function resumenProveedor(
     const bruto = n(op.monto_bruto);
     const detalle = String(op.numero || "Orden de pago");
     if (op.estado === "anulada") {
-      base.push({ id: op.id, fecha: dia(op.fecha), clase: "op", detalle, nota: "anulada", moneda: m, importe: bruto, debe: 0, haber: 0, suma: false, anulado: true, creado: op.created_at || undefined });
+      base.push({ doc: { tipo: "op", id: op.id }, id: op.id, fecha: dia(op.fecha), clase: "op", detalle, nota: "anulada", moneda: m, importe: bruto, debe: 0, haber: 0, suma: false, anulado: true, creado: op.created_at || undefined });
       continue;
     }
     const links = (op.op_facturas_compra || []).map((l) => ({ f: l.factura_compra_id ? facPorId.get(l.factura_compra_id) : undefined, monto: n(l.monto) })).filter((l) => l.f);
@@ -376,12 +410,12 @@ export function resumenProveedor(
     if (otraMoneda) {
       const fm = mon(links[0].f!.moneda);
       const aplicado = links.reduce((s, l) => s + l.monto, 0);
-      base.push({ id: op.id, fecha: dia(op.fecha), clase: "op", detalle, nota: `${nota} · pagada con ${pesos(bruto, m)}`, moneda: fm, importe: aplicado, debe: 0, haber: aplicado, suma: true, anulado: false, creado: op.created_at || undefined });
+      base.push({ doc: { tipo: "op", id: op.id }, id: op.id, fecha: dia(op.fecha), clase: "op", detalle, nota: `${nota} · pagada con ${pesos(bruto, m)}`, moneda: fm, importe: aplicado, debe: 0, haber: aplicado, suma: true, anulado: false, creado: op.created_at || undefined });
       continue;
     }
     const pagado = r2(pagadoPorOP.get(op.id) || 0);
     const excedente = pagado - bruto > 0.005 ? r2(Math.min(pagado - bruto, aFavorPorOP.get(op.id) || 0)) : 0;
-    base.push({ id: op.id, fecha: dia(op.fecha), clase: "op", detalle, nota: excedente ? `${nota} · ${pesos(excedente, m)} de más, quedó a favor` : nota, moneda: m, importe: bruto + excedente, debe: 0, haber: bruto + excedente, suma: true, anulado: false, creado: op.created_at || undefined });
+    base.push({ doc: { tipo: "op", id: op.id }, id: op.id, fecha: dia(op.fecha), clase: "op", detalle, nota: excedente ? `${nota} · ${pesos(excedente, m)} de más, quedó a favor` : nota, moneda: m, importe: bruto + excedente, debe: 0, haber: bruto + excedente, suma: true, anulado: false, creado: op.created_at || undefined });
   }
 
   const movs = [...movimientos].sort((a, b) => dia(a.fecha).localeCompare(dia(b.fecha)) || String(a.created_at || "").localeCompare(String(b.created_at || "")));
@@ -390,16 +424,18 @@ export function resumenProveedor(
     if (mv.orden_pago_id || mv.nota_credito_compra_id) continue;
     const fecha = dia(mv.fecha);
     const mm = mon(mv.moneda);
-    const detalle = textoMov(mv);
     const creado = mv.created_at || undefined;
     const sentido = sentidoAjuste(mv);
     const clase = sentido || mv.tipo === "ajuste" ? "ajuste" : esRetencion(mv.tipo) ? "retencion" : "pago";
+    // Ajuste manual (arreglo 23): igual que en clientes.
+    const manual = clase === "ajuste" && AJUSTE_MANUAL.test(String(mv.descripcion || ""));
+    const detalle = manual ? textoMov(mv).replace(ANULADO, "") : textoMov(mv);
     if (mv.anulado) {
-      base.push({ id: mv.id, fecha, clase, detalle, nota: "anulado", moneda: mm, importe: n(mv.monto_original ?? mv.monto), debe: 0, haber: 0, suma: false, anulado: true, creado });
+      base.push({ id: mv.id, fecha, clase, detalle, nota: "anulado", moneda: mm, importe: n(mv.monto_original ?? mv.monto), debe: 0, haber: 0, suma: false, anulado: true, anulacion: manual ? anulacionDe(mv) : undefined, creado });
       continue;
     }
     if (sentido) {
-      base.push({ id: mv.id, fecha, clase, detalle, moneda: mm, importe: n(mv.monto), debe: sentido === "credito" ? n(mv.monto) : 0, haber: sentido === "debito" ? n(mv.monto) : 0, suma: true, anulado: false, creado });
+      base.push({ id: mv.id, fecha, clase, detalle, moneda: mm, importe: n(mv.monto), debe: sentido === "credito" ? n(mv.monto) : 0, haber: sentido === "debito" ? n(mv.monto) : 0, suma: true, anulado: false, ajusteId: manual ? mv.id : undefined, creado });
       continue;
     }
     if (mv.tipo === "pago" && mv.factura_compra_id) {
@@ -408,20 +444,35 @@ export function resumenProveedor(
       const nota = [f ? `paga ${comprobanteCompraRC(f)}` : "", n(mv.retencion_ganancias_monto) > 0.005 ? `incluye retención ${pesos(n(mv.retencion_ganancias_monto), mm)}` : ""].filter(Boolean);
       // Sobre una factura anulada lo pagado queda a favor (suma entero).
       if (!f || f.estado === "anulada" || !resto.has(f.id)) {
-        base.push({ id: mv.id, fecha, clase: "pago", detalle, nota: nota.join(" · ") || undefined, moneda: mm, importe: bruto, debe: 0, haber: bruto, suma: true, anulado: false, creado });
+        base.push({ doc: { tipo: "factura_compra", id: mv.factura_compra_id }, id: mv.id, fecha, clase: "pago", detalle, nota: nota.join(" · ") || undefined, moneda: mm, importe: bruto, debe: 0, haber: bruto, suma: true, anulado: false, creado });
         continue;
       }
       const queda = resto.get(f.id)!;
       const cuenta = Math.min(bruto, queda);
       resto.set(f.id, r2(queda - cuenta));
       if (bruto - cuenta > 0.005) nota.push(`${pesos(r2(bruto - cuenta), mm)} de más: no suma`);
-      base.push({ id: mv.id, fecha, clase: "pago", detalle, nota: nota.join(" · ") || undefined, moneda: mm, importe: bruto, debe: 0, haber: cuenta, suma: cuenta > 0.005, anulado: false, creado });
+      base.push({ doc: { tipo: "factura_compra", id: mv.factura_compra_id }, id: mv.id, fecha, clase: "pago", detalle, nota: nota.join(" · ") || undefined, moneda: mm, importe: bruto, debe: 0, haber: cuenta, suma: cuenta > 0.005, anulado: false, creado });
       continue;
     }
     const anterior = /sistema anterior/i.test(String(mv.descripcion || ""));
     base.push({ id: mv.id, fecha, clase, detalle, nota: anterior ? "sist. anterior: no suma" : "sin factura ni OP: no suma", moneda: mm, importe: n(mv.monto), debe: 0, haber: 0, suma: false, anulado: false, creado });
   }
   return cerrar(base);
+}
+
+/**
+ * El resumen desde una fecha (arreglo 22): lo de antes queda en `anterior` (el saldo de cada moneda antes de `desde`)
+ * y los renglones arrancan en esa fecha. El saldo final no cambia. Sin fecha, todo como está.
+ */
+export function resumenDesde(resumen: ResumenCuenta, desde: string | null | undefined): { renglones: RenglonResumen[]; anterior: Record<MonedaRC, number> | null } {
+  if (!desde) return { renglones: resumen.renglones, anterior: null };
+  const anterior: Record<MonedaRC, number> = { ARS: 0, USD: 0 };
+  const renglones: RenglonResumen[] = [];
+  for (const r of resumen.renglones) {
+    if (r.fecha >= desde) renglones.push(r);
+    else if (r.suma) anterior[r.moneda] = r.saldo;
+  }
+  return { renglones, anterior };
 }
 
 /** Diferencia entre el saldo del resumen y el de la ficha (para avisar si no cierran; nunca frena). */

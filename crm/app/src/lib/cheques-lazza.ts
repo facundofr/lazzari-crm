@@ -62,9 +62,18 @@ const masDias = (f: string, d: number) => new Date(Date.parse(`${f}T12:00:00Z`) 
  * que no se haya debitado en la fecha no es atraso; a los 30 días el cheque vence).
  */
 export function estaEnFecha(ch: ChequeFL, hoy: string): boolean {
-  if (!chequePendiente(ch) || !ch.fecha_pago) return false;
+  return situacionPago(ch, hoy) === "en_fecha";
+}
+
+/**
+ * Fecha de pago de un cheque pendiente (columna "Pago" de Cheques, auditoría UX 26/10/2026, arreglo 6):
+ * "en_fecha" desde la fecha de pago hasta 30 días después; "vencido" pasados los 30 días; null si no está pendiente o la fecha no llegó.
+ */
+export function situacionPago(ch: ChequeFL, hoy: string): "en_fecha" | "vencido" | null {
+  if (!chequePendiente(ch) || !ch.fecha_pago) return null;
   const f = String(ch.fecha_pago).slice(0, 10);
-  return f <= hoy && f >= masDias(hoy, -30);
+  if (f > hoy) return null;
+  return f >= masDias(hoy, -30) ? "en_fecha" : "vencido";
 }
 
 /** Próxima semana (26/10/2026, Augusto): los pendientes con fecha de pago de mañana a 7 días. */

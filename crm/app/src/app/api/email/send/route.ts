@@ -57,10 +57,10 @@ export async function POST(req: NextRequest) {
     const resend = new Resend(resendKey);
 
     // Email sender routing:
-    // - Facturas, OP & Recibos → administracion@lazzari.com.ar (fixed)
+    // - Facturas, OP, Recibos & Resumen de cuenta → administracion@lazzari.com.ar (fixed)
     // - PR & Remitos & OC → user's email (personal sender)
     const ADMIN_EMAIL = "Lazzari Soluciones Industriales <administracion@lazzari.com.ar>";
-    const isAdminDoc = documentType === "factura" || documentType === "orden_pago" || documentType === "recibo";
+    const isAdminDoc = documentType === "factura" || documentType === "orden_pago" || documentType === "recibo" || documentType === "resumen_cuenta";
     let fromEmail: string;
     if (isAdminDoc) {
       fromEmail = ADMIN_EMAIL;

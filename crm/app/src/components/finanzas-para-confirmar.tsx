@@ -88,7 +88,10 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
   const [filtroRegistro, setFiltroRegistro] = useState("");
   const [abiertos, setAbiertos] = useState<Record<Confianza, boolean>>(simple ? { alta: false, media: true, baja: true } : { alta: true, media: true, baja: false });
   const [corrigiendo, setCorrigiendo] = useState<string | null>(null);
-  const [correccion, setCorreccion] = useState<{ clasificacion: ClasificacionLinea | ""; nota: string; recordar: boolean }>({ clasificacion: "", nota: "", recordar: true });
+  // "Recordar para la próxima" crea una regla que se aplica sola: viene destildado (auditoría UX 26/10/2026, arreglo 7).
+  const [correccion, setCorreccion] = useState<{ clasificacion: ClasificacionLinea | ""; nota: string; recordar: boolean }>({ clasificacion: "", nota: "", recordar: false });
+  // Un cheque de cliente rechazado anula su cobro al guardar: hay que tildar "Entendido" (auditoría UX 26/10/2026, arreglo 7).
+  const [rechazoEntendido, setRechazoEntendido] = useState(false);
   const [arrastrando, setArrastrando] = useState(false);
   /** Formulario "Cobro de factura del sistema anterior" (facturas que no están en el CRM) abierto en un renglón. */
   const [anterior, setAnterior] = useState<{ linea_id: string; cliente: string; facturas: string; bruto: string; referencia: string; rets: { tipo: string; monto: string; certificado: string }[] } | null>(null);
@@ -650,6 +653,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
     avisos.push(...eleccion.avisos);
     setArchivos(out.filter((_, k) => eleccion.usar.includes(k)));
     setReportesEcheq(reps);
+    setRechazoEntendido(false);
     setOcupado(null);
     if (avisos.length || errores.length) setAviso([...avisos, ...errores.map((e) => `⚠️ ${e}`)].join("\n"));
     if (avisos.length) await cargar();
@@ -762,6 +766,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
     }
     setArchivos([]);
     setReportesEcheq([]);
+    setRechazoEntendido(false);
     setOcupado(null);
     setAviso(msgs.join("\n"));
     await cargar();
@@ -769,6 +774,14 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
 
   // ─── Pantalla ──────────────────────────────────────────────────────────────
   if (!sociedadId) return null;
+
+  // 26/10/2026: lo que va a cambiar en el CRM al apretar Guardar (misma regla que actualizar_cheques_segun_banco).
+  const cambiosCarga = reportesEcheq.length ? cambiosDeLaCarga(armarItemsEcheq(reportesEcheq).items, (datos?.cheques || []).map((c): ChequeCrmMin => {
+    const x = c as ChequeCruce & { cheq_id?: string | null; destino_nombre?: string | null; origen_nombre?: string | null };
+    return { id: x.id, cheq_id: x.cheq_id, numero: x.numero, monto: x.monto, direccion: x.direccion, estado: x.estado, contraparte: x.direccion === "emitido" ? x.destino_nombre : x.origen_nombre };
+  })) : [];
+  // Cheques de clientes rechazados: al guardar se anula su cobro y la factura vuelve a deber. Piden "Entendido" antes de guardar.
+  const rechazosQueAnulan = cambiosCarga.filter((c) => c.a === "rechazado" && c.cheque.direccion === "recibido");
 
   const registroVisible = registro.filter((r) => !filtroRegistro.trim() || `${r.resumen} ${r.accion} ${r.tipo} ${nombres.get(r.usuario_id || "")}`.toLowerCase().includes(filtroRegistro.trim().toLowerCase()));
   /** Vista simple: impuestos y comisiones que ya cruzan solos van juntos en una fila; lo demás sin cerrar es "para vos". */
@@ -784,7 +797,9 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
 
   const renglon = (i: ItemBandeja) => {
     const abiertoCorregir = corrigiendo === i.linea_id;
-    const puedeConfirmar = Boolean(i.cobro || i.gasto || i.gastoFijo || i.pagoProveedor || i.cruce) && !faltaMigracion;
+    // Línea de cheque con cheques posibles: se cierra tocando "Es el N° …" (así queda atada al cheque).
+    // "Sí, es eso" la cerraba sin atarla (auditoría UX 26/10/2026, arreglo 7).
+    const puedeConfirmar = Boolean(i.cobro || i.gasto || i.gastoFijo || i.pagoProveedor || (i.cruce && !i.opcionesCheque?.length)) && !faltaMigracion;
     return (
       <div key={i.linea_id} className="py-2">
         <div className="flex flex-wrap items-start gap-2 text-sm">
@@ -819,7 +834,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
             <button disabled={ocupado !== null} onClick={() => {
               if (!simple && (i.cobro || i.gasto)) { onIrATab?.("extractos"); return; }
               setCorrigiendo(abiertoCorregir ? null : i.linea_id);
-              setCorreccion({ clasificacion: (i.cruce?.clasificacion as ClasificacionLinea) || "", nota: i.cruce?.nota || "", recordar: true });
+              setCorreccion({ clasificacion: (i.cruce?.clasificacion as ClasificacionLinea) || "", nota: i.cruce?.nota || "", recordar: false });
             }} className="rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800" title={i.cobro || i.gasto ? "Abre Extractos para resolverla a mano" : "Elegir otra clasificación"}>
               {simple ? "Otra cosa" : "Corregir"}
             </button>
@@ -937,11 +952,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
                 ))}
                 {armarItemsEcheq(reportesEcheq).avisos.map((x, i) => <p key={i} className="font-semibold text-amber-600">⚠️ {x}</p>)}
                 {(() => {
-                  // 26/10/2026: lo que va a cambiar en el CRM al apretar Guardar (misma regla que actualizar_cheques_segun_banco).
-                  const cambios = cambiosDeLaCarga(armarItemsEcheq(reportesEcheq).items, (datos?.cheques || []).map((c): ChequeCrmMin => {
-                    const x = c as ChequeCruce & { cheq_id?: string | null; destino_nombre?: string | null; origen_nombre?: string | null };
-                    return { id: x.id, cheq_id: x.cheq_id, numero: x.numero, monto: x.monto, direccion: x.direccion, estado: x.estado, contraparte: x.direccion === "emitido" ? x.destino_nombre : x.origen_nombre };
-                  }));
+                  const cambios = cambiosCarga;
                   const fuera = chequesFueraDelReporte();
                   // 26/10/2026 (tanda 2): que no se pierda ningún cheque. Solo avisa.
                   const avisoFuera = fuera === null ? null : fuera.length === 0
@@ -967,9 +978,17 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
                 })()}
               </div>
             )}
+            {rechazosQueAnulan.length > 0 && (
+              <label className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 px-2 py-1.5 font-medium text-red-800 dark:border-red-800 dark:bg-red-950/30 dark:text-red-200">
+                <input type="checkbox" checked={rechazoEntendido} onChange={(e) => setRechazoEntendido(e.target.checked)} className="mt-0.5" />
+                <span>Entendido: al guardar se anula el cobro de {rechazosQueAnulan.map((c) => `cheque ${c.cheque.numero}${c.cheque.contraparte ? ` de ${c.cheque.contraparte}` : ""} (${formatCurrency(Number(c.cheque.monto))})`).join(", ")} y {rechazosQueAnulan.length > 1 ? "esas facturas vuelven" : "la factura vuelve"} a deber.</span>
+              </label>
+            )}
             <div className="flex gap-2 pt-1">
-              <button disabled={ocupado !== null || !(archivos.some((a) => a.cuenta) || reportesEcheq.length > 0)} onClick={() => void guardarArchivos()} className="rounded-md bg-emerald-600 px-3 py-1 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">Guardar y armar la bandeja</button>
-              <button onClick={() => { setArchivos([]); setReportesEcheq([]); }} className="rounded-md border border-zinc-200 px-3 py-1 dark:border-zinc-700">Cancelar</button>
+              <button disabled={ocupado !== null || !(archivos.some((a) => a.cuenta) || reportesEcheq.length > 0) || (rechazosQueAnulan.length > 0 && !rechazoEntendido)}
+                title={rechazosQueAnulan.length > 0 && !rechazoEntendido ? "Tildá «Entendido» del cheque rechazado para guardar" : undefined}
+                onClick={() => void guardarArchivos()} className="rounded-md bg-emerald-600 px-3 py-1 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">Guardar y armar la bandeja</button>
+              <button onClick={() => { setArchivos([]); setReportesEcheq([]); setRechazoEntendido(false); }} className="rounded-md border border-zinc-200 px-3 py-1 dark:border-zinc-700">Cancelar</button>
             </div>
           </div>
         )}

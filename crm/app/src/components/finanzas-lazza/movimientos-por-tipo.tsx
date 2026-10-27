@@ -162,7 +162,10 @@ export function MovimientosPorTipo({ sociedadId }: { sociedadId: string }) {
                   {sinCodigoBanco(f.descripcion)}
                   {codigoDeConcepto(f.descripcion) && <span className="ml-1 text-[10px] text-zinc-400">#{codigoDeConcepto(f.descripcion)}</span>}
                   {c.tipo === "debitos_automaticos" && detalleDebitoAutomatico(f.nota) && <span className="block text-xs text-zinc-500 dark:text-zinc-400">{detalleDebitoAutomatico(f.nota)}</span>}
-                  {f.estado === "pendiente" && <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">Pendiente</span>}
+                  {/* Finanzas simple: las transferencias se registran y no se cruzan; no quedan "Pendiente" para siempre (auditoría UX 26/10/2026, arreglo 6). */}
+                  {f.estado === "pendiente" && (c.tipo === "transferencias"
+                    ? <span className="ml-1.5 rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300" title="Las transferencias se registran y no se cruzan con cobros y pagos">Registrada</span>
+                    : <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">Pendiente</span>)}
                 </td>
                 <td className="px-3 py-1.5 text-xs text-zinc-600 dark:text-zinc-300">
                   {TIPOS_MOV.find((t) => t.id === c.tipo)!.nombre}{c.categoria ? ` · ${c.categoria}` : ""}{c.devolucion ? " · devolución" : ""}

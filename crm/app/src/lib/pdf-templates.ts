@@ -10,6 +10,7 @@ import { mayusculasNecesarias } from "./texto-mayusculas";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { readFceMetadata, importeEnLetras } from "@/lib/fce-invoice";
 import { scopePdfStyles } from "@/lib/pdf-style-scope";
+import { pctTexto, type DetalleRetencion } from "@/lib/certificado-retencion";
 
 // ── Sociedad info (static data not in the Sociedad type) ─────────
 interface SociedadPDF {
@@ -1117,6 +1118,8 @@ interface OPData {
   };
   medios: OPMedio[];
   facturas_vinculadas: OPFacturaVinculada[];
+  /** Cuenta de la retención de Ganancias para el certificado (lib/orden-pago-pdf.ts). Sin ella: bruto, % y retenido. */
+  retencion?: DetalleRetencion;
 }
 
 // ── Monto en letras (Spanish) ──────────────────────────────────
@@ -1267,19 +1270,31 @@ export interface ResumenCuentaPDFData {
   fecha: string;
   renglones: Array<{ fecha: string; detalle: string; nota?: string; moneda: "ARS" | "USD"; importe: number; debe: number; haber: number; suma: boolean; anulado: boolean; saldo: number }>;
   saldo: { ARS: number; USD: number };
+  /** Arreglo 22: resumen desde una fecha, con el saldo de cada moneda antes de esa fecha. */
+  desde?: string | null;
+  anterior?: { ARS: number; USD: number } | null;
 }
 
 export function generateResumenCuentaPDF(d: ResumenCuentaPDFData, soc: SociedadPDF): string {
   const celda = "white-space:nowrap";
-  const filas = d.renglones.map((r) => {
+  // Una columna de saldo por moneda (arreglo 22): en pesos y en dólares, cada una sigue su propia cuenta.
+  const monedas = (["ARS", "USD"] as const).filter((m) => d.renglones.some((r) => r.moneda === m) || Math.abs(d.anterior?.[m] ?? 0) > 0.005 || Math.abs(d.saldo[m]) > 0.005);
+  const columnas: ("ARS" | "USD")[] = monedas.length ? [...monedas] : ["ARS"];
+  const dos = columnas.length > 1;
+  const anterior = d.anterior
+    ? `<tr style="background:#f4f4f5;font-weight:600"><td style="${celda}">${formatDate(d.desde || d.fecha)}</td><td colspan="3">Saldo anterior</td>`
+      + columnas.map((m) => `<td class="right mono" style="${celda}">${formatCurrency(d.anterior![m], m)}</td>`).join("") + "</tr>"
+    : "";
+  const filas = anterior + d.renglones.map((r) => {
     const gris = !r.suma || r.anulado;
-    const estilo = `${gris ? "color:#999;" : ""}${r.anulado ? "text-decoration:line-through;" : ""}`;
     const monto = (v: number) => (v > 0.005 ? formatCurrency(v, r.moneda) : "");
-    return `<tr style="${estilo}"><td style="${celda}">${formatDate(r.fecha)}</td>`
-      + `<td>${textoSeguro(r.detalle)}${r.nota ? `<div style="font-size:8px;color:#888;margin-top:1px">${textoSeguro(r.nota)}</div>` : ""}</td>`
-      + `<td class="right mono" style="${celda}">${gris ? `<span style="font-weight:400">${formatCurrency(r.importe, r.moneda)}</span>` : monto(r.debe)}</td>`
+    // Lo que no suma lleva su importe al lado del detalle, fuera de Debe y Haber: así no se lee como deuda.
+    const importe = gris ? ` <span class="mono" style="white-space:nowrap${r.anulado ? ";text-decoration:line-through" : ""}">${formatCurrency(r.importe, r.moneda)}</span>` : "";
+    return `<tr style="${gris ? "color:#999;" : ""}"><td style="${celda}">${formatDate(r.fecha)}</td>`
+      + `<td><span style="${r.anulado ? "text-decoration:line-through" : ""}">${textoSeguro(r.detalle)}</span>${importe}${r.nota ? `<div style="font-size:8px;color:#888;margin-top:1px">${textoSeguro(r.nota)}</div>` : ""}</td>`
+      + `<td class="right mono" style="${celda}">${gris ? "" : monto(r.debe)}</td>`
       + `<td class="right mono" style="${celda}">${gris ? "" : monto(r.haber)}</td>`
-      + `<td class="right mono" style="${celda}">${gris ? "" : formatCurrency(r.saldo, r.moneda)}</td></tr>`;
+      + columnas.map((m) => `<td class="right mono" style="${celda}">${!gris && r.moneda === m ? formatCurrency(r.saldo, m) : ""}</td>`).join("") + "</tr>";
   }).join("");
   const saldoTexto = (["ARS", "USD"] as const).filter((m) => m === "ARS" || Math.abs(d.saldo.USD) > 0.005 || d.renglones.some((r) => r.moneda === "USD"))
     .map((m) => formatCurrency(d.saldo[m], m)).join(" + ");
@@ -1300,14 +1315,15 @@ ${documentHeader(soc, { title: "Resumen de cuenta corriente", number: textoSegur
       <div class="compact-title">Saldo al ${formatDate(d.fecha)}</div>
       <div class="compact-primary">${saldoTexto}</div>
       <div class="compact-line">${d.lado === "cliente" ? "Positivo = nos debe" : "Positivo = le debemos"}</div>
+      ${d.desde ? `<div class="compact-line"><span class="compact-label">Desde</span>${formatDate(d.desde)}</div>` : ""}
     </td>
   </tr>
 </table>
 <table style="table-layout:fixed">
-  <thead><tr><th style="width:70px">Fecha</th><th>Comprobante / detalle</th><th class="right" style="width:105px">Debe</th><th class="right" style="width:105px">Haber</th><th class="right" style="width:110px">Saldo</th></tr></thead>
+  <thead><tr><th style="width:70px">Fecha</th><th>Comprobante / detalle</th><th class="right" style="width:${dos ? 95 : 105}px">Debe</th><th class="right" style="width:${dos ? 95 : 105}px">Haber</th>${columnas.map((m) => `<th class="right" style="width:${dos ? 100 : 110}px">${dos ? `Saldo ${m === "USD" ? "US$" : "$"}` : "Saldo"}</th>`).join("")}</tr></thead>
   <tbody>${filas}</tbody>
 </table>
-<div style="font-size:8px;color:#888;margin-top:6px">En gris: anulados y movimientos que no suman al saldo (por ejemplo, cobros de facturas del sistema anterior).</div>
+<div style="font-size:8px;color:#888;margin-top:6px">En gris, con su importe al lado: anulados y movimientos que no suman al saldo (por ejemplo, cobros de facturas del sistema anterior).</div>
 ${documentFooter(soc, `Resumen de cuenta - ${textoSeguro(d.nombre)}`)}
 </div></body></html>`;
 }
@@ -1420,6 +1436,34 @@ export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
   const letrasHtml = `<div style="font-size:10px;font-style:italic;color:#666;margin-top:10px">${montoEnLetras(totalGeneral, mon)}</div>`;
 
   // ── Certificado retención ganancias (page 2) ──
+  // Auditoría UX 26/10/2026, arreglo 12: régimen del concepto del proveedor (el mismo que manda el TXT SICORE), la cuenta
+  // de la retención (la misma que hace la OP) y las facturas que paga. Si la cuenta no se puede rearmar (por ejemplo,
+  // un importe escrito a mano en la OP), quedan el bruto, el neto sin IVA, el % y lo retenido.
+  const ret = op.retencion;
+  const cuenta = ret && ret.minimo !== null && ret.sujeto !== null && ret.retencionAcumulada !== null
+    ? { ...ret, minimo: ret.minimo, sujeto: ret.sujeto, retencionAcumulada: ret.retencionAcumulada } : null;
+  const filaCalc = (label: string, valor: string, fuerte = false) =>
+    `<tr><td${fuerte ? ` class="bold"` : ""}>${label}</td><td class="right mono${fuerte ? " bold" : ""}">${valor}</td></tr>`;
+  const menos = (v: number) => `&minus; ${formatCurrency(v, "ARS")}`;
+  const alicuotaTxt = ret ? `${pctTexto(ret.pct)}${ret.escala ? " (escala de honorarios)" : ""}` : pctTexto(op.retencion_ganancias_pct);
+  const calculoHtml = cuenta ? [
+    filaCalc("Importe pagado (con IVA)", formatCurrency(cuenta.bruto, mon)),
+    filaCalc("Neto sin IVA de este pago", formatCurrency(cuenta.base, "ARS")),
+    filaCalc("Pagos anteriores del mes (sin IVA)", formatCurrency(cuenta.basePrevia, "ARS")),
+    filaCalc("Acumulado del mes", formatCurrency(cuenta.acumulado, "ARS"), true),
+    filaCalc("Mínimo no sujeto a retención", menos(cuenta.minimo)),
+    filaCalc("Importe sujeto a retención", formatCurrency(cuenta.sujeto, "ARS"), true),
+    filaCalc("Alícuota", alicuotaTxt),
+    filaCalc("Retención sobre el acumulado", formatCurrency(cuenta.retencionAcumulada, "ARS")),
+    filaCalc("Retenido antes en el mes", menos(cuenta.retenidoAntes)),
+    filaCalc("Importe retenido", formatCurrency(totalRetGan, mon), true),
+  ].join("") : [
+    filaCalc("Importe pagado (con IVA)", formatCurrency(ret ? ret.bruto : op.monto_bruto, mon)),
+    ret ? filaCalc("Neto sin IVA de este pago", formatCurrency(ret.base, "ARS")) : "",
+    filaCalc("Alícuota", alicuotaTxt),
+    filaCalc("Importe retenido", formatCurrency(totalRetGan, mon), true),
+  ].join("");
+
   const certHtml = totalRetGan > 0 ? `
     <div class="page" style="page-break-before:always;padding-top:20px">
       <div class="header-bar"></div>
@@ -1457,12 +1501,24 @@ export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
       <div class="items-title">C - Datos de la retenci\u00F3n</div>
       <table>
         <tbody>
-          <tr><td class="bold" style="width:240px">R\u00E9gimen</td><td>78 - Anexo II, inc. f) Enajenaci\u00F3n de bienes muebles y bienes de cambio</td></tr>
-          <tr><td class="bold">Importe sujeto a retenci\u00F3n</td><td class="mono">${formatCurrency(op.monto_bruto, mon)}</td></tr>
-          <tr><td class="bold">Importe retenido</td><td class="mono bold">${formatCurrency(totalRetGan, mon)}</td></tr>
-          <tr><td class="bold">Documentos que originan la retenci\u00F3n</td><td>${op.numero || "\u2014"} (${formatCurrency(totalGeneral, mon)})</td></tr>
+          <tr><td class="bold" style="width:240px">Impuesto</td><td>217 - Ganancias</td></tr>
+          ${ret ? `<tr><td class="bold">R\u00E9gimen</td><td>${Number(ret.regimen)} - ${ret.regimenNombre}</td></tr>` : ""}
+          <tr><td class="bold">Comprobante que origina la retenci\u00F3n</td><td>Orden de pago ${textoSeguro(op.numero || "\u2014")} del ${fechaDD(op.fecha)}</td></tr>
         </tbody>
       </table>
+
+      <div class="items-title" style="margin-top:18px">D - ${cuenta ? "C\u00E1lculo de la retenci\u00F3n (RG 830, acumulado del mes)" : "Importes"}</div>
+      <table style="width:460px">
+        <tbody>${calculoHtml}</tbody>
+      </table>
+
+      <div class="items-title" style="margin-top:18px">E - Facturas que paga la orden de pago</div>
+      ${op.facturas_vinculadas.length > 0
+        ? `<table>
+            <thead><tr><th class="center">Fecha</th><th>Comprobante</th><th class="right">Monto abonado</th></tr></thead>
+            <tbody>${op.facturas_vinculadas.map(fc => `<tr><td class="center">${fechaDD(fc.fecha)}</td><td>${textoSeguro(fc.numero)}</td><td class="right mono">${formatCurrency(fc.monto, mon)}</td></tr>`).join("")}</tbody>
+          </table>`
+        : `<p style="color:#444;font-size:11px;margin-top:6px">Sin documentos vinculados</p>`}
 
       <div style="font-size:10px;font-style:italic;color:#666;margin-top:14px;border:1px solid #e0e0e0;border-radius:6px;padding:10px 14px;background:#f9f9f9">
         ${montoEnLetras(totalRetGan, mon)}

@@ -34,6 +34,11 @@ export interface Recibo {
   anulado: boolean;
   /** Todos sus medios (sin las retenciones) conciliados con el banco. */
   conciliado: boolean;
+  /**
+   * Columna "Banco" (auditoría UX 26/10/2026, arreglo 6): "conciliado"; "registrado" si lo que falta son transferencias
+   * (desde Finanzas simple no se cruzan con el banco: no quedan pendientes para siempre); si no, "pendiente".
+   */
+  banco: "conciliado" | "registrado" | "pendiente";
 }
 
 export const MEDIO_RECIBO: Record<string, string> = {
@@ -89,12 +94,15 @@ export function armarRecibos(args: {
       for (const f of factDeMov[m.id] || []) ids.add(f);
     }
     const facturas = [...ids].map((id) => args.comprobantes?.[id] || "").filter(Boolean).sort();
+    // Las retenciones no pasan por el banco: cuenta solo lo que entró (transferencias, cheques, efectivo).
+    const conciliado = medios.length > 0 && medios.every((m) => !!m.conciliado);
+    const faltan = medios.filter((m) => !m.conciliado);
+    const banco: Recibo["banco"] = conciliado ? "conciliado"
+      : faltan.length > 0 && faltan.every((m) => String(m.tipo || "") === "transferencia") ? "registrado" : "pendiente";
     return {
       id: r.id, numero: r.numero, fecha: String(r.fecha).slice(0, 10), clienteId: r.cliente_id,
       cliente: (r.cliente_id && args.clientes?.[r.cliente_id]) || "Cliente sin nombre",
-      renglones, facturas, facturaIds: [...ids], total, anulado,
-      // Las retenciones no pasan por el banco: cuenta solo lo que entró (transferencias, cheques, efectivo).
-      conciliado: medios.length > 0 && medios.every((m) => !!m.conciliado),
+      renglones, facturas, facturaIds: [...ids], total, anulado, conciliado, banco,
     };
   }).sort((a, b) => b.numero - a.numero);
 }

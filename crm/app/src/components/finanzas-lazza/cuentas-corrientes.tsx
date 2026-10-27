@@ -268,7 +268,7 @@ function CuentasSaldos({ sociedadId }: { sociedadId: string }) {
               </table>
             )}
             <ResumenCuentaFicha sociedadId={sociedadId} lado={abierta.lado} entidadId={abierta.entidadId} nombre={abierta.nombre} cuit={abierta.cuit}
-              saldoFicha={saldoFichaAbierta} recarga={recarga} />
+              saldoFicha={saldoFichaAbierta} recarga={recarga} onCambio={() => setRecarga((n) => n + 1)} />
           </div>
         </div>
       )}

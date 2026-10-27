@@ -9,6 +9,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { armarLineaSicore, regimenSicore } from "@/lib/sicore-linea";
+import { detalleRetencion, diferenciasConHoy, pagosAnteriores, type AvisosSicore, type PagoDelMes } from "@/lib/certificado-retencion";
+import { RETENCION_DEFAULT } from "@/lib/plan-pagos";
+import { traerTodo } from "@/lib/paginar";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -57,7 +60,7 @@ export async function GET(req: NextRequest) {
   // Fetch OPs with retención ganancias in the period.
   const { data: ops, error } = await supabase
     .from("ordenes_pago")
-    .select("id, numero, fecha, monto_bruto, base_retencion_ganancias, retencion_ganancias_pct, retencion_ganancias_monto, proveedor_id, moneda")
+    .select("id, numero, fecha, created_at, monto_bruto, base_retencion_ganancias, retencion_ganancias_pct, retencion_ganancias_monto, proveedor_id, moneda")
     .eq("sociedad_id", sociedadId)
     .gte("fecha", desde)
     .lte("fecha", hasta)
@@ -73,7 +76,7 @@ export async function GET(req: NextRequest) {
   // en movimientos. También deben formar parte de la presentación mensual.
   const { data: directMovements, error: directError } = await supabase
     .from("movimientos")
-    .select("id, fecha, monto, base_retencion_ganancias, retencion_ganancias_pct, retencion_ganancias_monto, proveedor_id, moneda, descripcion, anulado")
+    .select("id, fecha, created_at, monto, base_retencion_ganancias, retencion_ganancias_pct, retencion_ganancias_monto, proveedor_id, moneda, descripcion, anulado")
     .eq("sociedad_id", sociedadId)
     .eq("tipo", "pago")
     .gte("fecha", desde)
@@ -97,7 +100,7 @@ export async function GET(req: NextRequest) {
   ].filter(Boolean))];
   const { data: provs } = await supabase
     .from("proveedores")
-    .select("id, cuit, razon_social, condicion_iva, concepto_retencion_ganancias")
+    .select("id, cuit, razon_social, condicion_iva, concepto_retencion_ganancias, alicuota_ganancias")
     .in("id", provIds)
     .eq("sociedad_id", sociedadId);
 
@@ -122,6 +125,8 @@ export async function GET(req: NextRequest) {
   const lines: string[] = [];
 
   type SicoreSource = {
+    id: string;
+    created_at: string;
     fecha: string;
     numero?: string | null;
     monto_bruto: number;
@@ -134,6 +139,8 @@ export async function GET(req: NextRequest) {
   const sources: SicoreSource[] = [
     ...(ops || []).map((op) => ({ ...op, monto_bruto: Number(op.monto_bruto || 0) })),
     ...(directMovements || []).map((mov) => ({
+      id: mov.id,
+      created_at: mov.created_at,
       fecha: mov.fecha,
       numero: null,
       monto_bruto: Number(mov.monto || 0) + Number(mov.retencion_ganancias_monto || 0),
@@ -176,7 +183,13 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  if (searchParams.get("formato") === "json") return NextResponse.json({ filas });
+  if (searchParams.get("formato") === "json") {
+    try {
+      return NextResponse.json({ filas, avisos: await controlSicore(supabase, sociedadId, desde, hasta, sources, provMap) });
+    } catch (e) {
+      return NextResponse.json({ error: e instanceof Error ? e.message : "No se pudo controlar el período" }, { status: 500 });
+    }
+  }
 
   const content = lines.length ? lines.join("\r\n") + "\r\n" : ""; // cada línea termina en CRLF, como el archivo del contador
   const filename = `SICORE_${desde}_${hasta}.txt`;
@@ -187,4 +200,62 @@ export async function GET(req: NextRequest) {
       "Content-Disposition": `attachment; filename="${filename}"`,
     },
   });
+}
+
+/**
+ * Control antes de bajar el TXT (auditoría UX 26/10/2026, arreglo 13). Solo avisa: el TXT sale igual.
+ * - Proveedores sin concepto de Ganancias: van como régimen 78 (bienes).
+ * - Retenciones calculadas con un % o un mínimo que no es el del concepto que el proveedor tiene hoy, que es con el
+ *   que las manda el TXT (caso OP-000049: se retuvo como bienes y hoy el proveedor está en transporte).
+ */
+async function controlSicore(
+  supabase: any, sociedadId: string, desde: string, hasta: string,
+  sources: Array<{ id: string; created_at: string; fecha: string; numero?: string | null; descripcion?: string | null; proveedor_id: string; monto_bruto: number; base_retencion_ganancias: number; retencion_ganancias_pct: number; retencion_ganancias_monto: number }>,
+  provMap: Map<string, { razon_social?: string | null; cuit?: string | null; concepto_retencion_ganancias?: string | null; alicuota_ganancias?: number | null }>,
+): Promise<AvisosSicore> {
+  // Los pagos del mes que cada OP sumó al acumulado (lib/certificado-retencion.ts): OP no anuladas y pagos directos de una factura.
+  const provIds = [...new Set(sources.map((s) => s.proveedor_id))];
+  const mesDesde = `${desde.slice(0, 7)}-01`;
+  const [year, month] = hasta.slice(0, 7).split("-").map(Number);
+  const mesHasta = new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10);
+  const [opsMes, directosMes, cfg] = await Promise.all([
+    traerTodo<any>(() => supabase.from("ordenes_pago").select("id, proveedor_id, fecha, created_at, base_retencion_ganancias, retencion_ganancias_monto")
+      .eq("sociedad_id", sociedadId).in("proveedor_id", provIds).neq("estado", "anulada").gte("fecha", mesDesde).lt("fecha", mesHasta).order("id")),
+    traerTodo<any>(() => supabase.from("movimientos").select("id, proveedor_id, fecha, created_at, base_retencion_ganancias, retencion_ganancias_monto, anulado")
+      .eq("sociedad_id", sociedadId).in("proveedor_id", provIds).eq("tipo", "pago").not("factura_compra_id", "is", null).is("nota_credito_compra_id", null)
+      .gte("fecha", mesDesde).lt("fecha", mesHasta).order("id")),
+    supabase.from("retencion_config").select("minimo_ganancias, tasa_ganancias_ri").eq("sociedad_id", sociedadId).maybeSingle(),
+  ]);
+  if (cfg.error) throw cfg.error;
+  const pago = (x: any): PagoDelMes => ({
+    id: x.id, proveedor_id: x.proveedor_id, fecha: String(x.fecha).slice(0, 10), creado: x.created_at,
+    base: Number(x.base_retencion_ganancias || 0), retenido: Number(x.retencion_ganancias_monto || 0),
+  });
+  const delMes = [...opsMes, ...directosMes.filter((m: any) => !m.anulado)].map(pago);
+  const minimoBienes = Number(cfg.data?.minimo_ganancias ?? RETENCION_DEFAULT.minimo_ganancias);
+  const tasaSociedad = Number(cfg.data?.tasa_ganancias_ri ?? RETENCION_DEFAULT.tasa_ganancias_ri);
+
+  const sinConcepto = new Map<string, AvisosSicore["sinConcepto"][number]>();
+  const distintos: AvisosSicore["distintos"] = [];
+  for (const s of sources) {
+    const prov = provMap.get(s.proveedor_id);
+    if (!prov?.cuit) continue;
+    const d = detalleRetencion({
+      concepto: prov.concepto_retencion_ganancias, alicuotaProveedor: prov.alicuota_ganancias, minimoBienes, tasaSociedad,
+      bruto: s.monto_bruto, base: Number(s.base_retencion_ganancias || 0), pct: Number(s.retencion_ganancias_pct || 0),
+      retenido: Number(s.retencion_ganancias_monto || 0), anteriores: pagosAnteriores(pago(s), delMes),
+    });
+    if (d.sinConcepto) {
+      const x = sinConcepto.get(s.proveedor_id) || { proveedor: prov.razon_social || "", retenciones: 0, retenido: 0 };
+      x.retenciones += 1;
+      x.retenido = Math.round((x.retenido + d.retenido) * 100) / 100;
+      sinConcepto.set(s.proveedor_id, x);
+    }
+    const dif = diferenciasConHoy(d);
+    if (dif.pct || dif.minimo) distintos.push({
+      comprobante: s.numero || s.descripcion || "Pago directo", fecha: String(s.fecha).slice(0, 10), proveedor: prov.razon_social || "",
+      regimen: d.regimen, pct: d.pct, pctHoy: d.pctHoy, minimo: d.minimo, minimoHoy: d.minimoHoy, difPct: dif.pct, difMinimo: dif.minimo,
+    });
+  }
+  return { sinConcepto: [...sinConcepto.values()].sort((a, b) => a.proveedor.localeCompare(b.proveedor)), distintos };
 }

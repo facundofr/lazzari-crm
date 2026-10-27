@@ -3,6 +3,8 @@
 import { generateOrdenPagoPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
 import { pesosDeUsd } from "@/lib/op-usd-pesos";
 import { formatCurrency } from "@/lib/utils";
+import { detalleRetencion, pagosAnteriores, type DetalleRetencion, type PagoDelMes } from "@/lib/certificado-retencion";
+import { RETENCION_DEFAULT } from "@/lib/plan-pagos";
 
 export interface OPResumen {
   id: string;
@@ -78,9 +80,45 @@ export async function facturasDeOP(supabase: any, opId: string): Promise<{ numer
   });
 }
 
+/**
+ * La cuenta de la retención de Ganancias para el certificado: la misma que hizo la OP, con los pagos al proveedor
+ * del mes cargados antes que ella y el concepto que tiene hoy (lib/certificado-retencion.ts).
+ */
+async function retencionDeOP(supabase: any, op: any): Promise<DetalleRetencion | undefined> {
+  if (!(Number(op.retencion_ganancias_monto) > 0)) return undefined;
+  const mes = String(op.fecha).slice(0, 7);
+  const [year, month] = mes.split("-").map(Number);
+  const mesSiguiente = new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10);
+  const [ops, directos, cfg] = await Promise.all([
+    supabase.from("ordenes_pago").select("id, proveedor_id, fecha, created_at, base_retencion_ganancias, retencion_ganancias_monto")
+      .eq("sociedad_id", op.sociedad_id).eq("proveedor_id", op.proveedor_id).neq("estado", "anulada")
+      .gte("fecha", `${mes}-01`).lt("fecha", mesSiguiente),
+    // Pagos directos de una factura (sin OP): la OP también los suma al acumulado del mes.
+    supabase.from("movimientos").select("id, proveedor_id, fecha, created_at, base_retencion_ganancias, retencion_ganancias_monto, anulado")
+      .eq("sociedad_id", op.sociedad_id).eq("proveedor_id", op.proveedor_id).eq("tipo", "pago")
+      .not("factura_compra_id", "is", null).is("nota_credito_compra_id", null)
+      .gte("fecha", `${mes}-01`).lt("fecha", mesSiguiente),
+    supabase.from("retencion_config").select("minimo_ganancias, tasa_ganancias_ri").eq("sociedad_id", op.sociedad_id).maybeSingle(),
+  ]);
+  for (const r of [ops, directos, cfg]) if (r.error) throw r.error;
+  const pago = (x: any): PagoDelMes => ({
+    id: x.id, proveedor_id: x.proveedor_id, fecha: String(x.fecha).slice(0, 10), creado: x.created_at,
+    base: Number(x.base_retencion_ganancias || 0), retenido: Number(x.retencion_ganancias_monto || 0),
+  });
+  const delMes = [...(ops.data || []), ...(directos.data || []).filter((m: any) => !m.anulado)].map(pago);
+  return detalleRetencion({
+    concepto: op.proveedores?.concepto_retencion_ganancias, alicuotaProveedor: op.proveedores?.alicuota_ganancias,
+    minimoBienes: Number(cfg.data?.minimo_ganancias ?? RETENCION_DEFAULT.minimo_ganancias),
+    tasaSociedad: Number(cfg.data?.tasa_ganancias_ri ?? RETENCION_DEFAULT.tasa_ganancias_ri),
+    bruto: Number(op.monto_bruto || 0), base: Number(op.base_retencion_ganancias || 0),
+    pct: Number(op.retencion_ganancias_pct || 0), retenido: Number(op.retencion_ganancias_monto || 0),
+    anteriores: pagosAnteriores(pago(op), delMes),
+  });
+}
+
 /** La OP con proveedor, el HTML de su PDF y los comprobantes que se cargaron al hacerla (van adjuntos en el mail). */
 export async function armarOrdenPago(supabase: any, opId: string, sociedad: Parameters<typeof getSociedadPDF>[0] & { id: string }): Promise<{ op: any; html: string; archivos: { filename: string; url: string }[] }> {
-  const { data: op, error } = await supabase.from("ordenes_pago").select("*, proveedores(razon_social, cuit, direccion, email)")
+  const { data: op, error } = await supabase.from("ordenes_pago").select("*, proveedores(razon_social, cuit, direccion, email, concepto_retencion_ganancias, alicuota_ganancias)")
     .eq("id", opId).eq("sociedad_id", sociedad.id).maybeSingle();
   if (error) throw error;
   if (!op) throw new Error("No se encontró la orden de pago.");
@@ -97,6 +135,7 @@ export async function armarOrdenPago(supabase: any, opId: string, sociedad: Para
     neto, notas: op.notas ?? "",
     proveedor: { razon_social: op.proveedores?.razon_social || "—", cuit: op.proveedores?.cuit || "", direccion: op.proveedores?.direccion || "" },
     medios, facturas_vinculadas: await facturasDeOP(supabase, op.id),
+    retencion: await retencionDeOP(supabase, op),
   }, getSociedadPDF(sociedad));
   const archivos = parsear(op.archivos).filter((a: any) => a?.url).map((a: any) => ({ filename: a.nombre || "comprobante.pdf", url: a.url }));
   return { op, html, archivos };

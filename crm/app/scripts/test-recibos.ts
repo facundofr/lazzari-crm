@@ -47,4 +47,17 @@ assert.deepEqual(r3.total, { ARS: 0, USD: 1000 });
 assert.equal(r3.conciliado, false);
 assert.equal(textoTotalRecibo(r3.total, (v, m) => `${m} ${v}`), "USD 1000");
 
+// Columna "Banco" (26/10/2026): las transferencias no se cruzan → "registrado", no "pendiente" para siempre
+assert.equal(r1.banco, "conciliado");
+assert.equal(r3.banco, "registrado", "solo falta una transferencia");
+const [r4] = armarRecibos({
+  recibos: [{ id: "r4", numero: 1003, fecha: "2026-10-26", cliente_id: null }],
+  vinculos: [{ recibo_id: "r4", movimiento_id: "t" }, { recibo_id: "r4", movimiento_id: "c" }],
+  movimientos: [
+    { id: "t", tipo: "transferencia", monto: 100, moneda: "ARS", conciliado: false },
+    { id: "c", tipo: "cheque_recibido", monto: 200, moneda: "ARS", conciliado: false },
+  ],
+});
+assert.equal(r4.banco, "pendiente", "falta un cheque: sigue pendiente");
+
 console.log("test-recibos OK");

@@ -38,7 +38,7 @@ export const etiquetaMedio = (m: string | null | undefined) => MEDIOS[String(m |
 export interface GastoRow {
   id: string; fecha: string; descripcion: string | null; categoria: string | null; grupo?: string | null;
   monto: number | string | null; moneda: string | null; medio_pago: string | null; tipo_recurrencia: string | null;
-  gasto_fijo_id: string | null; notas?: string | null;
+  gasto_fijo_id: string | null; notas?: string | null; comprobante_url?: string | null;
 }
 export interface FijoRow {
   id: string; descripcion: string | null; categoria: string | null; grupo?: string | null; monto: number | string | null;
@@ -47,7 +47,7 @@ export interface FijoRow {
 
 export interface FilaGasto {
   id: string; fecha: string; grupo: Grupo; detalle: string; fijo: boolean; medio: string; monto: number; moneda: "ARS" | "USD";
-  fijoId: string | null; cargadoSolo: boolean;
+  fijoId: string | null; cargadoSolo: boolean; comprobante: string | null;
 }
 
 const num = (v: unknown) => Number(v || 0) || 0;
@@ -65,6 +65,7 @@ export function armarFilasGastos(gastos: GastoRow[], fijos: FijoRow[]): FilaGast
       medio: f?.medio_pago === "debito_automatico" ? "debito_automatico" : (g.medio_pago || ""),
       monto: r2(num(g.monto)), moneda: mon(g.moneda), fijoId: g.gasto_fijo_id || null,
       cargadoSolo: String(g.notas || "").includes("[débito automático cargado solo]"),
+      comprobante: g.comprobante_url || null, // el VEP o comprobante adjunto (Leer VEP)
     };
   }).sort((a, b) => b.fecha.localeCompare(a.fecha) || a.grupo.localeCompare(b.grupo) || a.detalle.localeCompare(b.detalle));
 }

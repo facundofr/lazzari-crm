@@ -11,7 +11,7 @@ import ChequesTercero from "@/components/cheques-tercero";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
-import { enFecha, estaEnFecha, estadoCheque, proximaSemana, proximasSemanas, resumenPorEstado, type ChequeFL, type Total } from "@/lib/cheques-lazza";
+import { enFecha, estaEnFecha, estadoCheque, proximaSemana, proximasSemanas, resumenPorEstado, situacionPago, type ChequeFL, type Total } from "@/lib/cheques-lazza";
 import { ChequesBanco } from "./cheques-banco";
 
 const MOSTRAR_SUBIR_VIEJO = false;
@@ -129,8 +129,10 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
   const cols: Column<Cheque>[] = [
     { key: "emision", label: "Emisión", sortable: true, sortValue: (c) => c.emision || "", render: (c) => (c.emision ? formatDate(c.emision) : "—") },
     { key: "pago", label: "Pago", sortable: true, sortValue: (c) => c.pago, render: (c) => {
-      const pend = ["entregado", "pendiente", "en_cartera"].includes(c.estado);
-      return <span className={`whitespace-nowrap ${pend && c.pago && c.pago <= hoy ? "font-semibold text-red-600" : ""}`}>{c.pago ? formatDate(c.pago) : "—"}{pend && c.pago && c.pago <= hoy && <span className="block text-[10px]">en fecha</span>}</span>;
+      // Regla de los 30 días (auditoría UX 26/10/2026, arreglo 6): no debitado o sin depositar en la fecha no es atraso (ámbar);
+      // pasados 30 días el cheque vence (rojo). Antes cualquier fecha pasada salía en rojo.
+      const s = situacionPago(c, hoy);
+      return <span className={`whitespace-nowrap ${s === "vencido" ? "font-semibold text-red-600" : s === "en_fecha" ? "font-semibold text-amber-700 dark:text-amber-300" : ""}`}>{c.pago ? formatDate(c.pago) : "—"}{s && <span className="block text-[10px]" title={s === "vencido" ? "Pasaron más de 30 días de la fecha de pago" : "Hasta 30 días después de la fecha de pago"}>{s === "vencido" ? "vencido (+30 días)" : "en fecha"}</span>}</span>;
     } },
     { key: "numero", label: "N°", sortable: true, sortValue: (c) => c.numero, render: (c) => <span className="font-mono text-xs">{c.numero}</span> },
     { key: "quien", label: "De / Para", sortable: true, sortValue: (c) => conQuien(c), render: (c) => (

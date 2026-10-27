@@ -45,3 +45,29 @@ export function normalizarVep(raw: Record<string, unknown>): DatosVep {
 export function descripcionVep(d: DatosVep): string {
   return `${d.detalle}${d.numero ? ` (VEP ${d.numero})` : ""}`;
 }
+
+/**
+ * Lo que un VEP leído completa en la ventana de Gastos de Finanzas (arreglo 17, 26/10/2026). Nunca guarda: Augusto revisa.
+ * Gasto nuevo: detalle, monto y fecha (la de pago; si no figura, el vencimiento).
+ * Gasto ya cargado (casi siempre sale del banco): la fecha y el monto del pago no se tocan; lo del VEP va adelante del
+ * detalle (salvo que ya tenga su número) y, si el VEP es por otro monto, se avisa en `otroMonto`.
+ */
+export function gastoConVep(d: DatosVep, actual: { detalle: string; fecha: string; monto: number; editando: boolean }): {
+  detalle: string; fecha: string; monto: number; otroMonto: number | null; nota: string;
+} {
+  const desc = descripcionVep(d);
+  const previo = actual.detalle.trim();
+  const nota = [d.vencimiento ? `Vence ${d.vencimiento.split("-").reverse().join("/")}` : "", d.organismo || ""].filter(Boolean).join(" · ");
+  if (!actual.editando) {
+    return { detalle: desc, fecha: d.fecha_pago || d.vencimiento || actual.fecha, monto: d.monto > 0 ? d.monto : actual.monto, otroMonto: null, nota };
+  }
+  const yaLoDice = previo.includes(desc) || (!!d.numero && previo.includes(d.numero));
+  const tieneMonto = actual.monto > 0;
+  return {
+    detalle: !previo ? desc : yaLoDice ? previo : `${desc} — ${previo}`,
+    fecha: actual.fecha || d.fecha_pago || d.vencimiento || "",
+    monto: tieneMonto ? actual.monto : d.monto,
+    otroMonto: tieneMonto && d.monto > 0 && Math.abs(d.monto - actual.monto) > 0.005 ? d.monto : null,
+    nota,
+  };
+}

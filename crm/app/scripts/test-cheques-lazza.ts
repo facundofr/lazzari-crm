@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { enFecha, estadoCheque, proximaSemana, proximasSemanas, resumenPorEstado, type ChequeFL } from "../src/lib/cheques-lazza";
+import { enFecha, estadoCheque, proximaSemana, proximasSemanas, resumenPorEstado, situacionPago, type ChequeFL } from "../src/lib/cheques-lazza";
 
 const ch = (x: Partial<ChequeFL> & { id: string }): ChequeFL => ({ numero: x.id, direccion: "emitido", estado: "entregado", fecha_pago: "2026-10-19", monto: 100, moneda: "ARS", ...x });
 const hoy = "2026-10-19"; // lunes
@@ -21,6 +21,13 @@ assert.deepEqual(enFecha(cheques, hoy), { pagar: { cantidad: 2, ARS: 200, USD: 0
 // 26/10/2026: en fecha solo hasta 30 días después de la fecha de pago
 assert.equal(enFecha([ch({ id: "v", fecha_pago: "2026-09-19" })], hoy).pagar.cantidad, 1, "30 días justos: en fecha");
 assert.equal(enFecha([ch({ id: "v", fecha_pago: "2026-09-18" })], hoy).pagar.cantidad, 0, "más de 30 días: ya no");
+// Columna "Pago" (26/10/2026): en fecha hasta 30 días, después vencido; ni lo futuro ni lo ya debitado
+assert.equal(situacionPago(ch({ id: "s1", fecha_pago: "2026-10-19" }), hoy), "en_fecha", "hoy");
+assert.equal(situacionPago(ch({ id: "s2", fecha_pago: "2026-09-19" }), hoy), "en_fecha", "30 días justos");
+assert.equal(situacionPago(ch({ id: "s3", fecha_pago: "2026-09-18" }), hoy), "vencido", "31 días");
+assert.equal(situacionPago(ch({ id: "s4", fecha_pago: "2026-10-20" }), hoy), null, "todavía no llegó");
+assert.equal(situacionPago(ch({ id: "s5", fecha_pago: "2026-09-01", estado: "cobrado" }), hoy), null, "ya debitado");
+assert.equal(situacionPago(ch({ id: "s6", direccion: "recibido", estado: "en_cartera", fecha_pago: "2026-09-01" }), hoy), "vencido", "en cartera sin depositar a tiempo");
 // Próxima semana: de mañana a 7 días
 const ps = proximaSemana(cheques, hoy);
 assert.deepEqual([ps.desde, ps.hasta], ["2026-10-20", "2026-10-26"]);

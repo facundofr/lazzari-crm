@@ -9,6 +9,7 @@ import { buildOrdenPagoPlan, type OpParsed } from "@/lib/orden-pago-plan";
 import { fechaMedioCobro, avisoFechaCobroFutura } from "@/lib/fecha-cobro";
 import { repartirCobro, avisoDiferenciaCobro, facturasParaRegistrar } from "@/lib/cobro-reparto";
 import { fuentesSaldoFavorCliente, repartirSaldoFavorCliente, faltaSegunOrden, type FuenteSaldoFavorCliente } from "@/lib/saldo-favor-cliente";
+import { claveArchivo, mismaRetencion, mismoPago, sinRepetir } from "@/lib/comprobante-medios";
 import { guardarRevisar } from "@/components/dejar-revisar";
 import { ZonaArchivos } from "@/components/ui/zona-archivos";
 
@@ -123,6 +124,8 @@ export default function CobroMasivoLiquidacion({
   const [opFiles, setOpFiles] = useState<File[]>([]);
   const [parsingOP, setParsingOP] = useState(false);
   const [opParseMessage, setOpParseMessage] = useState("");
+  // 26/10/2026 (auditoría UX, arreglo 6): lo que leyó la IA sale en ámbar si trae avisos (antes salía en verde igual).
+  const [opParseAviso, setOpParseAviso] = useState(false);
   const [opConOtras, setOpConOtras] = useState<OpParsed | null>(null);
   const requestKeyRef = useRef("");
 
@@ -223,8 +226,10 @@ export default function CobroMasivoLiquidacion({
     if (!files.length) return;
     setParsingOP(true);
     setOpParseMessage("");
+    setOpParseAviso(false);
     setError("");
-    setOpFiles((prev) => [...prev, ...files]);
+    // El mismo archivo otra vez no se lista dos veces.
+    setOpFiles((prev) => [...prev.filter((p) => !files.some((f) => claveArchivo(f) === claveArchivo(p))), ...files]);
     try {
       const form = new FormData();
       files.forEach((file) => form.append("file", file));
@@ -289,13 +294,34 @@ export default function CobroMasivoLiquidacion({
       const avisosPlan = esOrden ? plan.avisos : plan.avisos.filter((a) => !a.startsWith("La IA no encontró el detalle de facturas"));
       const otrasLineas = ordenPagoAvisos ? ordenPagoAvisos : plan.otras.map((o) => `La orden también paga ${o.comprobante} por ${formatCurrency(o.importe, "ARS")}: cobrala aparte (${formatCurrency(o.medios, "ARS")} del pago + ${formatCurrency(o.retenciones.reduce((s, r) => s + r.monto, 0), "ARS")} de retenciones).`);
 
+      // 26/10/2026 (auditoría UX, arreglo 3): volver a subir el comprobante (o la retención que ya venía en la OP)
+      // no suma de nuevo lo que ya está cargado; se avisa (lib/comprobante-medios.ts).
+      const pagoDe = (x: MedioPago) => ({ tipo: x.tipo, monto: num(x.monto), numero: x.cheque_numero || x.referencia, fecha: x.fecha });
+      const mismoMedio = (a: MedioPago, b: MedioPago) => mismoPago(pagoDe(a), pagoDe(b));
+      const retDe = (x: RetencionLinea) => ({ tipo: x.tipo, monto: num(x.monto), certificado: x.certificado });
+      const mismaRet = (a: RetencionLinea, b: RetencionLinea) => mismaRetencion(retDe(a), retDe(b));
+      const mediosRepetidos = sinRepetir(medios, parsedMedios, mismoMedio).repetidos;
+      const retencionesRepetidas = sinRepetir(retenciones, parsedRetenciones, mismaRet).repetidos;
+      const monedaMedios = isUSD ? "ARS" : moneda;
+      const repetidos = [
+        ...mediosRepetidos.map((x) => `${MEDIO_TIPOS.find((t) => t.value === x.tipo)?.label || x.tipo} ${formatCurrency(num(x.monto), monedaMedios)}`),
+        ...retencionesRepetidas.map((x) => `${RETENCION_TIPOS.find((t) => t.value === x.tipo)?.label || x.tipo} ${formatCurrency(num(x.monto), monedaMedios)}`),
+      ];
+      const lineaRepetidos = repetidos.length ? [`Ya estaba cargado y no se sumó de nuevo: ${repetidos.join(" · ")}.`] : [];
+
       if (parsedMedios.length) {
-        setMedios((current) => current.length === 1 && !current[0].monto && !current[0].referencia ? parsedMedios : [...current, ...parsedMedios]);
+        setMedios((current) => {
+          const base = current.length === 1 && !current[0].monto && !current[0].referencia ? [] : current;
+          return [...base, ...sinRepetir(base, parsedMedios, mismoMedio).agregar];
+        });
       }
-      if (parsedRetenciones.length) setRetenciones((current) => [...current, ...parsedRetenciones]);
+      if (parsedRetenciones.length) setRetenciones((current) => [...current, ...sinRepetir(current, parsedRetenciones, mismaRet).agregar]);
       if (parsed.orden_pago_cliente) setOpReferencia(String(parsed.orden_pago_cliente));
       if (!parsedMedios.length && !parsedRetenciones.length) throw new Error(["La IA no encontró medios de pago ni retenciones en el archivo.", ...otrasLineas, ...avisosPlan].join(" "));
-      setOpParseMessage([`IA completó ${parsedMedios.length} medio${parsedMedios.length === 1 ? "" : "s"} y ${parsedRetenciones.length} retención${parsedRetenciones.length === 1 ? "" : "es"}. Revisá los datos antes de confirmar.`, ...otrasLineas, ...avisosPlan].join(" "));
+      const nMedios = parsedMedios.length - mediosRepetidos.length;
+      const nRetenciones = parsedRetenciones.length - retencionesRepetidas.length;
+      setOpParseMessage([`IA completó ${nMedios} medio${nMedios === 1 ? "" : "s"} y ${nRetenciones} retención${nRetenciones === 1 ? "" : "es"}. Revisá los datos antes de confirmar.`, ...otrasLineas, ...avisosPlan, ...lineaRepetidos].join(" "));
+      setOpParseAviso(otrasLineas.length > 0 || avisosPlan.length > 0 || lineaRepetidos.length > 0);
     } catch (parseError) {
       setOpParseMessage(parseError instanceof Error ? parseError.message : "No se pudo aplicar la orden de pago");
     }
@@ -457,6 +483,16 @@ export default function CobroMasivoLiquidacion({
   const fc = formatCurrency;
   const m = moneda;
 
+  // 26/10/2026 (auditoría UX, arreglo 3): con algo cargado, la X pregunta antes de cerrar (como Presupuestos, 21/10).
+  // «Cancelar» cierra directo; mientras guarda no se cierra.
+  const hayCargado = opFiles.length > 0 || retenciones.length > 0 || !!opReferencia.trim()
+    || medios.some((x) => num(x.monto) > 0 || !!x.referencia.trim());
+  function pedirCierre() {
+    if (saving) return;
+    if (hayCargado && !confirm("¿Estás seguro que deseas salir sin guardar? Se pierde lo que cargaste en este cobro.")) return;
+    onClose();
+  }
+
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-start justify-center overflow-y-auto p-4 pt-8 pb-8">
       <div className={`bg-white dark:bg-zinc-900 rounded-xl shadow-2xl transition-all ${fullscreen ? "fixed inset-2 z-50 max-h-[calc(100vh-1rem)] overflow-y-auto" : "w-full max-w-5xl"}`}>
@@ -468,7 +504,7 @@ export default function CobroMasivoLiquidacion({
           </div>
           <div className="flex items-center gap-1">
             <button onClick={() => setFullscreen(f => !f)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800" title={fullscreen ? "Reducir" : "Maximizar"}>{fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button>
-            <button onClick={onClose} className="p-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800">
+            <button onClick={pedirCierre} className="p-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800">
               <X size={20} />
             </button>
           </div>
@@ -582,7 +618,10 @@ export default function CobroMasivoLiquidacion({
                 {opFiles.map((file) => <span key={`${file.name}-${file.size}`} className="inline-flex items-center gap-1 rounded bg-zinc-100 px-2 py-1 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"><FileCheck2 className="h-3.5 w-3.5" />{file.name}</span>)}
               </div>
             )}
-            {opParseMessage && <p className={`mt-2 text-xs ${opParseMessage.startsWith("IA completó") ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>{opParseMessage}</p>}
+            {opParseMessage && (() => {
+              const leyo = opParseMessage.startsWith("IA completó");
+              return <p className={`mt-2 text-xs ${!leyo ? "text-red-600 dark:text-red-400" : opParseAviso ? "font-medium text-amber-700 dark:text-amber-300" : "text-emerald-600 dark:text-emerald-400"}`}>{leyo && opParseAviso ? "⚠️ " : ""}{opParseMessage}</p>;
+            })()}
             {opConOtras && onCobrarOrdenCompleta && <button type="button" onClick={() => onCobrarOrdenCompleta(opConOtras)} className="mt-2 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white">Cobrar todas las facturas de esta orden de pago</button>}
           </section>
 

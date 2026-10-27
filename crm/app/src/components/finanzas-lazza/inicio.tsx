@@ -14,7 +14,7 @@ import { formatCurrency, todayAR } from "@/lib/utils";
 import { armarRetenciones, ivaDelMes, reporteBasico, type ReporteBasico } from "@/lib/finanzas-lazza";
 import { esCobroDeCliente } from "@/lib/tipos-movimiento";
 import { CargaDiaria } from "./carga-diaria";
-import { traerComprasDelMes, traerDatosReporte, traerDeudas, traerTcDelDia, traerVentasDelMes, rangoMes } from "./datos";
+import { traerComprasDelMes, traerDatosReporte, traerDeudas, traerIvaACuenta, traerTcDelDia, traerVentasDelMes, rangoMes } from "./datos";
 
 const db = supabase as any;
 
@@ -105,12 +105,12 @@ function loaders(sociedadId: string, periodo: string, hoy: string): (() => Promi
         cuentas: { valor: mas(ars, usd), sub: "nos deben" },
       };
     },
-    // IVA del mes.
+    // IVA del mes, estimado (arreglo 16): la misma cuenta que la pantalla IVA.
     async () => {
-      const [ventas, compras, tcDia] = await Promise.all([traerVentasDelMes(sociedadId, periodo), traerComprasDelMes(sociedadId, periodo), traerTcDelDia(periodo)]);
-      const iva = ivaDelMes({ periodo, ventas, compras, tcDia });
+      const [ventas, compras, tcDia, aCuenta] = await Promise.all([traerVentasDelMes(sociedadId, periodo), traerComprasDelMes(sociedadId, periodo), traerTcDelDia(periodo), traerIvaACuenta(sociedadId, periodo)]);
+      const iva = ivaDelMes({ periodo, ventas, compras, tcDia, ...aCuenta });
       return {
-        iva: { valor: millones(iva.diferencia), sub: "débito − crédito" },
+        iva: { valor: millones(Math.abs(iva.estimado)), sub: iva.estimado >= 0 ? "a pagar, estimado" : "a favor, estimado" },
         facturas: { valor: `${ventas.filter((f) => f.estado !== "anulada").length} · ${compras.filter((f) => f.estado !== "anulada").length}`, sub: "venta · compra del mes" },
       };
     },

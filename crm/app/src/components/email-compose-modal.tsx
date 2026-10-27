@@ -4,7 +4,7 @@ import { useState } from "react";
 import { X, Send, Loader2, Paperclip, AlertTriangle, CheckCircle2, CheckCheck, Maximize2, Minimize2, UserPlus } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 
-export type EmailDocumentType = "presupuesto" | "factura" | "remito" | "orden_compra" | "orden_pago" | "recibo";
+export type EmailDocumentType = "presupuesto" | "factura" | "remito" | "orden_compra" | "orden_pago" | "recibo" | "resumen_cuenta";
 
 interface EmailComposeModalProps {
   open: boolean;
@@ -49,6 +49,7 @@ const DOC_LABELS: Record<EmailDocumentType, string> = {
   orden_compra: "Orden de compra",
   orden_pago: "Orden de pago",
   recibo: "Recibo",
+  resumen_cuenta: "Resumen de cuenta",
 };
 
 export function EmailComposeModal({
@@ -80,12 +81,15 @@ export function EmailComposeModal({
   const [verMensaje, setVerMensaje] = useState(false);
   const [guardados, setGuardados] = useState<string[]>([]);
   const [guardando, setGuardando] = useState("");
+  // Cómo estaba al abrir: si cambia, cerrar pregunta antes (ver pedirCierre).
+  const [alAbrir, setAlAbrir] = useState({ to: defaultTo, subject: defaultSubject, body: defaultBody });
 
   // Reset state when modal opens (transition from closed → open)
   if (open && !prevOpen) {
     setTo(defaultTo);
     setSubject(defaultSubject);
     setBodyHtml(defaultBody);
+    setAlAbrir({ to: defaultTo, subject: defaultSubject, body: defaultBody });
     setResult(null);
     setSending(false);
     setVerTodos(false); setVerMensaje(false); setGuardados([]);
@@ -110,6 +114,15 @@ export function EmailComposeModal({
     setGuardando("");
     if (error) { setResult({ success: false, message: `No se pudo guardar el contacto: ${error.message}` }); return; }
     setGuardados(g => [...g, email.toLowerCase()]);
+  }
+
+  // 26/10/2026 (auditoría UX, arreglo 3): si cambiaste algo y todavía no se mandó, el clic afuera y la X preguntan antes de cerrar
+  // (como Presupuestos). «Cancelar» cierra directo; mientras manda no se cierra.
+  const hayCambios = !result?.success && (to !== alAbrir.to || subject !== alAbrir.subject || bodyHtml !== alAbrir.body);
+  function pedirCierre() {
+    if (sending) return;
+    if (hayCambios && !confirm("¿Estás seguro que deseas salir sin mandar el mail? Se pierde lo que escribiste.")) return;
+    onClose();
   }
 
   async function handleSend() {
@@ -174,7 +187,7 @@ export function EmailComposeModal({
 
   return (
     <>
-      <div className="fixed inset-0 z-50 bg-black/40" onClick={onClose} />
+      <div className="fixed inset-0 z-50 bg-black/40" onClick={pedirCierre} />
       <div className={`fixed z-50 overflow-y-auto rounded-2xl bg-white p-4 shadow-2xl dark:bg-zinc-900 transition-all ${fullscreen ? "inset-2 max-h-[calc(100vh-1rem)]" : "inset-4 m-auto h-fit max-h-[85vh] w-full max-w-lg"}`}>
         {/* Header */}
         <div className="flex items-center justify-between mb-3">
@@ -184,7 +197,7 @@ export function EmailComposeModal({
           </div>
           <div className="flex items-center gap-1">
             <button onClick={() => setFullscreen(f => !f)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800" title={fullscreen ? "Reducir" : "Maximizar"}>{fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button>
-            <button onClick={onClose} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+            <button onClick={pedirCierre} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
               <X className="h-4 w-4" />
             </button>
           </div>
