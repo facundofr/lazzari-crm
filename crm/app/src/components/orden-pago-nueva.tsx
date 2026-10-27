@@ -17,6 +17,7 @@ import { parsedPaymentForSingleInvoice, paymentDocumentFields } from "@/lib/paym
 import { chequeDelComprobante, numeroSinCeros, type ChequeCandidato } from "@/lib/cheque-comprobante-op";
 import { canonicalCondicionIva, isKnownCondicionIva, isResponsableInscripto } from "@/lib/fiscal-condition";
 import { pctRetencion, reglaPorConcepto } from "@/lib/retencion-conceptos";
+import { columnasRetencionCongelada } from "@/lib/certificado-retencion";
 import { roundPaymentMoney, sumPaymentMoney } from "@/lib/payment-money";
 import { calcularPagoParcial } from "@/lib/op-parcial";
 import { pesosDeUsd, brutoPesosDeUsd, cotizacionValida } from "@/lib/op-usd-pesos";
@@ -546,6 +547,13 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
     const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
     return reglaPorConcepto(prov?.concepto_retencion_ganancias, retencionConfig.minimo_ganancias)?.minimo ?? retencionConfig.minimo_ganancias;
   })();
+  // Mejora H (auditoría de Impuestos, 27/10/2026): con qué se calculó la retención, para anotarlo en la OP o el pago directo.
+  const opRetencionAnotada = () => columnasRetencionCongelada({
+    concepto: proveedoresOptions.find(p => p.id === opForm.proveedor_id)?.concepto_retencion_ganancias,
+    minimo: opMinimoGanancias, basePrevia: opMonthlyBase, retenidoAntes: opMonthlyRetenido,
+  });
+  const avisoSinAnotar = (registrado: string, motivo: string) =>
+    alert(`${registrado}. No se pudo anotar con qué régimen se calculó la retención (${motivo}): el certificado y el TXT SICORE la toman del concepto de hoy del proveedor.`);
   const opBaseGanancias = (() => {
     if (!opForm.aplica_ganancias) return 0;
     const minimo = opMinimoGanancias;
@@ -868,6 +876,16 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
       const opNumero = (opData?.numero as string | undefined) || "OP";
       const attachmentWarnings: string[] = [];
 
+      // Mejora H: la OP anota con qué régimen, mínimo y pagos del mes calculó la retención, así el certificado y el TXT
+      // no cambian si después se edita el proveedor. Va antes del mail (el certificado ya sale con esto). Si falla, la OP
+      // queda bien y el certificado rearma la cuenta como antes: solo avisa.
+      let sinAnotar = "";
+      if (opId && retencionEfectiva > 0) {
+        const { error: anotarError } = await (supabase as any).from("ordenes_pago").update(opRetencionAnotada())
+          .eq("id", opId).eq("sociedad_id", sociedadId);
+        if (anotarError) sinAnotar = anotarError.message || "error de la base";
+      }
+
       // Los archivos son un adjunto no financiero: se cargan solo despues de
       // que la saga contable termino. Si fallan, la OP queda integra y reintentable.
       if (opFiles.length > 0 && opId) {
@@ -897,6 +915,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
         alert(`${opNumero} registrada. Crédito a nuestro favor: ${formatCurrency(Number(opData.saldo_a_favor), opForm.moneda)}.`);
       }
       if (attachmentWarnings.length) alert(`${opNumero} registrada. Quedaron comprobantes pendientes de adjuntar desde el detalle de la OP:\n${attachmentWarnings.join("\n")}`);
+      if (sinAnotar) avisoSinAnotar(`${opNumero} registrada`, sinAnotar);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : (err as any)?.message || "Error al crear la OP";
       setOpError(`${message}. Podés reintentar: la misma solicitud no duplica la OP.`);
@@ -941,7 +960,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
         moneda: m.moneda,
         cotizacion: m.cotizacion,
       }));
-      const { error } = await (supabase as any).rpc("registrar_pago_proveedor_seguro", {
+      const { data: pagoData, error } = await (supabase as any).rpc("registrar_pago_proveedor_seguro", {
         p_sociedad_id: sociedadId,
         p_request_key: opRequestKeyRef.current,
         p_modo: "directo",
@@ -958,8 +977,17 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
         p_sobre_verde: false,
       });
       if (error) throw error;
+      // Mejora H: el pago directo con retención también anota con qué se calculó (en su movimiento).
+      const movimientoId = pagoData?.movimiento_id as string | undefined;
+      let sinAnotar = "";
+      if (movimientoId && retencion > 0) {
+        const { error: anotarError } = await (supabase as any).from("movimientos").update(opRetencionAnotada())
+          .eq("id", movimientoId).eq("sociedad_id", sociedadId);
+        if (anotarError) sinAnotar = anotarError.message || "error de la base";
+      }
       opRequestKeyRef.current = "";
       await onCreada({ enviar: false });
+      if (sinAnotar) avisoSinAnotar("Pago registrado", sinAnotar);
     } catch (err: unknown) {
       setOpError(err instanceof Error ? err.message : "No se pudo registrar el pago parcial");
     } finally { setOpSaving(false); }

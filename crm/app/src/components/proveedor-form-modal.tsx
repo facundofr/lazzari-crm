@@ -15,6 +15,7 @@ import { LeerDocumentoImpositivo } from "@/components/leer-documento-impositivo"
 import { bancoDeLista, type DatosImpositivos } from "@/lib/documento-impositivo";
 import { CondicionPagoEditor } from "@/components/condicion-pago-editor";
 import { legacyDesdePlan } from "@/lib/condicion-pago";
+import { ALICUOTA_POR_CONCEPTO, CONCEPTOS_RG830 } from "@/lib/retencion-conceptos";
 
 export const CLASIFICACION_TAGS = [
   "Buen precio", "Precio alto", "Entrega rapida", "Entrega lenta",
@@ -40,20 +41,7 @@ export const TAG_COLORS: Record<string, string> = {
   "Nacional": "bg-sky-50 text-sky-700 ring-1 ring-sky-200 dark:bg-sky-950 dark:text-sky-400",
 };
 
-export const CONCEPTOS_RG830: Record<string, string> = {
-  compraventa_bienes: "Compraventa de bienes",
-  servicios: "Servicios y locaciones",
-  honorarios: "Honorarios profesionales",
-  alquileres_inmuebles: "Alquileres de inmuebles",
-  alquileres_muebles: "Alquileres de muebles",
-  intereses_financieros: "Intereses (financieras)",
-  intereses_otros: "Intereses (otros)",
-  transporte: "Transporte de carga",
-  fletes: "Fletes",
-  comisiones: "Comisiones",
-  publicidad: "Publicidad y propaganda",
-  seguros: "Seguros",
-};
+export { CONCEPTOS_RG830 };
 
 // Estilos comunes del alta/edición: mismo alto y mismo espacio en todos los campos
 const INPUT_CLS = "mt-0.5 h-8 w-full rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800";
@@ -558,8 +546,7 @@ export function ProveedorFormModal({
               <label className={LABEL_CLS}>Concepto de retención</label>
               <select value={form.concepto_retencion_ganancias} onChange={(e) => {
                 const concepto = e.target.value;
-                const alicuotas: Record<string, number> = { compraventa_bienes: 2, servicios: 2, honorarios: 2, alquileres_inmuebles: 6, alquileres_muebles: 2, intereses_financieros: 3, intereses_otros: 6, transporte: 0.25, fletes: 0.25, comisiones: 2, publicidad: 2, seguros: 2 };
-                setForm({ ...form, concepto_retencion_ganancias: concepto, alicuota_ganancias: concepto ? (alicuotas[concepto] ?? 2) : null });
+                setForm({ ...form, concepto_retencion_ganancias: concepto, alicuota_ganancias: concepto ? (ALICUOTA_POR_CONCEPTO[concepto] ?? 2) : null });
               }} className={INPUT_CLS}>
                 <option value="">Sin definir (usa tasa global)</option>
                 {Object.entries(CONCEPTOS_RG830).map(([k, v]) => <option key={k} value={k}>{v}</option>)}

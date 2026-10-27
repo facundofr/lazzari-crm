@@ -10,6 +10,28 @@ export const RETENCION_BIENES_PCT = 2;
 export const RETENCION_SERVICIOS_PCT = 2;
 export const RETENCION_TRANSPORTE_PCT = 0.25;
 
+/** Conceptos de la ficha del proveedor (proveedores.concepto_retencion_ganancias). */
+export const CONCEPTOS_RG830: Record<string, string> = {
+  compraventa_bienes: "Compraventa de bienes",
+  servicios: "Servicios y locaciones",
+  honorarios: "Honorarios profesionales",
+  alquileres_inmuebles: "Alquileres de inmuebles",
+  alquileres_muebles: "Alquileres de muebles",
+  intereses_financieros: "Intereses (financieras)",
+  intereses_otros: "Intereses (otros)",
+  transporte: "Transporte de carga",
+  fletes: "Fletes",
+  comisiones: "Comisiones",
+  publicidad: "Publicidad y propaganda",
+  seguros: "Seguros",
+};
+
+/** Alícuota que se carga al elegir el concepto: la ficha del proveedor y la lista «Sin concepto» de Retenciones. */
+export const ALICUOTA_POR_CONCEPTO: Record<string, number> = {
+  compraventa_bienes: 2, servicios: 2, honorarios: 2, alquileres_inmuebles: 6, alquileres_muebles: 2, intereses_financieros: 3,
+  intereses_otros: 6, transporte: 0.25, fletes: 0.25, comisiones: 2, publicidad: 2, seguros: 2,
+};
+
 /** Escala de honorarios (código 116): [más de, importe fijo, % sobre el excedente]. */
 export const ESCALA_HONORARIOS: Array<[number, number, number]> = [
   [0, 0, 5],

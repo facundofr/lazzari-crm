@@ -24,6 +24,10 @@ import { PagarProveedor } from "@/components/finanzas-lazza/pagar";
 import { NuevoMovimiento } from "@/components/finanzas-lazza/nuevo-movimiento";
 import { Modal } from "@/components/ui/modal";
 import { pctTexto, type AvisosSicore } from "@/lib/certificado-retencion";
+import { Select } from "@/components/ui/input";
+import { isResponsableInscripto } from "@/lib/fiscal-condition";
+import { ALICUOTA_POR_CONCEPTO, CONCEPTOS_RG830 } from "@/lib/retencion-conceptos";
+import { desdeSinConcepto, sugerirConcepto, type SugerenciaConcepto } from "@/lib/sugerir-concepto";
 import { coincideNumeroCheque } from "@/lib/cheques-lazza";
 
 const db = supabase as any;
@@ -510,7 +514,8 @@ const REGIMEN_TEXTO: Record<string, string> = { "078": "Bienes", "094": "Servici
  * Exportar las retenciones de Ganancias practicadas (lo que se presenta en SICORE) del rango de fechas:
  * TXT con el formato de importación de SICORE (/api/sicore, el mismo de Finanzas) y Excel con esos mismos renglones.
  * Antes del TXT, un control que solo avisa (auditoría UX 26/10/2026, arreglo 13): proveedores sin concepto y
- * retenciones calculadas con otro % o mínimo que el del concepto de hoy. "Bajar el TXT igual" lo baja sin cambios.
+ * retenciones calculadas con otro régimen, % o mínimo que el del concepto de hoy. Desde la mejora H las OP anotan con qué
+ * régimen se calcularon y así van al TXT; las de antes, con el de hoy. "Bajar el TXT igual" lo baja sin cambios.
  */
 function ExportarSicore({ sociedadId, desde, hasta }: { sociedadId: string; desde: string; hasta: string }) {
   const [bajando, setBajando] = useState<"" | "txt" | "excel">("");
@@ -557,6 +562,7 @@ function ExportarSicore({ sociedadId, desde, hasta }: { sociedadId: string; desd
   // Solo lo que no coincide: "al 2 % con mínimo $ 224.000,00".
   const como = (d: AvisosSicore["distintos"][number], pct: number, minimo: number | null) =>
     [d.difPct ? `al ${pctTexto(pct)}` : "", d.difMinimo && minimo !== null ? `con mínimo ${formatCurrency(minimo, "ARS")}` : ""].filter(Boolean).join(" ");
+  const regimenTxt = (r: string) => `${REGIMEN_TEXTO[r] || "otro concepto"} (régimen ${Number(r)})`;
   return (
     <>
       <button type="button" disabled={!!bajando} onClick={() => void bajar("txt")} title="Retenciones de Ganancias practicadas del rango, en el formato para importar en SICORE"
@@ -577,24 +583,141 @@ function ExportarSicore({ sociedadId, desde, hasta }: { sociedadId: string; desd
             <p className="flex items-center gap-1.5 font-semibold text-amber-700 dark:text-amber-400">
               <AlertTriangle className="h-4 w-4 shrink-0" /> {avisos.distintos.length === 1 ? "1 retención se calculó" : `${avisos.distintos.length} retenciones se calcularon`} con otro concepto que el que el proveedor tiene hoy
             </p>
-            <p className="mt-0.5 text-xs text-zinc-500">El TXT las manda con el concepto de hoy. Miralo con el contador antes de presentar.</p>
+            <p className="mt-0.5 text-xs text-zinc-500">Cada una dice con qué régimen va en el TXT. Miralo con el contador antes de presentar.</p>
             <ul className="mt-2 space-y-1.5">
               {avisos.distintos.map((d, i) => (
                 <li key={i} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs dark:border-amber-800 dark:bg-amber-950/30">
-                  <b>{d.comprobante}</b> · {d.proveedor} · {formatDate(d.fecha)}: se retuvo {como(d, d.pct, d.minimo)}; hoy está como {REGIMEN_TEXTO[d.regimen] || "otro concepto"} (régimen {Number(d.regimen)}), que corresponde {como(d, d.pctHoy, d.minimoHoy)}.
+                  <b>{d.comprobante}</b> · {d.proveedor} · {formatDate(d.fecha)}: {d.congelada
+                    ? <>se calculó como {regimenTxt(d.regimen)} {como(d, d.pct, d.minimo)}; hoy el proveedor está como {regimenTxt(d.regimenHoy)}{d.difPct || d.difMinimo ? <>, que corresponde {como(d, d.pctHoy, d.minimoHoy)}</> : null}. <b>Va al TXT como se calculó: régimen {Number(d.regimen)}.</b></>
+                    : <>se retuvo {como(d, d.pct, d.minimo)}; hoy está como {regimenTxt(d.regimenHoy)}, que corresponde {como(d, d.pctHoy, d.minimoHoy)}. <b>Va al TXT con el de hoy: régimen {Number(d.regimenHoy)}.</b></>}
                 </li>
               ))}
             </ul>
           </div>}
           {avisos.sinConcepto.length > 0 && <div>
             <p className="font-semibold text-zinc-800 dark:text-zinc-200">
-              {avisos.sinConcepto.length === 1 ? "1 proveedor sin concepto" : `${avisos.sinConcepto.length} proveedores sin concepto`} de Ganancias: van como régimen 78 (bienes)
+              {avisos.sinConcepto.length === 1 ? "1 proveedor sin concepto" : `${avisos.sinConcepto.length} proveedores sin concepto`} de Ganancias: se calcularon como bienes y van como régimen 78
             </p>
-            <p className="mt-0.5 text-xs text-zinc-500">Si alguno no vende bienes (servicios, transporte, alquiler), cargale el concepto en Proveedores antes de bajar el TXT.</p>
+            <p className="mt-0.5 text-xs text-zinc-500">Si alguno no vende bienes (servicios, transporte, alquiler), miralo con el contador y cargale el concepto con «Sin concepto» (al lado del TXT) para las próximas OP.</p>
             <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-300">{avisos.sinConcepto.map((p) => `${p.proveedor} (${formatCurrency(p.retenido, "ARS")})`).join(" · ")}</p>
           </div>}
           <p className="text-xs text-zinc-500">Es solo un aviso: el TXT sale igual, sin cambios.</p>
         </div>}
+      </Modal>
+    </>
+  );
+}
+
+type FilaSinConcepto = { id: string; nombre: string; cuit: string; ultimoPago: string | null; impagas: number; sugerencia: SugerenciaConcepto };
+const OPCIONES_CONCEPTO = Object.entries(CONCEPTOS_RG830).map(([value, label]) => ({ value, label }));
+const GRILLA_SIN_CONCEPTO = "sm:grid-cols-[minmax(0,1.3fr)_5.5rem_minmax(0,1.6fr)_12rem_auto] sm:gap-3";
+
+/** Inscriptos activos sin concepto de Ganancias a los que se les paga ahora: OP desde el 1° del mes anterior o facturas sin pagar. */
+async function cargarSinConcepto(sociedadId: string): Promise<FilaSinConcepto[]> {
+  const [provs, ops, impagas] = await Promise.all([
+    traerTodo<any>(() => db.from("proveedores").select("id, razon_social, cuit, condicion_iva, activo, es_transportista, concepto_retencion_ganancias")
+      .eq("sociedad_id", sociedadId).order("id")),
+    traerTodo<any>(() => db.from("ordenes_pago").select("id, proveedor_id, fecha")
+      .eq("sociedad_id", sociedadId).neq("estado", "anulada").gte("fecha", desdeSinConcepto(todayAR())).order("id")),
+    traerTodo<any>(() => db.from("facturas_compra").select("id, proveedor_id")
+      .eq("sociedad_id", sociedadId).not("estado", "in", "(pagada,anulada)").order("id")),
+  ]);
+  const ultimo = new Map<string, string>();
+  for (const o of ops) if (o.proveedor_id && String(o.fecha) > (ultimo.get(o.proveedor_id) || "")) ultimo.set(o.proveedor_id, String(o.fecha).slice(0, 10));
+  const sinPagar = new Map<string, number>();
+  for (const f of impagas) if (f.proveedor_id) sinPagar.set(f.proveedor_id, (sinPagar.get(f.proveedor_id) || 0) + 1);
+  const candidatos = provs.filter((p) => p.activo !== false && isResponsableInscripto(p.condicion_iva)
+    && !String(p.concepto_retencion_ganancias || "").trim() && (ultimo.has(p.id) || sinPagar.has(p.id)));
+  // Lo que les compramos: los renglones de sus facturas de compra («Factura de transporte» cuenta como un renglón de transporte).
+  const ids = candidatos.map((p) => p.id);
+  const facturas: any[] = [];
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data, error } = await db.from("facturas_compra").select("id, proveedor_id, notas").eq("sociedad_id", sociedadId).in("proveedor_id", ids.slice(i, i + 200));
+    if (error) throw error;
+    facturas.push(...(data || []));
+  }
+  const renglones = new Map<string, string[]>();
+  const agregar = (proveedorId: string, texto: string) => renglones.set(proveedorId, [...(renglones.get(proveedorId) || []), texto]);
+  for (const f of facturas) if (/^Factura de transporte/i.test(String(f.notas || ""))) agregar(f.proveedor_id, "Factura de transporte");
+  const proveedorDe = new Map(facturas.map((f) => [f.id, f.proveedor_id as string]));
+  const fIds = facturas.map((f) => f.id);
+  for (let i = 0; i < fIds.length; i += 200) {
+    const { data, error } = await db.from("facturas_compra_items").select("factura_compra_id, descripcion").eq("sociedad_id", sociedadId).in("factura_compra_id", fIds.slice(i, i + 200));
+    if (error) throw error;
+    for (const it of data || []) { const p = proveedorDe.get(it.factura_compra_id); if (p) agregar(p, String(it.descripcion || "")); }
+  }
+  return candidatos.map((p) => ({
+    id: p.id, nombre: p.razon_social || "—", cuit: String(p.cuit || ""), ultimoPago: ultimo.get(p.id) || null, impagas: sinPagar.get(p.id) || 0,
+    sugerencia: sugerirConcepto({ esTransportista: p.es_transportista, renglones: renglones.get(p.id) || [] }),
+  })).sort((a, b) => a.nombre.localeCompare(b.nombre));
+}
+
+/**
+ * Proveedores sin concepto de Ganancias (mejora H de la auditoría de Impuestos, 27/10/2026): sin concepto se calculan
+ * como bienes. Sugiere el concepto por lo que les compramos (lib/sugerir-concepto.ts) y nada se guarda solo: «Confirmar»
+ * guarda el concepto y la alícuota como la ficha del proveedor. Vale para las próximas OP; las hechas quedan como se calcularon.
+ */
+function SinConceptoGanancias({ sociedadId }: { sociedadId: string }) {
+  const { datos, error } = useCarga<FilaSinConcepto[]>(() => cargarSinConcepto(sociedadId), [sociedadId]);
+  const [abierto, setAbierto] = useState(false);
+  const [elegido, setElegido] = useState<Record<string, string>>({});
+  const [hechos, setHechos] = useState<Set<string>>(new Set());
+  const [guardando, setGuardando] = useState(false);
+  const filas = (datos || []).filter((f) => !hechos.has(f.id));
+  const concepto = (f: FilaSinConcepto) => elegido[f.id] ?? f.sugerencia.concepto ?? "";
+  const conConcepto = filas.filter((f) => concepto(f));
+  const confirmar = async (lista: FilaSinConcepto[]) => {
+    const porConcepto = new Map<string, string[]>();
+    for (const f of lista) { const c = concepto(f); if (c) porConcepto.set(c, [...(porConcepto.get(c) || []), f.id]); }
+    if (!porConcepto.size) return;
+    setGuardando(true);
+    try {
+      for (const [c, ids] of porConcepto) {
+        const { error: e } = await db.from("proveedores").update({ concepto_retencion_ganancias: c, alicuota_ganancias: ALICUOTA_POR_CONCEPTO[c] ?? 2 })
+          .eq("sociedad_id", sociedadId).in("id", ids);
+        if (e) throw e;
+        setHechos((h) => new Set([...h, ...ids]));
+      }
+    } catch (e: any) {
+      alert(`No se pudo guardar el concepto: ${e?.message || e}. Probá de nuevo.`);
+    } finally { setGuardando(false); }
+  };
+  if (error) return <span className="text-xs text-amber-600" title={error}>Sin concepto: no se pudo cargar</span>;
+  if (!filas.length) return null;
+  return (
+    <>
+      <button type="button" onClick={() => setAbierto(true)} title="Inscriptos a los que se les paga y no tienen concepto de Ganancias: se calculan como bienes"
+        className="flex h-8 items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2.5 text-xs font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-300">
+        <AlertTriangle className="h-3 w-3" /> Sin concepto ({filas.length})
+      </button>
+      <Modal open={abierto} onClose={() => setAbierto(false)} size="xl" title={`Proveedores sin concepto de Ganancias (${filas.length})`}
+        description={`Inscriptos con OP desde el ${formatDate(desdeSinConcepto(todayAR()))} o facturas sin pagar. Sin concepto se calculan como bienes. «Confirmar» guarda el concepto y la alícuota como la ficha del proveedor: vale para las próximas OP; las hechas quedan como se calcularon.`}
+        footer={<>
+          <button type="button" onClick={() => setAbierto(false)} className="rounded-lg border border-zinc-200 px-3 py-1.5 text-sm dark:border-zinc-700">Cerrar</button>
+          <button type="button" disabled={guardando || !conConcepto.length}
+            onClick={() => { if (confirm(`Se guarda el concepto elegido en ${conConcepto.length} proveedores${filas.length > conConcepto.length ? ` (${filas.length - conConcepto.length} sin sugerencia quedan para elegir)` : ""}. ¿Seguimos?`)) void confirmar(conConcepto); }}
+            className="flex items-center gap-1 rounded-lg bg-orange-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
+            {guardando && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Confirmar todos ({conConcepto.length})
+          </button>
+        </>}>
+        {/* Renglones en grilla: en pantallas angostas se apilan (proveedor, lo que le compramos, concepto y Confirmar). */}
+        <div className={`hidden pb-1 text-xs text-zinc-500 sm:grid ${GRILLA_SIN_CONCEPTO}`}><span>Proveedor</span><span>Último pago</span><span>Lo que le compramos</span><span>Concepto</span><span /></div>
+        <ul className="divide-y divide-zinc-100 text-xs dark:divide-zinc-800">
+          {filas.map((f) => (
+            <li key={f.id} className={`grid gap-1 py-2 sm:items-center ${GRILLA_SIN_CONCEPTO}`}>
+              <div className="min-w-0"><span className="font-medium text-zinc-800 dark:text-zinc-200">{f.nombre}</span><span className="block text-[10px] text-zinc-400">CUIT {f.cuit}</span></div>
+              <div className="whitespace-nowrap text-zinc-600 dark:text-zinc-300">
+                <span className="sm:hidden">Último pago: </span>{f.ultimoPago ? formatDate(f.ultimoPago) : `${f.impagas} sin pagar`}
+              </div>
+              <div className="min-w-0 text-zinc-600 dark:text-zinc-300">{f.sugerencia.concepto ? f.sugerencia.motivo : <span className="text-amber-600 dark:text-amber-400">{f.sugerencia.motivo}: elegí a mano</span>}</div>
+              <div className="flex items-center gap-2 sm:contents">
+                <div className="min-w-0 flex-1"><Select value={concepto(f)} onChange={(e) => setElegido((x) => ({ ...x, [f.id]: e.target.value }))} placeholder="Elegí…" options={OPCIONES_CONCEPTO} className="px-2 py-1 text-xs" /></div>
+                <button type="button" disabled={guardando || !concepto(f)} onClick={() => void confirmar([f])}
+                  className="shrink-0 rounded-lg border border-orange-300 px-2 py-1 text-xs font-medium text-orange-700 hover:bg-orange-50 disabled:opacity-40 dark:border-orange-700 dark:text-orange-300 dark:hover:bg-orange-950/30">Confirmar</button>
+              </div>
+            </li>
+          ))}
+        </ul>
       </Modal>
     </>
   );
@@ -730,7 +853,7 @@ export function FinanzasLazzaRetenciones({ sociedadId }: { sociedadId: string })
           className="flex h-8 items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
           <Download className="h-3 w-3" /> Excel
         </button>
-      ) : <ExportarSicore sociedadId={sociedadId} desde={desde} hasta={hasta} />}
+      ) : <><ExportarSicore sociedadId={sociedadId} desde={desde} hasta={hasta} /><SinConceptoGanancias sociedadId={sociedadId} /></>}
     </>} pie={sufridas ? <>
       <span>{visibles.length} retenciones</span>
       {totalesRetenciones(visibles).map((t) => <span key={`${t.impuesto}-${t.moneda}`}>{t.impuesto} <b className="font-mono">{formatCurrency(t.monto, t.moneda)}</b></span>)}

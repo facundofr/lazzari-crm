@@ -9,12 +9,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { armarLineaSicore, regimenSicore } from "@/lib/sicore-linea";
-import { detalleRetencion, diferenciasConHoy, pagosAnteriores, type AvisosSicore, type PagoDelMes } from "@/lib/certificado-retencion";
+import { detalleRetencion, diferenciasConHoy, pagosAnteriores, retencionCongelada, type AvisosSicore, type PagoDelMes, type RetencionCongelada } from "@/lib/certificado-retencion";
 import { RETENCION_DEFAULT } from "@/lib/plan-pagos";
 import { traerTodo } from "@/lib/paginar";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+/** Con qué se calculó la retención, anotado en la OP o el pago directo (mejora H, 27/10/2026): el TXT va con ese régimen. */
+const COLUMNAS_ANOTADAS = "retencion_ganancias_regimen, retencion_ganancias_minimo, retencion_ganancias_base_previa, retencion_ganancias_retenido_antes";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -60,7 +63,7 @@ export async function GET(req: NextRequest) {
   // Fetch OPs with retención ganancias in the period.
   const { data: ops, error } = await supabase
     .from("ordenes_pago")
-    .select("id, numero, fecha, created_at, monto_bruto, base_retencion_ganancias, retencion_ganancias_pct, retencion_ganancias_monto, proveedor_id, moneda")
+    .select(`id, numero, fecha, created_at, monto_bruto, base_retencion_ganancias, retencion_ganancias_pct, retencion_ganancias_monto, proveedor_id, moneda, ${COLUMNAS_ANOTADAS}`)
     .eq("sociedad_id", sociedadId)
     .gte("fecha", desde)
     .lte("fecha", hasta)
@@ -76,7 +79,7 @@ export async function GET(req: NextRequest) {
   // en movimientos. También deben formar parte de la presentación mensual.
   const { data: directMovements, error: directError } = await supabase
     .from("movimientos")
-    .select("id, fecha, created_at, monto, base_retencion_ganancias, retencion_ganancias_pct, retencion_ganancias_monto, proveedor_id, moneda, descripcion, anulado")
+    .select(`id, fecha, created_at, monto, base_retencion_ganancias, retencion_ganancias_pct, retencion_ganancias_monto, proveedor_id, moneda, descripcion, anulado, ${COLUMNAS_ANOTADAS}`)
     .eq("sociedad_id", sociedadId)
     .eq("tipo", "pago")
     .gte("fecha", desde)
@@ -135,9 +138,10 @@ export async function GET(req: NextRequest) {
     retencion_ganancias_monto: number;
     proveedor_id: string;
     descripcion?: string | null;
+    congelada: RetencionCongelada | null; // lo anotado al guardar (mejora H); null en las de antes
   };
   const sources: SicoreSource[] = [
-    ...(ops || []).map((op) => ({ ...op, monto_bruto: Number(op.monto_bruto || 0) })),
+    ...(ops || []).map((op) => ({ ...op, monto_bruto: Number(op.monto_bruto || 0), congelada: retencionCongelada(op) })),
     ...(directMovements || []).map((mov) => ({
       id: mov.id,
       created_at: mov.created_at,
@@ -149,6 +153,7 @@ export async function GET(req: NextRequest) {
       retencion_ganancias_monto: Number(mov.retencion_ganancias_monto || 0),
       proveedor_id: mov.proveedor_id,
       descripcion: mov.descripcion,
+      congelada: retencionCongelada(mov),
     })),
   ];
 
@@ -158,12 +163,15 @@ export async function GET(req: NextRequest) {
   for (const op of sources) {
     const prov = provMap.get(op.proveedor_id);
     if (!prov?.cuit) continue;
+    // El régimen con que se calculó (anotado en la OP); en las de antes de la mejora H, el del concepto de hoy.
+    const regimen = op.congelada?.regimen || regimenSicore(prov.concepto_retencion_ganancias);
 
     const line = armarLineaSicore({
       fecha: op.fecha,
       numeroComprobante: op.numero || op.descripcion || "",
       importeComprobante: op.monto_bruto,
       conceptoRetencion: prov.concepto_retencion_ganancias,
+      regimen,
       baseCalculo: op.base_retencion_ganancias || 0,
       importeRetencion: op.retencion_ganancias_monto,
       cuit: prov.cuit,
@@ -175,7 +183,7 @@ export async function GET(req: NextRequest) {
       comprobante: op.numero || op.descripcion || "Pago directo",
       proveedor: prov.razon_social || "",
       cuit: String(prov.cuit).replace(/\D/g, ""),
-      regimen: regimenSicore(prov.concepto_retencion_ganancias),
+      regimen,
       importe: Number(op.monto_bruto || 0),
       base: Number(op.base_retencion_ganancias || 0),
       pct: Number(op.retencion_ganancias_pct || 0),
@@ -204,24 +212,26 @@ export async function GET(req: NextRequest) {
 
 /**
  * Control antes de bajar el TXT (auditoría UX 26/10/2026, arreglo 13). Solo avisa: el TXT sale igual.
- * - Proveedores sin concepto de Ganancias: van como régimen 78 (bienes).
- * - Retenciones calculadas con un % o un mínimo que no es el del concepto que el proveedor tiene hoy, que es con el
- *   que las manda el TXT (caso OP-000049: se retuvo como bienes y hoy el proveedor está en transporte).
+ * - Proveedores sin concepto de Ganancias: sus retenciones se calcularon como bienes (régimen 78).
+ * - Retenciones calculadas con otro régimen, % o mínimo que el del concepto que el proveedor tiene hoy (caso OP-000049:
+ *   se retuvo como bienes y hoy el proveedor está en transporte). Las anotadas (mejora H) van al TXT como se calcularon;
+ *   las de antes de la mejora H, con el régimen de hoy.
  */
 async function controlSicore(
   supabase: any, sociedadId: string, desde: string, hasta: string,
-  sources: Array<{ id: string; created_at: string; fecha: string; numero?: string | null; descripcion?: string | null; proveedor_id: string; monto_bruto: number; base_retencion_ganancias: number; retencion_ganancias_pct: number; retencion_ganancias_monto: number }>,
+  sources: Array<{ id: string; created_at: string; fecha: string; numero?: string | null; descripcion?: string | null; proveedor_id: string; monto_bruto: number; base_retencion_ganancias: number; retencion_ganancias_pct: number; retencion_ganancias_monto: number; congelada: RetencionCongelada | null }>,
   provMap: Map<string, { razon_social?: string | null; cuit?: string | null; concepto_retencion_ganancias?: string | null; alicuota_ganancias?: number | null }>,
 ): Promise<AvisosSicore> {
-  // Los pagos del mes que cada OP sumó al acumulado (lib/certificado-retencion.ts): OP no anuladas y pagos directos de una factura.
-  const provIds = [...new Set(sources.map((s) => s.proveedor_id))];
+  // Los pagos del mes que cada OP sumó al acumulado (lib/certificado-retencion.ts): OP no anuladas y pagos directos de una
+  // factura. Solo hacen falta para las que no anotaron la cuenta (de antes de la mejora H).
+  const provIds = [...new Set(sources.filter((s) => !s.congelada).map((s) => s.proveedor_id))];
   const mesDesde = `${desde.slice(0, 7)}-01`;
   const [year, month] = hasta.slice(0, 7).split("-").map(Number);
   const mesHasta = new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10);
   const [opsMes, directosMes, cfg] = await Promise.all([
-    traerTodo<any>(() => supabase.from("ordenes_pago").select("id, proveedor_id, fecha, created_at, base_retencion_ganancias, retencion_ganancias_monto")
+    provIds.length === 0 ? [] : traerTodo<any>(() => supabase.from("ordenes_pago").select("id, proveedor_id, fecha, created_at, base_retencion_ganancias, retencion_ganancias_monto")
       .eq("sociedad_id", sociedadId).in("proveedor_id", provIds).neq("estado", "anulada").gte("fecha", mesDesde).lt("fecha", mesHasta).order("id")),
-    traerTodo<any>(() => supabase.from("movimientos").select("id, proveedor_id, fecha, created_at, base_retencion_ganancias, retencion_ganancias_monto, anulado")
+    provIds.length === 0 ? [] : traerTodo<any>(() => supabase.from("movimientos").select("id, proveedor_id, fecha, created_at, base_retencion_ganancias, retencion_ganancias_monto, anulado")
       .eq("sociedad_id", sociedadId).in("proveedor_id", provIds).eq("tipo", "pago").not("factura_compra_id", "is", null).is("nota_credito_compra_id", null)
       .gte("fecha", mesDesde).lt("fecha", mesHasta).order("id")),
     supabase.from("retencion_config").select("minimo_ganancias, tasa_ganancias_ri").eq("sociedad_id", sociedadId).maybeSingle(),
@@ -243,7 +253,8 @@ async function controlSicore(
     const d = detalleRetencion({
       concepto: prov.concepto_retencion_ganancias, alicuotaProveedor: prov.alicuota_ganancias, minimoBienes, tasaSociedad,
       bruto: s.monto_bruto, base: Number(s.base_retencion_ganancias || 0), pct: Number(s.retencion_ganancias_pct || 0),
-      retenido: Number(s.retencion_ganancias_monto || 0), anteriores: pagosAnteriores(pago(s), delMes),
+      retenido: Number(s.retencion_ganancias_monto || 0),
+      ...(s.congelada ? { congelada: s.congelada } : { anteriores: pagosAnteriores(pago(s), delMes) }),
     });
     if (d.sinConcepto) {
       const x = sinConcepto.get(s.proveedor_id) || { proveedor: prov.razon_social || "", retenciones: 0, retenido: 0 };
@@ -252,9 +263,10 @@ async function controlSicore(
       sinConcepto.set(s.proveedor_id, x);
     }
     const dif = diferenciasConHoy(d);
-    if (dif.pct || dif.minimo) distintos.push({
+    if (dif.pct || dif.minimo || dif.regimen) distintos.push({
       comprobante: s.numero || s.descripcion || "Pago directo", fecha: String(s.fecha).slice(0, 10), proveedor: prov.razon_social || "",
-      regimen: d.regimen, pct: d.pct, pctHoy: d.pctHoy, minimo: d.minimo, minimoHoy: d.minimoHoy, difPct: dif.pct, difMinimo: dif.minimo,
+      regimen: d.regimen, regimenHoy: d.regimenHoy, congelada: d.congelada,
+      pct: d.pct, pctHoy: d.pctHoy, minimo: d.minimo, minimoHoy: d.minimoHoy, difPct: dif.pct, difMinimo: dif.minimo, difRegimen: dif.regimen,
     });
   }
   return { sinConcepto: [...sinConcepto.values()].sort((a, b) => a.proveedor.localeCompare(b.proveedor)), distintos };

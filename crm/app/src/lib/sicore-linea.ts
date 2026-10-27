@@ -68,6 +68,8 @@ export interface LineaSicore {
   numeroComprobante: string;  // solo se usan los dígitos
   importeComprobante: number;
   conceptoRetencion?: string | null;
+  /** Régimen que anotó la OP al calcular la retención (mejora H, 27/10/2026): manda sobre el concepto. */
+  regimen?: string | null;
   baseCalculo: number;
   importeRetencion: number;
   cuit: string;               // CUIT del retenido
@@ -82,7 +84,7 @@ export function armarLineaSicore(l: LineaSicore): string {
     "   " + cer(String(l.numeroComprobante || "").replace(/\D/g, ""), 13),
     montoSicore(l.importeComprobante, 16),
     cod("217", 4),                                          // impuesto: Ganancias → " 217"
-    cod(regimenSicore(l.conceptoRetencion), 3),             // ej. " 78"
+    cod(l.regimen || regimenSicore(l.conceptoRetencion), 3), // ej. " 78"
     "1",                                                    // operación: retención
     montoSicore(l.baseCalculo, 14),
     fecha,                                                  // fecha de emisión de la retención

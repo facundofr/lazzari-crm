@@ -1436,9 +1436,10 @@ export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
   const letrasHtml = `<div style="font-size:10px;font-style:italic;color:#666;margin-top:10px">${montoEnLetras(totalGeneral, mon)}</div>`;
 
   // ── Certificado retención ganancias (page 2) ──
-  // Auditoría UX 26/10/2026, arreglo 12: régimen del concepto del proveedor (el mismo que manda el TXT SICORE), la cuenta
-  // de la retención (la misma que hace la OP) y las facturas que paga. Si la cuenta no se puede rearmar (por ejemplo,
-  // un importe escrito a mano en la OP), quedan el bruto, el neto sin IVA, el % y lo retenido.
+  // Auditoría UX 26/10/2026, arreglo 12: régimen con que se calculó (el que anotó la OP, mejora H; en las de antes, el del
+  // concepto de hoy: el mismo que manda el TXT SICORE), la cuenta de la retención (la misma que hace la OP) y las facturas
+  // que paga. Si la cuenta no da (por ejemplo, un importe escrito a mano en la OP), quedan el bruto, el neto sin IVA, el %
+  // y lo retenido.
   const ret = op.retencion;
   const cuenta = ret && ret.minimo !== null && ret.sujeto !== null && ret.retencionAcumulada !== null
     ? { ...ret, minimo: ret.minimo, sujeto: ret.sujeto, retencionAcumulada: ret.retencionAcumulada } : null;

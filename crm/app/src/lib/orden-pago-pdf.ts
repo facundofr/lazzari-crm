@@ -3,7 +3,7 @@
 import { generateOrdenPagoPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
 import { pesosDeUsd } from "@/lib/op-usd-pesos";
 import { formatCurrency } from "@/lib/utils";
-import { detalleRetencion, pagosAnteriores, type DetalleRetencion, type PagoDelMes } from "@/lib/certificado-retencion";
+import { detalleRetencion, pagosAnteriores, retencionCongelada, type DetalleRetencion, type PagoDelMes } from "@/lib/certificado-retencion";
 import { RETENCION_DEFAULT } from "@/lib/plan-pagos";
 
 export interface OPResumen {
@@ -81,20 +81,23 @@ export async function facturasDeOP(supabase: any, opId: string): Promise<{ numer
 }
 
 /**
- * La cuenta de la retención de Ganancias para el certificado: la misma que hizo la OP, con los pagos al proveedor
- * del mes cargados antes que ella y el concepto que tiene hoy (lib/certificado-retencion.ts).
+ * La cuenta de la retención de Ganancias para el certificado (lib/certificado-retencion.ts): la que anotó la OP al
+ * guardarse (mejora H) o, en las de antes, la misma que hizo la OP rearmada con los pagos al proveedor del mes
+ * cargados antes que ella y el concepto que tiene hoy.
  */
 async function retencionDeOP(supabase: any, op: any): Promise<DetalleRetencion | undefined> {
   if (!(Number(op.retencion_ganancias_monto) > 0)) return undefined;
+  const congelada = retencionCongelada(op);
   const mes = String(op.fecha).slice(0, 7);
   const [year, month] = mes.split("-").map(Number);
   const mesSiguiente = new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10);
+  const sinDatos = Promise.resolve({ data: [] as any[], error: null });
   const [ops, directos, cfg] = await Promise.all([
-    supabase.from("ordenes_pago").select("id, proveedor_id, fecha, created_at, base_retencion_ganancias, retencion_ganancias_monto")
+    congelada ? sinDatos : supabase.from("ordenes_pago").select("id, proveedor_id, fecha, created_at, base_retencion_ganancias, retencion_ganancias_monto")
       .eq("sociedad_id", op.sociedad_id).eq("proveedor_id", op.proveedor_id).neq("estado", "anulada")
       .gte("fecha", `${mes}-01`).lt("fecha", mesSiguiente),
     // Pagos directos de una factura (sin OP): la OP también los suma al acumulado del mes.
-    supabase.from("movimientos").select("id, proveedor_id, fecha, created_at, base_retencion_ganancias, retencion_ganancias_monto, anulado")
+    congelada ? sinDatos : supabase.from("movimientos").select("id, proveedor_id, fecha, created_at, base_retencion_ganancias, retencion_ganancias_monto, anulado")
       .eq("sociedad_id", op.sociedad_id).eq("proveedor_id", op.proveedor_id).eq("tipo", "pago")
       .not("factura_compra_id", "is", null).is("nota_credito_compra_id", null)
       .gte("fecha", `${mes}-01`).lt("fecha", mesSiguiente),
@@ -112,7 +115,7 @@ async function retencionDeOP(supabase: any, op: any): Promise<DetalleRetencion |
     tasaSociedad: Number(cfg.data?.tasa_ganancias_ri ?? RETENCION_DEFAULT.tasa_ganancias_ri),
     bruto: Number(op.monto_bruto || 0), base: Number(op.base_retencion_ganancias || 0),
     pct: Number(op.retencion_ganancias_pct || 0), retenido: Number(op.retencion_ganancias_monto || 0),
-    anteriores: pagosAnteriores(pago(op), delMes),
+    ...(congelada ? { congelada } : { anteriores: pagosAnteriores(pago(op), delMes) }),
   });
 }
 

@@ -13,6 +13,10 @@ ok(campo(13, 16) === "   0000000000123", "nro comprobante");
 ok(campo(45, 4) === " 217" && campo(49, 3) === " 95" && campo(52, 1) === "1", "impuesto, régimen transporte, operación");
 ok(campo(79, 1) === " " && campo(100, 10) === "          ", "suspendidos y boletín vacíos");
 ok(campo(112, 20) === "30712345678         ", "cuit");
+// Mejora H: el régimen anotado en la OP manda sobre el concepto de hoy (OP-000049: se calculó como bienes)
+const anotada = armarLineaSicore({ fecha: "2026-10-07", numeroComprobante: "OP-000049", importeComprobante: 323353.35, conceptoRetencion: "transporte", regimen: "078", baseCalculo: 267234.18, importeRetencion: 1835.9, cuit: "30-71234567-8" });
+ok(anotada.slice(48, 51) === " 78" && anotada.length === 198, "régimen anotado");
+ok(armarLineaSicore({ fecha: "2026-10-07", numeroComprobante: "1", importeComprobante: 1, conceptoRetencion: "transporte", regimen: null, baseCalculo: 1, importeRetencion: 1, cuit: "20123456789" }).slice(48, 51) === " 95", "sin anotar: el concepto");
 // largo fijo aunque el nombre/número sean raros
 ok(armarLineaSicore({ fecha: "2026-01-31", numeroComprobante: "", importeComprobante: 0, baseCalculo: 0, importeRetencion: 0.5, cuit: "20123456789", conceptoRetencion: "inexistente" }).length === 198, "largo con datos vacíos");
 console.log("OK sicore-linea");
