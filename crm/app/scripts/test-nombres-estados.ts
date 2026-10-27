@@ -14,6 +14,8 @@ assert.equal(nombreEstadoBancoTitulo("PAGADO"), "Pagado");
 
 assert.equal(nombreAccionRegistro("extracto_cargado"), "Extracto cargado");
 assert.equal(nombreAccionRegistro("regla_creada"), "Regla creada");
+assert.equal(nombreAccionRegistro("ia_sugirio"), "La IA sugirió");
+assert.equal(nombreAccionRegistro("asistente_leyo_correos"), "El asistente leyó los correos");
 assert.equal(nombreAccionRegistro("otra_cosa"), "Otra cosa", "una acción nueva igual se lee");
 
 assert.equal(quitarCodigosBanco("PAGO SERVICI 17779347 OP3636 #137"), "PAGO SERVICI 17779347 OP3636");
