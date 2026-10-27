@@ -9,9 +9,7 @@
  *    La OC solo controla que llegue todo. Lo que ya estaba vinculado queda como está.
  * 4. "¿Cómo se paga?" arranca sin nada elegido y hay que elegir (Va a Pagos o Ya pagada con Visa); email y CBU/alias
  *    del proveedor si faltan, y "Nota para Finanzas".
- * 4b. Saldo a favor (19/10): si al proveedor se le pagó antes (OP sin factura, ej. De Pascale), se puede tildar
- *    "Aplicar saldo a favor" (nunca se tilda solo). Si cubre todo, la factura queda pagada; si no, el resto va a Pagos.
- *    Se guarda con aplicar_saldo_favor_proveedor (components/saldo-favor-proveedor.tsx).
+ * 4b. Saldo a favor: NO va acá (Augusto 27/10: esta ventana es solo para cargar facturas). Se ve en la cuenta corriente y al pagar.
  * 4c. Carga a mano (sin archivo): "Cargar a mano" en la pantalla de arranque. Se elige el proveedor, tipo, número, fecha, neto, IVA,
  *    percepciones y total (el total se arma solo y se puede corregir); el PDF se puede adjuntar o no. Del pago para abajo es igual.
  * 5. Nota de crédito: sin forma de pago; va a la cuenta corriente del proveedor como crédito
@@ -30,8 +28,6 @@ import { leerFacturaLocal } from "@/lib/leer-factura-local";
 import { traerTarjetas, tarjetaSugerida, registrarPagoTarjeta, movimientoPagoTarjeta } from "@/lib/pago-tarjeta";
 import { cant } from "@/lib/cargar-factura";
 import { ivaYPercepciones, netoFactura, tipoNotaCredito, vencimientoPorDias } from "@/lib/compras-lazza";
-import { listaOPs, repartirSaldoFavor, totalSaldoFavor, type FuenteSaldoFavor } from "@/lib/saldo-favor-proveedor";
-import { aplicarSaldoFavor, traerSaldoFavor } from "@/components/saldo-favor-proveedor";
 import { Autocompletar } from "@/components/ui/autocompletar";
 import { AlertTriangle, Check, CreditCard, FileUp, Loader2, Sparkles, UserPlus, X } from "lucide-react";
 
@@ -98,9 +94,6 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
   const [bancoProv, setBancoProv] = useState("");
   const [guardandoProv, setGuardandoProv] = useState(false);
   const [guardando, setGuardando] = useState(false);
-  // Saldo a favor con el proveedor (OP pagadas antes de la factura). Arranca sin tildar.
-  const [fuentesSF, setFuentesSF] = useState<FuenteSaldoFavor[]>([]);
-  const [usarSaldo, setUsarSaldo] = useState(false);
   const [provsLista, setProvsLista] = useState<Proveedor[]>([]);
   const [percTxt, setPercTxt] = useState("");
   const [totalTxt, setTotalTxt] = useState("");
@@ -115,7 +108,6 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
     ncKey.current = null;
     setError(""); setFactura(null); setProveedor(null); setBuscandoProv(false);
     setConVisa(null); setFaltaElegirPago(false); setForma(null); setDiasTxt(null); setNotaPago(""); setDuplicada(false); setEsNota(false); setOtraSociedad(""); setNoSeLeyo(false); setOrigen("");
-    setFuentesSF([]); setUsarSaldo(false);
     setPercTxt(""); setTotalTxt("");
   }
 
@@ -224,18 +216,12 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
       if (nuevo !== f.numero) { setFactura(prev => prev ? { ...prev, numero: nuevo } : prev); setDuplicada(false); }
     }
     setProveedor(p); // después del chequeo de duplicada: el aviso sale junto con el proveedor
-    setUsarSaldo(false);
-    setFuentesSF(await traerSaldoFavor(sociedadId, p.id).catch(() => []));
   }
 
   // ── 3. Cálculos ──
   // Sugerencia (no se elige sola): Mercado Libre casi siempre se paga con tarjeta.
   const visaSugerida = esMercadoLibre(proveedor?.razon_social);
-  // Con saldo a favor aplicado, la Visa no va (pagaría de nuevo lo que ya cubre el saldo).
-  const pagaVisa = conVisa === true && !usarSaldo;
-  const saldoFavor = factura && !factura.tipo.startsWith("NC") ? totalSaldoFavor(fuentesSF, factura.moneda) : 0;
-  const aplicaSaldo = usarSaldo && factura ? round2(Math.min(saldoFavor, factura.total)) : 0;
-  const cubreTodo = !!factura && usarSaldo && aplicaSaldo >= factura.total - 0.005;
+  const pagaVisa = conVisa === true;
   const formaPago: FormaPago = forma ?? (/cheq/i.test(proveedor?.medio_pago_preferido || "") ? "echeq" : "transferencia");
   const diasSugeridos = formaPago === "echeq" ? (proveedor?.plazo_cheque_dias ?? proveedor?.dias_pago) : proveedor?.dias_pago;
   const dias = diasTxt ?? (diasSugeridos != null ? String(diasSugeridos) : "");
@@ -317,7 +303,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
     if (!factura || !proveedor) return;
     if (!factura.numero.trim()) { setError("Falta el número de la factura."); return; }
     if (esNC) return guardarNC();
-    if (conVisa === null && !cubreTodo) { setFaltaElegirPago(true); return; }
+    if (conVisa === null) { setFaltaElegirPago(true); return; }
     setGuardando(true); setError("");
     const numero = factura.numero.trim();
     try {
@@ -329,7 +315,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
         ? itemsFC.map((it, i) => ({ key: lineKey(factura, i), ...it }))
         : [{ key: "fc", codigo: "", descripcion: "Factura (sin detalle de artículos)", cantidad: 1, precio_unitario: num(netoTxt), descuento_porcentaje: 0, iva_porcentaje: iva, unidad: "UN" }];
       const notas = [
-        pagaVisa || cubreTodo ? "" : textoPago,
+        pagaVisa ? "" : textoPago,
         factura.tipo === TIPO_SIN_FACTURA ? "Sin factura del proveedor (comprobante manual)" : "",
         notaPago.trim() ? `Nota para Finanzas: ${notaPago.trim()}` : "",
         "Cargada con «Compras Lazza»",
@@ -360,12 +346,6 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
         else pagoTxt = `pagada con ${visa!.nombre}`;
       } else if (facturaId) {
         await db.from("facturas_compra").update({ estado: "pendiente" }).eq("id", facturaId).eq("estado", "pendiente_aprobacion");
-        if (usarSaldo && aplicaSaldo > 0) {
-          const [r] = repartirSaldoFavor(fuentesSF, [{ id: facturaId, saldo: factura.total, moneda: factura.moneda }]);
-          const e = r ? await aplicarSaldoFavor(sociedadId, facturaId, r.ops) : "no hay saldo a favor";
-          if (e) toast.warning(`No se pudo aplicar el saldo a favor (${e}): la factura quedó para Pagos. Se puede aplicar desde Finanzas Lazza › Cuentas corrientes.`);
-          else pagoTxt = cubreTodo ? "pagada con el saldo a favor" : `${plata(r!.aplicado)} del saldo a favor · el resto va a Pagos`;
-        }
       }
       toast.success([`✔ FC ${numero} cargada`, pagoTxt].join(" · "));
       if (data?.aviso) toast.warning(String(data.aviso));
@@ -489,24 +469,16 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
               <p className="text-xs text-zinc-600 dark:text-zinc-300">La factura va directo a la cuenta corriente de <b>{proveedor!.razon_social}</b> (no se ata a ninguna OC).</p>
             )}
 
-            {listo && !esNC && saldoFavor > 0 && (
-              <label className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
-                <input type="checkbox" checked={usarSaldo} onChange={e => { setUsarSaldo(e.target.checked); if (e.target.checked && conVisa === true) setConVisa(false); }} className="h-4 w-4 accent-emerald-600" />
-                <span>Aplicar saldo a favor: <b>{plata(saldoFavor)}</b> ({listaOPs(fuentesSF.filter(f => f.moneda === (factura.moneda === "USD" ? "USD" : "ARS")))})</span>
-                {usarSaldo && <span className="text-xs">→ {cubreTodo ? `queda pagada${saldoFavor - aplicaSaldo > 0.005 ? ` · siguen a favor ${plata(saldoFavor - aplicaSaldo)}` : ""}` : `se aplican ${plata(aplicaSaldo)} · ${plata(factura.total - aplicaSaldo)} van a Pagos`}</span>}
-              </label>
-            )}
-
-            {listo && !esNC && !cubreTodo && (
+            {listo && !esNC && (
               <div className={`flex flex-wrap items-center gap-3 rounded-lg px-2 py-1 text-sm ${faltaElegirPago && conVisa === null ? "border border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/30" : ""}`}>
                 <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">¿Cómo se paga?</span>
                 <label className="flex items-center gap-1"><input type="radio" checked={conVisa === false} onChange={() => setConVisa(false)} /> Va a Pagos</label>
-                {!usarSaldo && <label className="flex items-center gap-1"><input type="radio" checked={conVisa === true} onChange={() => setConVisa(true)} /> <CreditCard className="h-4 w-4 text-blue-600" /> Ya pagada con Visa</label>}
+                <label className="flex items-center gap-1"><input type="radio" checked={conVisa === true} onChange={() => setConVisa(true)} /> <CreditCard className="h-4 w-4 text-blue-600" /> Ya pagada con Visa</label>
                 {visaSugerida && conVisa === null && <span className="text-xs text-zinc-500">(Mercado Libre: ¿se pagó con tarjeta?)</span>}
                 {faltaElegirPago && conVisa === null && <span className="text-xs font-semibold text-red-600">Elegí cómo se paga</span>}
               </div>
             )}
-            {listo && !esNC && !cubreTodo && conVisa === false && (
+            {listo && !esNC && conVisa === false && (
               <div className="flex flex-wrap items-center gap-1.5 rounded-lg bg-zinc-50 px-3 py-2 text-sm dark:bg-zinc-800/60">
                 <span className="mr-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Para Pagos</span>
                 {(["transferencia", "echeq"] as const).map(f => (
