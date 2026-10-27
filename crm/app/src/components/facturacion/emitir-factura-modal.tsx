@@ -31,12 +31,15 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { observacionesParaCliente } from "@/lib/observaciones-cliente";
+import { detalleResto, restoSinFacturar, totalesResto } from "@/lib/resto-facturar";
 
 export interface EmitItem {
   descripcion: string;
   cantidad: number;
   precio_unitario: number;
   iva_porcentaje: number;
+  /** Renglón del PR del que sale (para el resto a facturar); los agregados a mano no tienen. */
+  prIdx?: number;
 }
 
 export interface PresupuestoAFacturar {
@@ -56,6 +59,8 @@ export interface PresupuestoAFacturar {
     moneda_predeterminada?: string | null;
   } | null;
   items: { descripcion: string; cantidad: number; precio_venta: number | null; iva_porcentaje: number; total: number | null }[];
+  /** Si se factura un resto (lib/resto-facturar): su id; los items son los del resto. */
+  resto_id?: string | null;
 }
 
 interface ClienteOption {
@@ -123,15 +128,19 @@ export function EmitirFacturaModal({
   const [cotizFecha, setCotizFecha] = useState("");
   const [latestFacturaDate, setLatestFacturaDate] = useState("");
   const [descargando, setDescargando] = useState(false);
+  // Lo que se saca del PR al facturar: queda "a facturar" (por defecto) o "no facturar" (lib/resto-facturar).
+  const [restoDecision, setRestoDecision] = useState<"pendiente" | "no_facturar">("pendiente");
+  const [restoAviso, setRestoAviso] = useState("");
   const [emitData, setEmitData] = useState(() => {
     const manual = forceManual || sourceIsManual;
     const tipo = manual ? "X" : tipoCliente;
     const hoy = todayAR();
     const condicion = pr ? condicionVentaCliente(pr.cliente?.dias_cuenta_corriente, pr.cliente?.forma_pago) : "Cta. Cte.";
     // Precio de cada renglón según cómo lo guardó el PR (lib/precio-factura). X va con precio final, como B.
-    const items: EmitItem[] = pr ? pr.items.map(it => {
+    const items: EmitItem[] = pr ? pr.items.map((it, prIdx) => {
       const iva = Number(it.iva_porcentaje ?? 21);
       return {
+        prIdx,
         descripcion: it.descripcion,
         cantidad: Number(it.cantidad),
         precio_unitario: precioUnitarioParaFactura({ tipo: manual ? "FB" : tipo, sourceIsManual, precioNeto: precioNetoItemPresupuesto(it), ivaPorcentaje: iva }),
@@ -316,6 +325,9 @@ export function EmitirFacturaModal({
     setEmitData(p => ({ ...p, ...extra, tipo: nuevo, items: convertirItemsEntreAyB(p.items, esA(p.tipo), esA(nuevo)) }));
   }
 
+  const resto = useMemo(() => (pr ? restoSinFacturar(pr.items, emitData.items) : []), [pr, emitData.items]);
+  const restoTotales = totalesResto(resto);
+
   const emitTotals = itemsFactura.reduce((acc, it) => {
     if (emitManual || emitData.tipo === "X") {
       const total = it.cantidad * it.precio_unitario;
@@ -376,7 +388,7 @@ export function EmitirFacturaModal({
       condicion_venta: emitData.condicion_venta || null,
       fecha_vencimiento: emitData.fecha_vencimiento || null,
       observaciones: observacionesConCotizacion(emitData.observaciones, leyendaTc) || null,
-      items: itemsFactura,
+      items: itemsFactura.map(({ prIdx: _prIdx, ...it }) => it),
       sociedad_id: sociedadActiva?.id,
       presupuesto_id: pr?.id || undefined,
       oc_cliente: pr?.oc_cliente || null,
@@ -402,6 +414,28 @@ export function EmitirFacturaModal({
     if (!pr || !sociedadActiva?.id) return;
     const { error } = await (supabase as any).from("presupuestos").update({ estado: "facturado" }).eq("id", pr.id).eq("sociedad_id", sociedadActiva.id);
     if (error) console.error("Error al marcar PR como facturado:", error.message);
+  }
+
+  /** Después de emitir: el resto que se facturaba queda "facturado" y lo que se sacó ahora queda como resto nuevo. Nunca frena. */
+  async function guardarResto(facturaId: string) {
+    if (!pr || !sociedadActiva?.id) return;
+    const db = supabase as any;
+    const ahora = new Date().toISOString();
+    const avisos: string[] = [];
+    if (pr.resto_id) {
+      const { error } = await db.from("presupuesto_restos_facturar").update({ estado: "facturado", factura_resto_id: facturaId, resuelto_at: ahora, resuelto_por: profile?.id || null }).eq("id", pr.resto_id);
+      if (error) { console.error("Resto a facturar (facturado):", error.message); avisos.push("No se pudo marcar el resto como facturado: avisá a soporte."); }
+    }
+    if (resto.length) {
+      const { error } = await db.from("presupuesto_restos_facturar").insert({
+        sociedad_id: sociedadActiva.id, presupuesto_id: pr.id, factura_id: facturaId, moneda: pr.moneda === "USD" ? "USD" : "ARS",
+        items: resto, subtotal: restoTotales.subtotal, total: restoTotales.total, estado: restoDecision,
+        ...(restoDecision === "no_facturar" ? { resuelto_at: ahora, resuelto_por: profile?.id || null } : {}),
+      });
+      if (error) { console.error("Resto a facturar:", error.message); avisos.push(`No se pudo guardar lo que quedó sin facturar (${detalleResto(resto)}): anotalo.`); }
+      else avisos.push(restoDecision === "pendiente" ? `Quedó a facturar: ${detalleResto(resto)} (${formatCurrency(restoTotales.total, pr.moneda === "USD" ? "USD" : "ARS")}). Está en Finanzas Lazza › Facturar.` : `Lo que faltaba quedó como «No facturar» en el ${pr.numero}.`);
+    }
+    setRestoAviso(avisos.join(" "));
   }
 
   const handleEmit = async () => {
@@ -430,6 +464,7 @@ export function EmitirFacturaModal({
       });
       if (data.success) {
         await marcarPresupuestoFacturado();
+        await guardarResto(data.factura.id);
         setEmitResult({ ...data.factura, warnings: data.warnings, warning: data.warning });
         setEmitStep("success");
         onEmitted?.(data.factura.id);
@@ -455,6 +490,7 @@ export function EmitirFacturaModal({
       const { res, data } = await postFactura({ ...datosComunes(), manual: true, tipo: "X", numero_manual: numManual });
       if (!res.ok || !data.success) throw new Error(data.error || "Error al guardar factura manual");
       await marcarPresupuestoFacturado();
+      if (data.factura?.id) await guardarResto(data.factura.id);
       setEmitResult({
         id: data.factura?.id,
         comprobante: formatComprobante("X", emitData.punto_venta, numManual),
@@ -845,6 +881,19 @@ export function EmitirFacturaModal({
             </div>
           </div>
 
+          {/* Lo que se sacó del PR: se pregunta acá, viene marcado "Dejar a facturar" y no frena la factura. */}
+          {resto.length > 0 && (
+            <div className="shrink-0 border-t border-amber-200 bg-amber-50 px-4 py-2 text-xs dark:border-amber-900 dark:bg-amber-950/30">
+              <p className="text-amber-800 dark:text-amber-300">
+                Quedan sin facturar {resto.length} {resto.length === 1 ? "renglón" : "renglones"} del {pr?.numero} ({formatCurrency(restoTotales.total, monedaOrigen)}): <span className="font-medium">{detalleResto(resto)}</span>
+              </p>
+              <div className="mt-1 flex flex-wrap gap-3">
+                <label className="flex items-center gap-1 cursor-pointer"><input type="radio" checked={restoDecision === "pendiente"} onChange={() => setRestoDecision("pendiente")} /> Dejar a facturar (queda en Facturar como resto del PR)</label>
+                <label className="flex items-center gap-1 cursor-pointer"><input type="radio" checked={restoDecision === "no_facturar"} onChange={() => setRestoDecision("no_facturar")} /> No facturar</label>
+              </div>
+            </div>
+          )}
+
           {/* Totales y botones: siempre a la vista */}
           <div className="shrink-0 border-t border-zinc-200 dark:border-zinc-700 px-4 py-2.5 flex flex-col sm:flex-row sm:items-center gap-2 sm:justify-between">
             <div className="flex flex-wrap items-baseline gap-x-4 gap-y-0.5 text-sm">
@@ -886,6 +935,7 @@ export function EmitirFacturaModal({
               </div>
               <h3 className="text-lg font-bold dark:text-white">{emitResult.manual ? "Factura guardada" : "Factura emitida exitosamente"}</h3>
               {emitResult.warning && <p className="text-sm text-amber-700 dark:text-amber-400">{emitResult.warning}</p>}
+              {restoAviso && <p className="text-sm text-amber-700 dark:text-amber-400 text-center">{restoAviso}</p>}
               {emitResult.warnings?.length > 0 && <p className="text-sm text-amber-700 dark:text-amber-400">Advertencias ARCA: {emitResult.warnings.map((w: any) => typeof w === "string" ? w : (w.Msg || w.message || JSON.stringify(w))).join("; ")}</p>}
             </div>
             <div className="rounded-lg border border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30 p-4 space-y-2 text-sm">

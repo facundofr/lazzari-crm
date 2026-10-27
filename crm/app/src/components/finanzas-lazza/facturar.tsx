@@ -4,6 +4,8 @@
 // con la misma regla que Ventas → "Para facturar" (lib/ventas-etapas.ts). Columnas: Fecha P/Fact (OC o aprobación) · N° PR ·
 // Cliente · Detalle (como en Presupuestos) · Sucursal · Neto · Total · Estado. "Facturar" abre la MISMA ventana de Ventas
 // (EmitirFacturaModal); "Esperando OC" es un aviso, se puede facturar igual.
+// Restos (26/10/2026): lo que quedó sin facturar de un PR (renglones sacados o cantidades menores) sale como renglón propio
+// "PR-… · resto" con Facturar y No facturar (tabla presupuesto_restos_facturar, lib/resto-facturar.ts).
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Loader2, Receipt, Search, X } from "lucide-react";
@@ -16,6 +18,7 @@ import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { comprobanteVenta } from "@/lib/finanzas-lazza";
 import { esNotaCredito } from "@/lib/ventas-documentos";
 import { detalleDePr, enBandeja, etapaVenta, fechaParaFacturar } from "@/lib/ventas-etapas";
+import { detalleResto } from "@/lib/resto-facturar";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -35,6 +38,8 @@ interface FilaFacturar {
   refacturar: boolean;
   /** Si la factura se anuló con NC: el número de esa NC (para el estado "Anulada por NC …"). */
   ncAnula: string | null;
+  /** Resto pendiente de un PR ya facturado: su id (la fila es el resto, no el PR entero). */
+  restoId: string | null;
   presupuesto: PresupuestoAFacturar;
 }
 
@@ -57,12 +62,54 @@ async function ncDeFacturas(sociedadId: string, ids: string[]): Promise<Map<stri
   return nc;
 }
 
-async function traerParaFacturar(sociedadId: string, hoy: string): Promise<FilaFacturar[]> {
-  const prs = await traerTodo<any>(() => db.from("presupuestos").select(`
+const CAMPOS_PR = `
       id, numero, cliente_id, fecha, respondido_at, estado, subtotal, total, moneda, cotizacion_modalidad, modalidad_emision, oc_cliente, oc_cliente_fecha, archivo_url, observaciones,
       clientes(razon_social, cuit, condicion_iva, forma_pago, dias_cuenta_corriente, limite_credito, email, email_facturacion, pide_oc_para_facturar, moneda_predeterminada),
       sucursal:sucursal_id(nombre),
-      presupuesto_items(id, descripcion, cantidad, precio_venta, iva_porcentaje, total, orden)`)
+      presupuesto_items(id, descripcion, cantidad, precio_venta, iva_porcentaje, total, orden)`;
+
+function presupuestoAFacturar(p: any, items: PresupuestoAFacturar["items"], restoId: string | null = null): PresupuestoAFacturar {
+  return {
+    id: p.id, numero: p.numero, cliente_id: p.cliente_id, moneda: p.moneda,
+    cotizacion_modalidad: p.cotizacion_modalidad, modalidad_emision: p.modalidad_emision,
+    oc_cliente: p.oc_cliente, oc_cliente_fecha: p.oc_cliente_fecha, archivo_url: p.archivo_url, observaciones: p.observaciones,
+    cliente: p.clientes ? { ...p.clientes } : null,
+    items, resto_id: restoId,
+  };
+}
+
+/** Restos pendientes: cada uno es una fila con solo lo que falta facturar. Si falla, la lista sale sin restos. */
+async function traerRestos(sociedadId: string): Promise<FilaFacturar[]> {
+  const { data, error } = await db.from("presupuesto_restos_facturar").select(`id, created_at, moneda, items, subtotal, total, presupuesto:presupuesto_id(${CAMPOS_PR})`)
+    .eq("sociedad_id", sociedadId).eq("estado", "pendiente");
+  if (error) { console.error("Finanzas Lazza · Facturar (restos):", error.message); return []; }
+  return (data || []).filter((r: any) => r.presupuesto).map((r: any) => {
+    const p = r.presupuesto;
+    const items = Array.isArray(r.items) ? r.items : [];
+    const texto = detalleResto(items);
+    return {
+      id: r.id,
+      fechaPFact: String(r.created_at || "").slice(0, 10),
+      numero: p.numero,
+      cliente: p.clientes?.razon_social || "",
+      ocCliente: p.oc_cliente || "",
+      detalle: { texto, completo: texto },
+      sucursal: p.sucursal?.nombre || "",
+      moneda: r.moneda === "USD" ? "USD" : "ARS",
+      neto: Number(r.subtotal) || 0,
+      total: Number(r.total) || 0,
+      esperandoOc: false,
+      refacturar: false,
+      ncAnula: null,
+      restoId: r.id,
+      presupuesto: presupuestoAFacturar(p, items, r.id),
+    };
+  });
+}
+
+async function traerParaFacturar(sociedadId: string, hoy: string): Promise<FilaFacturar[]> {
+  const restos = traerRestos(sociedadId);
+  const prs = await traerTodo<any>(() => db.from("presupuestos").select(CAMPOS_PR)
     .in("estado", ["aprobado", "facturar", "facturado"]).neq("eliminado", true).eq("sociedad_id", sociedadId).order("id"));
   const ids = prs.map((p) => p.id);
   const facturas: any[] = [];
@@ -100,13 +147,8 @@ async function traerParaFacturar(sociedadId: string, hoy: string): Promise<FilaF
       esperandoOc: e.esperandoOc,
       refacturar: e.refacturar,
       ncAnula: null,
-      presupuesto: {
-        id: p.id, numero: p.numero, cliente_id: p.cliente_id, moneda: p.moneda,
-        cotizacion_modalidad: p.cotizacion_modalidad, modalidad_emision: p.modalidad_emision,
-        oc_cliente: p.oc_cliente, oc_cliente_fecha: p.oc_cliente_fecha, archivo_url: p.archivo_url, observaciones: p.observaciones,
-        cliente: p.clientes ? { ...p.clientes } : null,
-        items,
-      },
+      restoId: null,
+      presupuesto: presupuestoAFacturar(p, items),
     });
   }
   if (anuladaDe.size) {
@@ -115,6 +157,7 @@ async function traerParaFacturar(sociedadId: string, hoy: string): Promise<FilaF
       for (const f of filas) { const id = anuladaDe.get(f.id); if (id) f.ncAnula = nc.get(id) || null; }
     } catch (e) { console.error("Finanzas Lazza · Facturar (NC):", e); }
   }
+  filas.push(...await restos);
   return filas.sort((a, b) => a.fechaPFact.localeCompare(b.fechaPFact));
 }
 
@@ -156,6 +199,15 @@ export function FinanzasLazzaFacturar({ sociedadId }: { sociedadId: string }) {
 
   // Igual que "No facturar" de Ventas: el PR pasa a «rechazado» y sale de la lista; la factura anulada y su NC quedan como están.
   const noFacturar = async (f: FilaFacturar) => {
+    if (f.restoId) {
+      if (!confirm(`¿No facturar el resto del ${f.numero}? (${f.detalle.texto})
+
+Sale de esta lista; el PR y su factura quedan como están.`)) return;
+      const { error } = await db.from("presupuesto_restos_facturar").update({ estado: "no_facturar", resuelto_at: new Date().toISOString() }).eq("id", f.restoId).eq("estado", "pendiente");
+      if (error) { alert("No se pudo guardar: " + error.message); return; }
+      setRecarga((n) => n + 1);
+      return;
+    }
     if (!confirm(`¿No facturar ${f.numero}? La factura anulada y su NC quedan como están, y el PR pasa a «rechazado» (sale de esta lista).`)) return;
     const { error } = await db.from("presupuestos").update({ estado: "rechazado" }).eq("id", f.id).eq("sociedad_id", sociedadId);
     if (error) { alert("No se pudo guardar: " + error.message); return; }
@@ -167,7 +219,7 @@ export function FinanzasLazzaFacturar({ sociedadId }: { sociedadId: string }) {
       <span className="whitespace-nowrap" title={f.ocCliente ? "Fecha de la OC del cliente" : "Fecha en que se aprobó el PR"}>{formatDate(f.fechaPFact)}</span>
     ) },
     { key: "numero", label: "N° PR", sortable: true, sortValue: (f) => f.numero, render: (f) => (
-      <Link href={`/presupuestos?selected=${f.id}`} onClick={(e) => e.stopPropagation()} className="whitespace-nowrap font-mono text-xs text-orange-600 hover:underline dark:text-orange-400">{f.numero}</Link>
+      <Link href={`/presupuestos?selected=${f.presupuesto.id}`} onClick={(e) => e.stopPropagation()} className="whitespace-nowrap font-mono text-xs text-orange-600 hover:underline dark:text-orange-400">{f.numero}{f.restoId && <span className="font-sans text-zinc-500"> · resto</span>}</Link>
     ) },
     { key: "cliente", label: "Cliente", sortable: true, sortValue: (f) => f.cliente, render: (f) => <span className="block max-w-[200px] truncate" title={f.cliente}>{f.cliente || "—"}</span> },
     { key: "detalle", label: "Detalle", render: (f) => (
@@ -176,19 +228,21 @@ export function FinanzasLazzaFacturar({ sociedadId }: { sociedadId: string }) {
     { key: "sucursal", label: "Sucursal", sortable: true, sortValue: (f) => f.sucursal, render: (f) => <span className="block max-w-[130px] truncate text-xs text-zinc-600 dark:text-zinc-300" title={f.sucursal}>{f.sucursal || "—"}</span> },
     { key: "neto", label: "Neto", sortable: true, sortValue: (f) => f.neto, className: "text-right", render: (f) => <span className="whitespace-nowrap font-mono text-zinc-500">{formatCurrency(f.neto, f.moneda)}</span> },
     { key: "total", label: "Total", sortable: true, sortValue: (f) => f.total, className: "text-right", render: (f) => <span className="whitespace-nowrap font-mono font-semibold">{formatCurrency(f.total, f.moneda)}</span> },
-    { key: "estado", label: "Estado", sortable: true, sortValue: (f) => (f.esperandoOc ? 1 : f.refacturar ? 2 : 0), render: (f) => (
+    { key: "estado", label: "Estado", sortable: true, sortValue: (f) => (f.esperandoOc ? 1 : f.refacturar ? 2 : f.restoId ? 3 : 0), render: (f) => f.restoId ? (
+      <span className="whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300" title="Lo que quedó sin facturar de este PR">Resto a facturar</span>
+    ) : (
       <span className={`whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium ${f.esperandoOc ? "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300" : f.refacturar ? "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300" : "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"}`}>
         {f.esperandoOc ? "Esperando OC" : f.refacturar ? (f.ncAnula ? `Anulada por ${f.ncAnula}` : "Anulada") : "Listo"}
       </span>
     ) },
     { key: "facturar", label: "", render: (f) => (
       <div className="flex items-center gap-1">
-        <button type="button" onClick={(e) => { e.stopPropagation(); facturar(f); }} title={f.esperandoOc ? "El cliente pide OC: avisa y se puede facturar igual" : f.refacturar ? "Hacer una factura nueva de este PR" : "Hacer la factura de este PR"}
+        <button type="button" onClick={(e) => { e.stopPropagation(); facturar(f); }} title={f.esperandoOc ? "El cliente pide OC: avisa y se puede facturar igual" : f.refacturar ? "Hacer una factura nueva de este PR" : f.restoId ? "Facturar lo que quedó de este PR" : "Hacer la factura de este PR"}
           className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg bg-orange-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-orange-600">
           <Receipt className="h-3.5 w-3.5" /> {f.refacturar ? "Re-facturar" : "Facturar"}
         </button>
-        {f.refacturar && (
-          <button type="button" onClick={(e) => { e.stopPropagation(); noFacturar(f); }} title="Dejar la factura anulada como está y sacar el PR de la lista"
+        {(f.refacturar || f.restoId) && (
+          <button type="button" onClick={(e) => { e.stopPropagation(); noFacturar(f); }} title={f.restoId ? "No facturar lo que quedó y sacarlo de la lista" : "Dejar la factura anulada como está y sacar el PR de la lista"}
             className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-50 hover:text-red-600 dark:hover:bg-zinc-800">
             <X className="h-3.5 w-3.5" /> No facturar
           </button>
