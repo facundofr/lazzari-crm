@@ -29,6 +29,8 @@ import { isResponsableInscripto } from "@/lib/fiscal-condition";
 import { ALICUOTA_POR_CONCEPTO, CONCEPTOS_RG830 } from "@/lib/retencion-conceptos";
 import { desdeSinConcepto, sugerirConcepto, type SugerenciaConcepto } from "@/lib/sugerir-concepto";
 import { coincideNumeroCheque } from "@/lib/cheques-lazza";
+import { CargarCertificado, CeldaCertificado } from "@/components/finanzas-lazza/cargar-certificado";
+import { traerCertificadosCargados } from "@/components/finanzas-lazza/datos";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -764,16 +766,20 @@ function QuincenasPracticadas({ filas, desde, hasta, elegir }: { filas: FilaRete
  * Retenciones practicadas (las de nuestras OP, van al TXT SICORE) y sufridas (las que nos hicieron los clientes).
  * Sufridas (auditoría UX 26/10/2026, arreglo 14): N° de certificado o "falta" (se lee del texto: `certificadoDeRetencion`)
  * con el filtro "Falta certificado", el recibo como origen (abre su PDF), totales por impuesto y Excel para el contador.
+ * 27/10: «Cargar certificado (IA)» y el N° a mano o «Quitar» en la columna (cargar-certificado.tsx); el N° cargado vale
+ * antes que el del texto.
  * Practicadas (arreglo 15): arriba, las quincenas del mes (QuincenasPracticadas).
  */
 export function FinanzasLazzaRetenciones({ sociedadId }: { sociedadId: string }) {
-  const { sociedadActiva } = useUser();
+  const { sociedadActiva, sociedades } = useUser();
+  const [recarga, setRecarga] = useState(0);
   const { datos, error } = useCarga<FilaRetencion[]>(async () => {
-    const [ops, movs] = await Promise.all([
+    const [ops, movs, certificados] = await Promise.all([
       traerTodo<any>(() => db.from("ordenes_pago").select("id, numero, fecha, estado, moneda, retencion_ganancias_monto, retencion_ganancias_pct, base_retencion_ganancias, proveedores(razon_social, cuit)")
         .eq("sociedad_id", sociedadId).gt("retencion_ganancias_monto", 0).order("id")),
       traerTodo<any>(() => db.from("movimientos").select("id, tipo, fecha, monto, moneda, anulado, descripcion, cliente_id, proveedor_id, retencion_ganancias_monto, retencion_ganancias_pct, base_retencion_ganancias, clientes(razon_social, cuit), proveedores(razon_social, cuit)")
         .eq("sociedad_id", sociedadId).or("tipo.in.(retencion_iva,retencion_ganancias,retencion_iibb,retencion_suss),retencion_ganancias_monto.gt.0").order("id")),
+      traerCertificadosCargados(sociedadId),
     ]);
     // Recibo de cada retención sufrida, para el origen (si falla, quedan sin recibo y se ve el texto al pasar el mouse).
     const ids = movs.filter((m) => String(m.tipo || "").startsWith("retencion_") && m.cliente_id).map((m) => m.id);
@@ -782,8 +788,12 @@ export function FinanzasLazzaRetenciones({ sociedadId }: { sociedadId: string })
       const { data } = await db.from("recibo_movimientos").select("movimiento_id, recibos(id, numero)").in("movimiento_id", ids.slice(i, i + 200));
       for (const r of data || []) if (r.recibos?.numero) recibos[r.movimiento_id] = { id: r.recibos.id, numero: r.recibos.numero };
     }
-    return armarRetenciones({ ops, movimientos: movs, recibos });
-  }, [sociedadId]);
+    return armarRetenciones({ ops, movimientos: movs, recibos, certificados });
+  }, [sociedadId, recarga]);
+  const recargar = () => setRecarga((n) => n + 1);
+  // Para «Cargar certificado»: todas las sufridas (sin el filtro de fechas) y de qué sociedad es cada CUIT.
+  const todasSufridas = useMemo(() => (datos || []).filter((r) => r.lado === "sufrida"), [datos]);
+  const sociedadCert = useMemo(() => ({ cuit: sociedadActiva?.cuit || "", otras: sociedades.filter((s) => s.id !== sociedadId).map((s) => ({ nombre: s.nombre, cuit: s.cuit })) }), [sociedadActiva, sociedades, sociedadId]);
   const [lado, setLado] = useState<"practicada" | "sufrida">("practicada");
   const [soloFalta, setSoloFalta] = useState(false);
   const [texto, setTexto] = useState("");
@@ -823,9 +833,7 @@ export function FinanzasLazzaRetenciones({ sociedadId }: { sociedadId: string })
       : <span className="text-xs" title={r.detalle || undefined}>{r.origen || "—"}</span>) },
     { key: "nombre", label: "Cliente / Proveedor", sortable: true, sortValue: (r) => r.nombre, render: (r) => <span>{r.nombre || "—"}{r.cuit && <span className="block text-[10px] text-zinc-400">CUIT {r.cuit}</span>}</span> },
     ...(sufridas ? [
-      { key: "certificado", label: "Certificado", sortable: true, sortValue: (r) => r.certificado || "", render: (r) => (r.certificado
-        ? <span className="whitespace-nowrap font-mono text-xs">{r.certificado}</span>
-        : <span className="text-xs font-medium text-amber-600 dark:text-amber-400" title="Sin el N° de certificado no se puede computar">falta</span>) },
+      { key: "certificado", label: "Certificado", sortable: true, sortValue: (r) => r.certificado || "", render: (r) => <CeldaCertificado fila={r} sociedadId={sociedadId} onCambio={recargar} /> },
     ] as Column<FilaRetencion>[] : [
       { key: "base", label: "Base", sortable: true, sortValue: (r) => r.base ?? 0, className: "text-right", render: (r) => (r.base === null ? "—" : <span className="whitespace-nowrap font-mono">{formatCurrency(r.base, r.moneda)}</span>) },
       { key: "pct", label: "%", sortable: true, sortValue: (r) => r.pct ?? 0, className: "text-right", render: (r) => (r.pct === null ? "—" : `${r.pct}%`) },
@@ -846,6 +854,7 @@ export function FinanzasLazzaRetenciones({ sociedadId }: { sociedadId: string })
           Falta certificado ({faltan.length})
         </button>
       )}
+      {sufridas && <CargarCertificado sociedadId={sociedadId} sufridas={todasSufridas} sociedad={sociedadCert} onGuardado={recargar} />}
       <Buscador valor={texto} cambiar={setTexto} placeholder={sufridas ? "Buscar cliente, CUIT, certificado o recibo" : "Buscar nombre, CUIT u OP"} />
       <Fechas desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} />
       {sufridas ? (

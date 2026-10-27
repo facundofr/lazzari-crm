@@ -92,19 +92,33 @@ export async function traerComprasDelMes(sociedadId: string, periodo: string): P
   return rows.map((r) => ({ ...r, fecha: String(r.fecha).slice(0, 10), proveedor: r.proveedores?.razon_social ?? "" }));
 }
 
+export type CertificadosCargados = Record<string, { id: string; numero: string; url: string | null }>;
+
 /**
- * Lo que el IVA del mes tiene a cuenta (arreglo 16, 27/10/2026): las retenciones de IVA que nos hicieron los clientes,
- * las líneas del banco del mes (ivaDelMes se queda con las de IVA) y los gastos del mes y de los 2 siguientes,
- * donde están los VEP que pagan el IVA del mes.
+ * Certificados de retenciones sufridas cargados con «Cargar certificado» (tabla certificados_retencion, vigentes), por
+ * movimiento. Si no se pueden leer, ninguno: queda el N° escrito en el texto de cada retención.
+ */
+export async function traerCertificadosCargados(sociedadId: string): Promise<CertificadosCargados> {
+  const filas = await traerTodo<any>(() => db.from("certificados_retencion").select("id, movimiento_id, numero, archivo_url")
+    .eq("sociedad_id", sociedadId).eq("anulado", false).order("id"))
+    .catch((e) => { console.warn("Certificados de retención:", e); return [] as any[]; });
+  return Object.fromEntries(filas.map((c) => [c.movimiento_id, { id: c.id, numero: c.numero, url: c.archivo_url ?? null }]));
+}
+
+/**
+ * Lo que el IVA del mes tiene a cuenta (arreglo 16, 27/10/2026): las retenciones de IVA que nos hicieron los clientes
+ * (con el N° de certificado cargado, si lo tienen), las líneas del banco del mes (ivaDelMes se queda con las de IVA)
+ * y los gastos del mes y de los 2 siguientes, donde están los VEP que pagan el IVA del mes.
  */
 export async function traerIvaACuenta(sociedadId: string, periodo: string): Promise<{ retenciones: RetencionIvaFL[]; lineasBanco: LineaMov[]; gastos: GastoVepFL[] }> {
   const { desde, hasta } = rangoMes(periodo);
-  const [retenciones, cuentas, gastos] = await Promise.all([
+  const [retenciones, cuentas, gastos, certificados] = await Promise.all([
     traerTodo<any>(() => db.from("movimientos").select("id, fecha, monto, moneda, anulado, descripcion, clientes(razon_social)")
       .eq("sociedad_id", sociedadId).eq("tipo", "retencion_iva").not("cliente_id", "is", null).gte("fecha", desde).lt("fecha", hasta).order("id")),
     db.from("cuentas_financieras").select("id").eq("sociedad_id", sociedadId),
     traerTodo<any>(() => db.from("gastos_manuales").select("id, fecha, monto, moneda, descripcion")
       .eq("sociedad_id", sociedadId).gte("fecha", desde).lt("fecha", `${sumarMeses(periodo, 3)}-01`).order("id")),
+    traerCertificadosCargados(sociedadId),
   ]);
   if (cuentas.error) throw cuentas.error;
   const ids: string[] = (cuentas.data || []).map((c: { id: string }) => c.id);
@@ -114,7 +128,7 @@ export async function traerIvaACuenta(sociedadId: string, periodo: string): Prom
     : [];
   const dia = (f: unknown) => String(f).slice(0, 10);
   return {
-    retenciones: retenciones.map((m) => ({ ...m, fecha: dia(m.fecha), cliente: m.clientes?.razon_social ?? "" })),
+    retenciones: retenciones.map((m) => ({ ...m, fecha: dia(m.fecha), cliente: m.clientes?.razon_social ?? "", certificado: certificados[m.id]?.numero ?? null })),
     lineasBanco: lineas.map((l) => ({ ...l, fecha: dia(l.fecha), monto: Number(l.monto) })),
     gastos: gastos.map((g) => ({ ...g, fecha: dia(g.fecha) })),
   };

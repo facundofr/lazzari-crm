@@ -24,7 +24,7 @@ const costoUSD = (modelo: string | null, ent: number, sal: number) => {
 
 const FUNCION_LABEL: Record<string, string> = {
   oc_cliente: "Leer OC de clientes", lista_precios: "Leer listas de precios", factura_compra: "Leer facturas de compra",
-  cobro: "Leer cobros / OP", documento_impositivo: "Leer documentos impositivos", normalizar_oc: "Normalizar OC",
+  cobro: "Leer cobros / OP", documento_impositivo: "Leer documentos impositivos", certificado_retencion: "Leer certificados de retención", normalizar_oc: "Normalizar OC",
   conciliar_compra: "Conciliar compras", cotizacion_express: "Cotización express", presupuesto_ia: "Presupuesto con IA", chat_ia: "Ayuda: preguntas a la IA (tope US$ 5/mes)",
 };
 

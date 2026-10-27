@@ -307,7 +307,11 @@ export interface FacturaCompraFL {
 export interface FilaIva { id: string; fecha: string; comprobante: string; nombre: string; iva: number; soloIva?: boolean; aviso?: string }
 
 /** Retención de IVA que nos hizo un cliente (movimiento retencion_iva con cliente). */
-export interface RetencionIvaFL { id: string; fecha: string; monto: number | string | null; moneda?: string | null; anulado?: boolean | null; descripcion?: string | null; cliente?: string | null }
+export interface RetencionIvaFL {
+  id: string; fecha: string; monto: number | string | null; moneda?: string | null; anulado?: boolean | null; descripcion?: string | null; cliente?: string | null;
+  /** N° cargado con «Cargar certificado» (tabla certificados_retencion): vale antes que el escrito en el texto. */
+  certificado?: string | null;
+}
 
 /** Gasto de Gastos (ahí se cargan los VEP pagados). */
 export interface GastoVepFL { id: string; fecha: string; monto: number | string | null; moneda?: string | null; descripcion?: string | null }
@@ -434,7 +438,7 @@ export function ivaDelMes(input: {
   const retenciones = { conCertificado: 0, sinCertificado: 0, filas: [] as FilaIva[] };
   for (const m of input.retenciones || []) {
     if (m.anulado || periodoDeFecha(m.fecha) !== periodo) continue;
-    const cert = certificadoDeRetencion(m.descripcion);
+    const cert = m.certificado || certificadoDeRetencion(m.descripcion);
     const fila: FilaIva = { id: m.id, fecha: m.fecha, comprobante: cert ? `Cert. ${cert}` : "Sin certificado", nombre: m.cliente || "", iva: 0, aviso: cert ? undefined : "no se resta" };
     const tc = tcComprobante(m.moneda, null, m.fecha, tcDia);
     if (!tc) { sinCotizacion.push(`Retención ${fila.nombre}`.trim()); retenciones.filas.push({ ...fila, aviso: "US$ sin cotización" }); continue; }
@@ -661,10 +665,14 @@ export interface FilaRetencion {
   pct: number | null;
   monto: number;
   moneda: "ARS" | "USD";
-  /** Sufridas: N° de certificado escrito en el texto (`certificadoDeRetencion`). En las practicadas no se usa. */
+  /** Sufridas: N° de certificado cargado («Cargar certificado») o escrito en el texto (`certificadoDeRetencion`). En las practicadas no se usa. */
   certificado: string | null;
   /** Sufrida sin N° de certificado: sin el certificado no se puede computar. */
   faltaCertificado: boolean;
+  /** Sufridas: el movimiento de la retención (para cargarle el certificado). */
+  movimientoId: string | null;
+  /** Sufridas: el certificado cargado en la tabla certificados_retencion (con su PDF si lo tiene); null si el N° sale del texto o falta. */
+  certificadoCargado: { id: string; url: string | null } | null;
   /** Recibo del cobro en que entró la retención sufrida (para abrir su PDF). */
   recibo: { id: string; numero: number } | null;
   /** Texto completo de la retención sufrida: se ve al pasar el mouse, se busca y va al Excel. */
@@ -676,16 +684,19 @@ const IMPUESTO: Record<string, string> = { retencion_ganancias: "Ganancias", ret
 /**
  * Misma regla que Finanzas → Retenciones: OP no anuladas con retención de Ganancias + pagos directos (tipo pago)
  * con retención. Además, las sufridas: movimientos retencion_* de un cliente, no anulados, con su N° de certificado
- * y su recibo (`recibos`: movimiento → recibo, de recibo_movimientos).
+ * (el cargado en `certificados`, de la tabla certificados_retencion, vale antes que el del texto) y su recibo
+ * (`recibos`: movimiento → recibo, de recibo_movimientos).
  */
 export function armarRetenciones(input: {
   ops: { id: string; numero?: string | number | null; fecha: string; estado?: string | null; moneda?: string | null; retencion_ganancias_monto?: number | string | null; retencion_ganancias_pct?: number | string | null; base_retencion_ganancias?: number | string | null; proveedores?: { razon_social?: string | null; cuit?: string | null } | null }[];
   movimientos: { id: string; tipo: string | null; fecha: string; monto: number | string | null; moneda?: string | null; anulado?: boolean | null; descripcion?: string | null; cliente_id?: string | null; proveedor_id?: string | null; retencion_ganancias_monto?: number | string | null; retencion_ganancias_pct?: number | string | null; base_retencion_ganancias?: number | string | null; clientes?: { razon_social?: string | null; cuit?: string | null } | null; proveedores?: { razon_social?: string | null; cuit?: string | null } | null }[];
   recibos?: Record<string, { id: string; numero: number }>;
+  /** Certificados cargados (vigentes), por movimiento. */
+  certificados?: Record<string, { id: string; numero: string; url: string | null }>;
 }): FilaRetencion[] {
   const out: FilaRetencion[] = [];
   const nulo = (v: unknown) => (v === null || v === undefined || v === "" ? null : num(v));
-  const practicada = { certificado: null, faltaCertificado: false, recibo: null, detalle: "" };
+  const practicada = { certificado: null, faltaCertificado: false, movimientoId: null, certificadoCargado: null, recibo: null, detalle: "" };
   for (const op of input.ops) {
     if (op.estado === "anulada" || num(op.retencion_ganancias_monto) <= 0) continue;
     // El N° ya viene como "OP-000083" (antes se veía "OP OP-000083").
@@ -701,11 +712,13 @@ export function armarRetenciones(input: {
         nombre: m.proveedores?.razon_social || "", cuit: m.proveedores?.cuit || "", base: nulo(m.base_retencion_ganancias), pct: nulo(m.retencion_ganancias_pct),
         monto: num(m.retencion_ganancias_monto), moneda: normalizarMoneda(m.moneda), ...practicada });
     } else if (String(m.tipo || "").startsWith("retencion_") && m.cliente_id) {
-      const certificado = certificadoDeRetencion(m.descripcion);
+      const cargado = input.certificados?.[m.id] ?? null;
+      const certificado = cargado?.numero || certificadoDeRetencion(m.descripcion);
       const recibo = input.recibos?.[m.id] ?? null;
       out.push({ id: `rs-${m.id}`, fecha: String(m.fecha).slice(0, 10), lado: "sufrida", impuesto: IMPUESTO[String(m.tipo)] || String(m.tipo), origen: recibo ? `Recibo ${recibo.numero}` : "",
         nombre: m.clientes?.razon_social || "", cuit: m.clientes?.cuit || "", base: null, pct: null, monto: num(m.monto), moneda: normalizarMoneda(m.moneda),
-        certificado, faltaCertificado: !certificado, recibo, detalle: String(m.descripcion || "") });
+        certificado, faltaCertificado: !certificado, movimientoId: m.id, certificadoCargado: cargado ? { id: cargado.id, url: cargado.url } : null,
+        recibo, detalle: String(m.descripcion || "") });
     }
   }
   return out.sort((a, b) => a.fecha.localeCompare(b.fecha));
