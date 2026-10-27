@@ -57,6 +57,15 @@ export function repartirSaldoFavorCliente(
   return out;
 }
 
+/**
+ * ¿Se confirma solo con el saldo a favor, sin plata? (auditoría UX 26/10/2026, arreglo 24): se tildó "Aplicar", no hay
+ * medios ni retenciones y el saldo a favor cubre todo lo que deben las facturas tildadas. Entonces solo se aplica el
+ * saldo a favor: no entra plata, así que no hay cobro ni recibo. Si cubre solo una parte, el cobro pide plata como siempre.
+ */
+export function cubreConSaldoFavor(input: { aplicado: number; deuda: number; medios: number; retenciones: number }): boolean {
+  return input.aplicado > 0 && input.medios <= 0 && input.retenciones <= 0 && r2(input.deuda - input.aplicado) < 0.01;
+}
+
 /** Lo que la OP le paga de menos a cada factura del cobro (saldo − pagado según la OP). */
 export function faltaSegunOrden(facturas: FacturaSaldoFavor[], incluidas: Array<{ docId: string; importe: number }>): Record<string, number> {
   const out: Record<string, number> = {};

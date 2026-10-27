@@ -7,13 +7,14 @@
 // Órdenes de pago (19/10): "Nueva OP" → la misma ventana de OP de Finanzas (pagar.tsx). 20/10: Anular (y "Anular y pagar de nuevo").
 // Mismos datos y reglas que las pestañas de Finanzas; acá solo se miran, con filtros y orden por columna.
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { AlertTriangle, Ban, Download, Eye, HandCoins, Loader2, Mail, MailCheck, Plus, Search, Wallet } from "lucide-react";
+import { AlertTriangle, Ban, ChevronLeft, ChevronRight, Download, Eye, HandCoins, Loader2, Mail, MailCheck, Plus, Search, Wallet } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { clasificarMovimiento, esCobroDeCliente, type ClaseMovimiento } from "@/lib/tipos-movimiento";
-import { armarRetenciones, comprobanteVenta, excelRetencionesSufridas, totalesRetenciones, type FilaRetencion } from "@/lib/finanzas-lazza";
+import { armarRetenciones, comprobanteVenta, excelRetencionesSufridas, practicadasPorQuincena, rangoQuincena, totalesRetenciones, type FilaRetencion, type TramoQuincena } from "@/lib/finanzas-lazza";
+import { periodoDeFecha, sumarMeses } from "@/lib/reportes-comprobantes";
 import { textoTotalRecibo, type Recibo } from "@/lib/recibos";
 import { abrirRecibo, EnviarRecibo, SIN_MIGRACION_RECIBOS, traerRecibo, traerRecibos } from "@/components/finanzas-lazza/recibo-doc";
 import { useUser } from "@/lib/auth-context";
@@ -88,11 +89,19 @@ function Buscador({ valor, cambiar, placeholder }: { valor: string; cambiar: (v:
   );
 }
 
-function Fechas({ desde, hasta, setDesde, setHasta }: { desde: string; hasta: string; setDesde: (v: string) => void; setHasta: (v: string) => void }) {
+/** `conTodas` (OP y Recibos, arreglo 25): un botón saca las fechas ("Todas las fechas") o vuelve al mes ("Este mes"). */
+function Fechas({ desde, hasta, setDesde, setHasta, conTodas = false }: { desde: string; hasta: string; setDesde: (v: string) => void; setHasta: (v: string) => void; conTodas?: boolean }) {
+  const conFechas = !!(desde || hasta);
   return (
     <>
       <input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} title="Desde" className={control} />
       <input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} title="Hasta" className={control} />
+      {conTodas && (
+        <button type="button" onClick={() => { setDesde(conFechas ? "" : primeroDelMes()); setHasta(""); }}
+          className="h-8 rounded-lg border border-zinc-200 bg-white px-2 text-xs text-zinc-600 hover:border-orange-300 hover:text-orange-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+          {conFechas ? "Todas las fechas" : "Este mes"}
+        </button>
+      )}
     </>
   );
 }
@@ -109,6 +118,12 @@ function FueraDeFechas({ cantidad, texto, ver }: { cantidad: number; texto: stri
 }
 
 const enRango = (fecha: string, desde: string, hasta: string) => (!desde || fecha >= desde) && (!hasta || fecha <= hasta);
+/** "Ch. propio ×9 · Transf.": cada medio una vez, con cuántos son. */
+const juntarRepetidos = (xs: string[]) => {
+  const c = new Map<string, number>();
+  for (const x of xs) c.set(x, (c.get(x) || 0) + 1);
+  return [...c].map(([x, k]) => (k > 1 ? `${x} ×${k}` : x)).join(" · ");
+};
 const sumar = <T,>(filas: T[], monto: (f: T) => number, moneda: (f: T) => "ARS" | "USD") => {
   const t = { ARS: 0, USD: 0 };
   for (const f of filas) t[moneda(f)] += monto(f);
@@ -177,7 +192,8 @@ function AnularOP({ op, sociedadId, onClose, onAnulada }: {
   );
 }
 
-interface OP { id: string; proveedorId: string | null; numero: string; fecha: string; proveedor: string; cuit: string; bruto: number; retGan: number; retPct: number | null; neto: number; moneda: "ARS" | "USD"; medios: string[]; cheques: string[]; estado: string; enviada: string | null; sobreVerde: boolean }
+interface OP { id: string; proveedorId: string | null; numero: string; fecha: string; proveedor: string; cuit: string; bruto: number; retGan: number; retPct: number | null; neto: number; moneda: "ARS" | "USD"; medios: string[]; cheques: string[]; chequesSinNumero: number; estado: string; enviada: string | null; sobreVerde: boolean }
+const ES_CHEQUE = ["cheque", "cheque_propio", "echeq"];
 
 export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string }) {
   const [recarga, setRecarga] = useState(0);
@@ -192,7 +208,8 @@ export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string })
         bruto: Number(r.monto_bruto || 0), retGan: Number(r.retencion_ganancias_monto || 0), retPct: r.retencion_ganancias_pct ?? null,
         neto: Number(r.neto_a_pagar ?? r.neto ?? 0), moneda: mon(r.moneda),
         medios: medios.length > 1 ? medios.map((m) => MEDIO_LABEL[m.tipo] || m.tipo) : [MEDIO_LABEL[r.medio_pago || "transferencia"] || r.medio_pago || "Transf."],
-        cheques: medios.filter((m) => ["cheque", "cheque_propio", "echeq"].includes(m?.tipo) && m?.numero_cheque).map((m) => String(m.numero_cheque)),
+        cheques: medios.filter((m) => ES_CHEQUE.includes(m?.tipo) && m?.numero_cheque).map((m) => String(m.numero_cheque)),
+        chequesSinNumero: medios.filter((m) => ES_CHEQUE.includes(m?.tipo) && !m?.numero_cheque && Number(m?.monto) > 0).length,
         estado: r.estado || "pendiente", enviada: r.email_enviado_at || null, sobreVerde: !!r.sobre_verde,
       };
     });
@@ -205,7 +222,8 @@ export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string })
   const [texto, setTexto] = useState("");
   const [estado, setEstado] = useState("");
   const [envio, setEnvio] = useState("");
-  const [desde, setDesde] = useState("");
+  // Arreglo 25 (27/10/2026): abre en el mes, igual que Recibos (antes abría con todas las fechas).
+  const [desde, setDesde] = useState(primeroDelMes());
   const [hasta, setHasta] = useState("");
   const q = sinAcentos(texto.trim());
   // Arreglo 20 (27/10/2026): también por N° de cheque, con o sin los ceros de adelante.
@@ -214,14 +232,33 @@ export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string })
     && (!q || sinAcentos(`${o.numero} ${o.proveedor} ${o.cuit} ${o.medios.join(" ")}`).includes(q) || coincideNumeroCheque(o.cheques, texto))), [datos, enviadas, estado, envio, q, texto]);
   const visibles = useMemo(() => coinciden.filter((o) => enRango(o.fecha, desde, hasta)), [coinciden, desde, hasta]);
   const cols: Column<OP>[] = [
-    { key: "numero", label: "N°", sortable: true, sortValue: (o) => o.numero, render: (o) => <span className={`whitespace-nowrap font-mono text-xs ${o.estado === "anulada" ? "text-zinc-400 line-through" : ""}`}>{o.numero}</span> },
+    // Arreglo 25: sin columna Estado (todas están pagadas o anuladas); la anulada lo dice abajo del N°.
+    { key: "numero", label: "N°", sortable: true, sortValue: (o) => o.numero, render: (o) => (
+      <span className="whitespace-nowrap font-mono text-xs">
+        <span className={o.estado === "anulada" ? "text-zinc-400 line-through" : ""}>{o.numero}</span>
+        {o.estado === "anulada" ? <span className="block font-sans text-[10px] font-semibold text-red-600">Anulada</span>
+          : o.estado !== "pagada" && <span className="block font-sans text-[10px] font-semibold text-amber-600">Pendiente</span>}
+      </span>
+    ) },
     { key: "fecha", label: "Fecha", sortable: true, sortValue: (o) => o.fecha, render: (o) => <span className="whitespace-nowrap">{formatDate(o.fecha)}</span> },
     { key: "proveedor", label: "Proveedor", sortable: true, sortValue: (o) => o.proveedor },
     { key: "bruto", label: "Bruto", sortable: true, sortValue: (o) => o.bruto, className: "text-right", render: (o) => <span className="whitespace-nowrap font-mono">{formatCurrency(o.bruto, o.moneda)}</span> },
     { key: "ret", label: "Ret. Gan.", sortable: true, sortValue: (o) => o.retGan, className: "text-right", render: (o) => o.retGan > 0 ? <span className="whitespace-nowrap font-mono">{formatCurrency(o.retGan, o.moneda)}{o.retPct !== null && <span className="block text-[10px] text-zinc-400">{o.retPct}%</span>}</span> : "—" },
     { key: "neto", label: "Entregado", sortable: true, sortValue: (o) => o.neto, className: "text-right", render: (o) => <span className="whitespace-nowrap font-mono font-semibold">{formatCurrency(o.neto, o.moneda)}</span> },
-    { key: "medio", label: "Medio", sortable: true, sortValue: (o) => o.medios.join(" "), render: (o) => <span className="text-xs">{o.medios.join(" · ")}</span> },
-    { key: "estado", label: "Estado", sortable: true, sortValue: (o) => o.estado, render: (o) => <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${o.estado === "pagada" ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300" : o.estado === "anulada" ? "bg-red-50 text-red-700 line-through dark:bg-red-950/40 dark:text-red-300" : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"}`}>{o.estado === "pagada" ? "Pagada" : o.estado === "anulada" ? "Anulada" : "Pendiente"}</span> },
+    // Arreglo 25: con los N° en "Cheques", el medio va una vez con cuántos son (antes "Ch. propio" ×9 hacía filas altísimas).
+    { key: "medio", label: "Medio", sortable: true, sortValue: (o) => o.medios.join(" "), render: (o) => <span className="text-xs">{juntarRepetidos(o.medios)}</span> },
+    // Arreglo 25 (27/10/2026): los N° de los cheques de la OP, hasta 3 (todos al pasar el mouse).
+    { key: "cheques", label: "Cheques", sortable: true, sortValue: (o) => o.cheques.join(" "), render: (o) => {
+      if (!o.cheques.length && !o.chequesSinNumero) return <span className="text-xs text-zinc-400">—</span>;
+      const sinN = o.chequesSinNumero ? `${o.chequesSinNumero} sin N°` : "";
+      return (
+        <span className={`block max-w-[150px] font-mono text-[11px] ${o.estado === "anulada" ? "text-zinc-400" : "text-zinc-600 dark:text-zinc-300"}`} title={[o.cheques.join(", "), sinN].filter(Boolean).join(" · ")}>
+          {o.cheques.slice(0, 3).join(" · ")}
+          {o.cheques.length > 3 && <span className="font-sans text-zinc-400"> +{o.cheques.length - 3}</span>}
+          {sinN && <span className="font-sans text-zinc-400">{o.cheques.length ? " · " : ""}{sinN}</span>}
+        </span>
+      );
+    } },
     { key: "enviada", label: "Enviada", sortable: true, sortValue: (o) => o.enviada || "", render: (o) => o.enviada ? <span className="text-xs text-emerald-600">✓ {formatDate(o.enviada)}</span> : o.sobreVerde ? <span className="text-xs text-zinc-500">Sobre verde</span> : <span className="text-xs text-zinc-400">—</span> },
     { key: "acciones", label: "", render: (o) => (
       <span className="flex justify-end gap-0.5">
@@ -247,9 +284,9 @@ export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string })
         <Wallet className="h-4 w-4" /> Nueva OP
       </button>
       <Buscador valor={texto} cambiar={setTexto} placeholder="Buscar N°, proveedor, CUIT, medio o N° de cheque" />
-      <select value={estado} onChange={(e) => setEstado(e.target.value)} className={control}><option value="">Todos los estados</option><option value="pendiente">Pendientes</option><option value="pagada">Pagadas</option><option value="anulada">Anuladas</option></select>
+      <select value={estado} onChange={(e) => setEstado(e.target.value)} className={control}><option value="">Todos los estados</option><option value="pagada">Pagadas</option><option value="anulada">Anuladas</option></select>
       <select value={envio} onChange={(e) => setEnvio(e.target.value)} className={control}><option value="">Enviadas y no</option><option value="si">Enviadas por mail</option><option value="no">No enviadas</option></select>
-      <Fechas desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} />
+      <Fechas desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} conTodas />
     </>} pie={<><span>{visibles.length} órdenes</span><span>Entregado <b className="font-mono">{sumar(visibles.filter((o) => o.estado !== "anulada"), (o) => o.neto, (o) => o.moneda)}</b></span></>}>
       <FueraDeFechas cantidad={q ? coinciden.length - visibles.length : 0} texto={texto} ver={() => { setDesde(""); setHasta(""); }} />
       <DataTable columns={cols} data={visibles} emptyMessage="No hay órdenes de pago con ese filtro" />
@@ -320,11 +357,7 @@ function RecibosPorMovimiento({ sociedadId }: { sociedadId: string }) {
 
 // ── Recibos numerados ───────────────────────────────────────────────
 
-const resumenMedios = (r: Recibo) => {
-  const c: Record<string, number> = {};
-  for (const x of r.renglones) c[x.medio] = (c[x.medio] || 0) + 1;
-  return Object.entries(c).map(([m, k]) => (k > 1 ? `${m} ×${k}` : m)).join(" · ");
-};
+const resumenMedios = (r: Recibo) => juntarRepetidos(r.renglones.map((x) => x.medio));
 
 export function FinanzasLazzaRecibos({ sociedadId }: { sociedadId: string }) {
   const { sociedadActiva } = useUser();
@@ -335,6 +368,8 @@ export function FinanzasLazzaRecibos({ sociedadId }: { sociedadId: string }) {
   const [datos, setDatos] = useState<Recibo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [texto, setTexto] = useState("");
+  const [envio, setEnvio] = useState("");
+  const [enviados, setEnviados] = useState<Record<string, string>>({});
   const [desde, setDesde] = useState(primeroDelMes());
   const [hasta, setHasta] = useState("");
   useEffect(() => {
@@ -350,8 +385,10 @@ export function FinanzasLazzaRecibos({ sociedadId }: { sociedadId: string }) {
   }, [sociedadId, recarga]);
   const q = sinAcentos(texto.trim());
   // Arreglo 20 (27/10/2026): también por N° de cheque, con o sin los ceros de adelante.
-  const coinciden = useMemo(() => (datos || []).filter((r) => !q || sinAcentos(`${r.numero} ${r.cliente} ${r.facturas.join(" ")} ${resumenMedios(r)}`).includes(q)
-    || coincideNumeroCheque(r.cheques, texto)), [datos, q, texto]);
+  // Arreglo 25 (27/10/2026): "Enviado" como en OP; el que se acaba de mandar se marca sin recargar.
+  const coinciden = useMemo(() => (datos || []).map((r) => (enviados[r.id] ? { ...r, enviado: enviados[r.id] } : r))
+    .filter((r) => (!envio || (envio === "si") === !!r.enviado)
+      && (!q || sinAcentos(`${r.numero} ${r.cliente} ${r.facturas.join(" ")} ${resumenMedios(r)}`).includes(q) || coincideNumeroCheque(r.cheques, texto))), [datos, enviados, envio, q, texto]);
   const visibles = useMemo(() => coinciden.filter((r) => enRango(r.fecha, desde, hasta)), [coinciden, desde, hasta]);
   if (sinMigracion) return (
     <div className="space-y-2">
@@ -370,14 +407,17 @@ export function FinanzasLazzaRecibos({ sociedadId }: { sociedadId: string }) {
       <span className={`whitespace-nowrap font-mono font-semibold ${r.anulado ? "text-zinc-400 line-through" : "text-emerald-700 dark:text-emerald-400"}`}>{textoTotalRecibo(r.total, (v, m) => formatCurrency(v, m))}</span>
     ) },
     { key: "estado", label: "Banco", sortable: true, sortValue: (r) => (r.anulado ? 0 : ORDEN_BANCO[r.banco]), render: (r) => <EstadoBanco anulado={r.anulado} banco={r.banco} /> },
+    { key: "enviado", label: "Enviado", sortable: true, sortValue: (r) => r.enviado || "", render: (r) => (r.enviado
+      ? <span className="whitespace-nowrap text-xs text-emerald-600" title={r.enviadoA ? `A ${r.enviadoA}` : undefined}>✓ {formatDate(r.enviado)}</span>
+      : <span className="text-xs text-zinc-400">—</span>) },
     { key: "acciones", label: "", render: (r) => (
       <span className="flex justify-end gap-0.5">
         <button type="button" title="Ver el recibo (se abre en otra pestaña, sin descargar)" onClick={(e) => { e.stopPropagation(); pdf(r, true); }}
           className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-orange-600 dark:hover:bg-zinc-800"><Eye className="h-3.5 w-3.5" /></button>
         <button type="button" title="Descargar el recibo" onClick={(e) => { e.stopPropagation(); pdf(r, false); }}
           className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-orange-600 dark:hover:bg-zinc-800"><Download className="h-3.5 w-3.5" /></button>
-        <button type="button" title="Mandar el recibo por mail al cliente" onClick={(e) => { e.stopPropagation(); setEnviando(r); }}
-          className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-orange-600 dark:hover:bg-zinc-800"><Mail className="h-3.5 w-3.5" /></button>
+        <button type="button" title={r.enviado ? `Enviado el ${formatDate(r.enviado)}: mandarlo otra vez` : "Mandar el recibo por mail al cliente"} onClick={(e) => { e.stopPropagation(); setEnviando(r); }}
+          className={`rounded p-1.5 hover:bg-orange-50 dark:hover:bg-zinc-800 ${r.enviado ? "text-emerald-600" : "text-zinc-500 hover:text-orange-600"}`}>{r.enviado ? <MailCheck className="h-3.5 w-3.5" /> : <Mail className="h-3.5 w-3.5" />}</button>
       </span>
     ) },
   ];
@@ -390,13 +430,14 @@ export function FinanzasLazzaRecibos({ sociedadId }: { sociedadId: string }) {
           <HandCoins className="h-4 w-4" /> Nuevo cobro
         </button>
         <Buscador valor={texto} cambiar={setTexto} placeholder="Buscar N°, cliente, factura, medio o N° de cheque" />
-        <Fechas desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} />
+        <select value={envio} onChange={(e) => setEnvio(e.target.value)} className={control}><option value="">Enviados y no</option><option value="si">Enviados por mail</option><option value="no">No enviados</option></select>
+        <Fechas desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} conTodas />
       </>} pie={<><span>{visibles.length} recibos</span><span>Cobrado <b className="font-mono text-emerald-700 dark:text-emerald-400">{textoTotalRecibo(cobrado, (v, m) => formatCurrency(v, m))}</b></span></>}>
         <FueraDeFechas cantidad={q ? coinciden.length - visibles.length : 0} texto={texto} ver={() => { setDesde(""); setHasta(""); }} />
         <DataTable columns={cols} data={visibles} emptyMessage="No hay recibos con ese filtro" />
       </Marco>
       {cobrando && <CobrarCliente sociedadId={sociedadId} onClose={() => setCobrando(false)} onCobrado={() => setRecarga((n) => n + 1)} />}
-      <EnviarRecibo recibo={enviando} onClose={() => setEnviando(null)} />
+      <EnviarRecibo recibo={enviando} onClose={() => setEnviando(null)} onEnviado={(id, fecha) => setEnviados((e) => ({ ...e, [id]: fecha }))} />
     </>
   );
 }
@@ -559,10 +600,48 @@ function ExportarSicore({ sociedadId, desde, hasta }: { sociedadId: string; desd
   );
 }
 
+const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+const nombreMes = (p: string) => `${MESES[Number(p.slice(5, 7)) - 1] || ""} ${p.slice(0, 4)}`;
+const TITULO_TRAMO: Record<TramoQuincena["cual"], string> = {
+  primera: "Pago a cuenta de la 1ª quincena. El SICORE se presenta con el mes entero.",
+  segunda: "Del 16 a fin de mes.",
+  mes: "El mes entero: lo que se presenta en el SICORE.",
+};
+
+/**
+ * Practicadas por quincena (auditoría UX 26/10/2026, arreglo 15): el mes de "Desde" con la 1ª quincena (pago a cuenta),
+ * la 2ª y el mes entero (lo del SICORE). Tocar una deja la lista, el TXT y el Excel en esas fechas; ‹ › cambia de mes.
+ */
+function QuincenasPracticadas({ filas, desde, hasta, elegir }: { filas: FilaRetencion[]; desde: string; hasta: string; elegir: (r: { desde: string; hasta: string }) => void }) {
+  const hoy = todayAR();
+  const mesActual = periodoDeFecha(hoy);
+  const mes = periodoDeFecha(desde) || mesActual;
+  // Sin "Hasta" llega a hoy: en el mes en curso eso es el mes (o la 2ª quincena) entero.
+  const activo = (t: TramoQuincena) => desde === t.desde && (hasta === t.hasta || (!hasta && t.hasta >= hoy));
+  const flecha = "rounded p-0.5 text-zinc-500 hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-800";
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-zinc-200 px-3 py-1.5 text-xs dark:border-zinc-700">
+      <span className="flex items-center gap-0.5">
+        <button type="button" aria-label="Mes anterior" onClick={() => elegir(rangoQuincena(sumarMeses(mes, -1), "mes"))} className={flecha}><ChevronLeft className="h-3.5 w-3.5" /></button>
+        <span className="min-w-[6.5rem] text-center font-medium capitalize text-zinc-700 dark:text-zinc-200">{nombreMes(mes)}</span>
+        <button type="button" aria-label="Mes siguiente" disabled={mes >= mesActual} onClick={() => elegir(rangoQuincena(sumarMeses(mes, 1), "mes"))} className={flecha}><ChevronRight className="h-3.5 w-3.5" /></button>
+      </span>
+      {practicadasPorQuincena(filas, mes).map((t) => (
+        <button key={t.cual} type="button" onClick={() => elegir(t)} title={`${TITULO_TRAMO[t.cual]} ${t.cantidad} ${t.cantidad === 1 ? "retención" : "retenciones"}.`}
+          className={`rounded-md px-2 py-0.5 ${activo(t) ? "bg-orange-50 font-medium text-orange-700 ring-1 ring-orange-300 dark:bg-orange-950/30 dark:text-orange-300" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"}`}>
+          {t.cual === "mes" ? "Mes" : `${t.cual === "primera" ? "1ª" : "2ª"} quincena (${Number(t.desde.slice(8))} al ${Number(t.hasta.slice(8))})`}{" "}
+          <b className="font-mono">{formatCurrency(t.total.ARS)}{Math.abs(t.total.USD) >= 0.01 && <> + {formatCurrency(t.total.USD, "USD")}</>}</b>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /**
  * Retenciones practicadas (las de nuestras OP, van al TXT SICORE) y sufridas (las que nos hicieron los clientes).
  * Sufridas (auditoría UX 26/10/2026, arreglo 14): N° de certificado o "falta" (se lee del texto: `certificadoDeRetencion`)
  * con el filtro "Falta certificado", el recibo como origen (abre su PDF), totales por impuesto y Excel para el contador.
+ * Practicadas (arreglo 15): arriba, las quincenas del mes (QuincenasPracticadas).
  */
 export function FinanzasLazzaRetenciones({ sociedadId }: { sociedadId: string }) {
   const { sociedadActiva } = useUser();
@@ -661,6 +740,7 @@ export function FinanzasLazzaRetenciones({ sociedadId }: { sociedadId: string })
       <span>{visibles.length} retenciones</span>
       <span>Practicadas <b className="font-mono">{sumar(visibles, (r) => r.monto, (r) => r.moneda)}</b></span>
     </>}>
+      {!sufridas && datos && <QuincenasPracticadas filas={datos} desde={desde} hasta={hasta} elegir={(r) => { setDesde(r.desde); setHasta(r.hasta); }} />}
       <DataTable columns={cols} data={visibles} emptyMessage="No hay retenciones con ese filtro" />
     </Marco>
   );

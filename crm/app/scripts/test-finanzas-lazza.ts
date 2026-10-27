@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { armarRetenciones, totalesRetenciones, excelRetencionesSufridas, armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, armarTcDelDia, armarVencimientos, filtrarVencimientos, ivaDelMes, certificadoDeRetencion, periodoVepIva, esVepSinImpuesto, nivelObjetivo, reporteBasico, saldoFacturaCompra, unificarMoneda, sumarDias, conVencimiento, facturasACobrar, monedaDelCobro, clientesACobrar, proveedoresAPagar, type FacturaVentaFL, type FilaVencimiento } from "../src/lib/finanzas-lazza";
+import { armarRetenciones, totalesRetenciones, excelRetencionesSufridas, rangoQuincena, practicadasPorQuincena, armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, saldoMenorA,armarTcDelDia, armarVencimientos, filtrarVencimientos, ivaDelMes, certificadoDeRetencion, periodoVepIva, esVepSinImpuesto, nivelObjetivo, reporteBasico, saldoFacturaCompra, unificarMoneda, sumarDias, conVencimiento, facturasACobrar, monedaDelCobro, clientesACobrar, proveedoresAPagar, type FacturaVentaFL, type FilaVencimiento } from "../src/lib/finanzas-lazza";
 
 const tcDia = armarTcDelDia([{ fecha: "2026-10-09", valor_venta: 1400 }, { fecha: "2026-10-14", valor_venta: 1500 }]);
 assert.equal(tcDia("2026-10-14"), 1500);
@@ -224,6 +224,11 @@ assert.deepEqual([c1.saldo.ARS, c1.vencido.ARS, c1.facturas, c1.bcra], [1210, 12
 const p1 = cc.find((x) => x.id === "p-prov1")!;
 assert.deepEqual([p1.saldo.ARS, p1.saldo.USD, p1.vencido.ARS, p1.proximoVencimiento], [350, -10, 0, "2026-10-20"]);
 assert.deepEqual(cc.filter(tieneSaldo).map((x) => x.id), ["c-cli1", "p-prov1"]);
+// Saldos de centavos (arreglo 25): menos de $ 100 en cada moneda (US$ al dólar del día); sin saldo o sin dólar, no
+const fcc = (ARS: number, USD = 0) => ({ ...c1, saldo: { ARS, USD } });
+assert.deepEqual([fcc(-0.99), fcc(8.27), fcc(-14.83), fcc(-99.99), fcc(100), fcc(-100.5), fcc(0)].map((f) => saldoMenorA(f, 1500)), [true, true, true, true, false, false, false]);
+assert.deepEqual([fcc(0, 0.05), fcc(0, 0.07), fcc(50, 0.05), fcc(-480000, 0.05)].map((f) => saldoMenorA(f, 1500)), [true, false, true, false]);
+assert.deepEqual([saldoMenorA(fcc(0, 0.05), 0), saldoMenorA(fcc(5), 0)], [false, true]);
 
 // Retenciones
 const ret = armarRetenciones({
@@ -276,6 +281,29 @@ assert.deepEqual(xls.slice(5), [
 // Con alguna en US$: columna Moneda y totales por moneda
 const xlsUsd = excelRetencionesSufridas([...suf.slice(0, 1), { ...suf[0], id: "u", moneda: "USD", monto: 10 }]);
 assert.deepEqual([xlsUsd[0][6], xlsUsd[2][6], xlsUsd.slice(-2).map((f) => f[0])], ["Moneda", "US$", ["Total ($)", "Total (US$)"]]);
+
+// Practicadas por quincena (arreglo 15): 1ª del 1 al 15, 2ª del 16 a fin de mes, y el mes; las sufridas no cuentan
+assert.deepEqual(rangoQuincena("2026-10", "primera"), { desde: "2026-10-01", hasta: "2026-10-15" });
+assert.deepEqual(rangoQuincena("2026-10", "segunda"), { desde: "2026-10-16", hasta: "2026-10-31" });
+assert.deepEqual(rangoQuincena("2026-09", "mes"), { desde: "2026-09-01", hasta: "2026-09-30" });
+assert.deepEqual(rangoQuincena("2028-02", "segunda"), { desde: "2028-02-16", hasta: "2028-02-29" });
+const quin = practicadasPorQuincena(armarRetenciones({
+  ops: [
+    { id: "q1", numero: "OP-000060", fecha: "2026-10-15", estado: "pagada", retencion_ganancias_monto: 677000.73 },
+    { id: "q2", numero: "OP-000061", fecha: "2026-10-16", estado: "pagada", retencion_ganancias_monto: 357780.59 },
+    { id: "q3", numero: "OP-000062", fecha: "2026-09-30", estado: "pagada", retencion_ganancias_monto: 5 },
+    { id: "q4", numero: "OP-000063", fecha: "2026-10-01", estado: "anulada", retencion_ganancias_monto: 9 },
+  ],
+  movimientos: [
+    { id: "q5", tipo: "pago", fecha: "2026-10-01", monto: 1, retencion_ganancias_monto: 120 },
+    { id: "q6", tipo: "retencion_ganancias", fecha: "2026-10-02", monto: 777, cliente_id: "c" },
+  ],
+}), "2026-10");
+assert.deepEqual(quin.map((t) => [t.cual, t.desde, t.hasta, t.cantidad, t.total]), [
+  ["primera", "2026-10-01", "2026-10-15", 2, { ARS: 677120.73, USD: 0 }],
+  ["segunda", "2026-10-16", "2026-10-31", 1, { ARS: 357780.59, USD: 0 }],
+  ["mes", "2026-10-01", "2026-10-31", 3, { ARS: 1034901.32, USD: 0 }],
+]);
 
 // Cuentas corrientes en una sola moneda
 const tcU = { billete: 1000, divisa: 1100 };

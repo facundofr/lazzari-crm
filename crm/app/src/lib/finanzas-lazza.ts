@@ -628,6 +628,13 @@ export function armarCuentasCorrientes(input: {
 /** Con saldo distinto de cero (en cualquier moneda). */
 export const tieneSaldo = (f: FilaCuentaCorriente) => Math.abs(f.saldo.ARS) >= 0.01 || Math.abs(f.saldo.USD) >= 0.01;
 
+/**
+ * Saldo de centavos (arreglo 25, 27/10/2026): tiene saldo, pero menos de `tope` pesos en cada moneda (los US$ al dólar
+ * `tc`; sin dólar, un saldo en US$ nunca cuenta como chico). Cuentas corrientes los oculta con "Ocultar menores a $ 100".
+ */
+export const saldoMenorA = (f: FilaCuentaCorriente, tc: number, tope = 100) => tieneSaldo(f) && Math.abs(f.saldo.ARS) < tope
+  && (Math.abs(f.saldo.USD) < 0.01 || (tc > 0 && Math.abs(f.saldo.USD) * tc < tope));
+
 /** Último informe BCRA que no sea "gris" (error) por entidad; las filas vienen del más nuevo al más viejo. */
 export function semaforoPorEntidad(filas: { entidad_id: string | null; semaforo: string | null }[]): Record<string, Semaforo> {
   const out: Record<string, Semaforo> = {};
@@ -702,6 +709,29 @@ export function armarRetenciones(input: {
     }
   }
   return out.sort((a, b) => a.fecha.localeCompare(b.fecha));
+}
+
+/** Una quincena o el mes entero de un período "YYYY-MM": 1ª del 1 al 15, 2ª del 16 al último día (arreglo 15). */
+export function rangoQuincena(mes: string, cual: "primera" | "segunda" | "mes"): { desde: string; hasta: string } {
+  const ultimo = String(new Date(Date.UTC(Number(mes.slice(0, 4)), Number(mes.slice(5, 7)), 0)).getUTCDate()).padStart(2, "0");
+  if (cual === "primera") return { desde: `${mes}-01`, hasta: `${mes}-15` };
+  return { desde: `${mes}-${cual === "segunda" ? "16" : "01"}`, hasta: `${mes}-${ultimo}` };
+}
+
+export interface TramoQuincena { cual: "primera" | "segunda" | "mes"; desde: string; hasta: string; cantidad: number; total: { ARS: number; USD: number } }
+
+/**
+ * Retenciones practicadas de un mes por quincena (arreglo 15, 27/10/2026): la 1ª (1 al 15) es el pago a cuenta,
+ * la 2ª va del 16 a fin de mes y el mes entero es lo que se presenta en el SICORE.
+ */
+export function practicadasPorQuincena(filas: FilaRetencion[], mes: string): TramoQuincena[] {
+  return (["primera", "segunda", "mes"] as const).map((cual) => {
+    const { desde, hasta } = rangoQuincena(mes, cual);
+    const de = filas.filter((r) => r.lado === "practicada" && r.fecha >= desde && r.fecha <= hasta);
+    const total = { ARS: 0, USD: 0 };
+    for (const r of de) total[r.moneda] = r2(total[r.moneda] + r.monto);
+    return { cual, desde, hasta, cantidad: de.length, total };
+  });
 }
 
 const ORDEN_IMPUESTO = ["IVA", "Ganancias", "IIBB", "SUSS"];

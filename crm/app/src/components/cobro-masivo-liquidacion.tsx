@@ -8,7 +8,7 @@ import { parseDecimalInput, toDecimalInput } from "@/lib/decimal-input";
 import { buildOrdenPagoPlan, pagoOriginal, type OpParsed } from "@/lib/orden-pago-plan";
 import { fechaMedioCobro, avisoFechaCobroFutura } from "@/lib/fecha-cobro";
 import { repartirCobro, avisoDiferenciaCobro, facturasParaRegistrar } from "@/lib/cobro-reparto";
-import { fuentesSaldoFavorCliente, repartirSaldoFavorCliente, faltaSegunOrden, type FuenteSaldoFavorCliente } from "@/lib/saldo-favor-cliente";
+import { fuentesSaldoFavorCliente, repartirSaldoFavorCliente, faltaSegunOrden, cubreConSaldoFavor, type FuenteSaldoFavorCliente } from "@/lib/saldo-favor-cliente";
 import { claveArchivo, mismaRetencion, mismoPago, sinRepetir } from "@/lib/comprobante-medios";
 import { guardarRevisar } from "@/components/dejar-revisar";
 import { ZonaArchivos } from "@/components/ui/zona-archivos";
@@ -196,7 +196,9 @@ export default function CobroMasivoLiquidacion({
   const diferencia = r2(totalMedios - totalEsperado);
   // Regla 1: con diferencia se puede confirmar igual (avisa y pregunta antes de guardar).
   const hayDiferencia = Math.abs(diferencia) >= 0.01;
-  const canConfirm = totalMedios > 0 && !saving && !parsingOP && (!isUSD || cotizNum > 0);
+  // Arreglo 24 (27/10/2026): si el saldo a favor cubre todo lo tildado, se confirma con $ 0 (solo se aplica el saldo a favor).
+  const soloSaldoFavor = cubreConSaldoFavor({ aplicado: totalSFAplicado, deuda: totalSaldoBruto, medios: totalMedios, retenciones: totalRetenciones });
+  const canConfirm = (totalMedios > 0 || soloSaldoFavor) && !saving && !parsingOP && (!isUSD || cotizNum > 0 || soloSaldoFavor);
   // Cómo queda cada factura (en su moneda): de la más vieja a la más nueva.
   const reparto = useMemo(() => {
     const aplicadoARS = totalMedios + totalRetenciones;
@@ -337,6 +339,22 @@ export default function CobroMasivoLiquidacion({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ordenPago]);
 
+  // El saldo a favor tildado se aplica una sola vez, aunque después se reintente el cobro.
+  async function aplicarSaldoFavor() {
+    if (!aplicacionesSF.length || sfAplicadoRef.current) return;
+    const { error: sfErr } = await (supabase as any).rpc("aplicar_saldo_favor_cliente", {
+      p_sociedad_id: sociedadId, p_cliente_id: clienteId,
+      p_aplicaciones: aplicacionesSF.map((a) => ({ movimiento_id: a.movimiento_id, factura_id: a.factura_id, monto: a.monto })),
+    });
+    if (sfErr) {
+      if (/aplicar_saldo_favor_cliente/.test(String(sfErr.message || "")) && /function|funci/i.test(String(sfErr.message || ""))) {
+        throw new Error("Falta correr la migración 20261026160000 (saldo a favor del cliente). Destildá \"Aplicar\" para cobrar sin usarlo.");
+      }
+      throw new Error(`No se pudo aplicar el saldo a favor: ${sfErr.message}. No se guardó nada.`);
+    }
+    sfAplicadoRef.current = true;
+  }
+
   // ── Confirm & register ──
   async function handleConfirmar() {
     if (!canConfirm) return;
@@ -344,6 +362,14 @@ export default function CobroMasivoLiquidacion({
     setError("");
 
     try {
+      // Arreglo 24: el saldo a favor cubre todo y no entra plata → solo se aplica; no hay cobro ni recibo.
+      if (soloSaldoFavor) {
+        await aplicarSaldoFavor();
+        alert(`Saldo a favor aplicado: ${aplicacionesSF.map((a) => `${fc(a.monto, m)} a la ${a.numero}`).join("; ")}.\n\n${facturas.length > 1 ? `Las ${facturas.length} facturas quedaron pagadas` : "La factura quedó pagada"}. No se hizo recibo porque no entró plata.`);
+        onSuccess();
+        return;
+      }
+
       const fechaPago = medios[0]?.fecha || todayStr();
       const avisoFecha = avisoFechaCobroFutura(fechaPago, todayStr());
       if (avisoFecha && !confirm(avisoFecha)) { setSaving(false); return; }
@@ -404,19 +430,7 @@ export default function CobroMasivoLiquidacion({
       if (!requestKeyRef.current) requestKeyRef.current = crypto.randomUUID();
 
       // Primero el saldo a favor (si se tildó): así la base ve el saldo real de cada factura al registrar el cobro.
-      if (aplicacionesSF.length && !sfAplicadoRef.current) {
-        const { error: sfErr } = await (supabase as any).rpc("aplicar_saldo_favor_cliente", {
-          p_sociedad_id: sociedadId, p_cliente_id: clienteId,
-          p_aplicaciones: aplicacionesSF.map((a) => ({ movimiento_id: a.movimiento_id, factura_id: a.factura_id, monto: a.monto })),
-        });
-        if (sfErr) {
-          if (/aplicar_saldo_favor_cliente/.test(String(sfErr.message || "")) && /function|funci/i.test(String(sfErr.message || ""))) {
-            throw new Error("Falta correr la migración 20261026160000 (saldo a favor del cliente). Destildá \"Aplicar\" para cobrar sin usarlo.");
-          }
-          throw new Error(`No se pudo aplicar el saldo a favor: ${sfErr.message}. No se guardó nada.`);
-        }
-        sfAplicadoRef.current = true;
-      }
+      await aplicarSaldoFavor();
 
       // Una unica RPC confirma movimientos, aplicaciones y cheques en cartera.
       const base = {
@@ -900,9 +914,11 @@ export default function CobroMasivoLiquidacion({
         {/* ── Footer actions ── */}
         <div className="flex items-center justify-between px-6 py-4 border-t border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 rounded-b-xl">
           <div className="text-xs text-zinc-400">
-            {Math.abs(diferencia) < 0.01
-              ? "La diferencia es $0 — listo para confirmar"
-              : "Hay diferencia: al confirmar te avisa cómo queda cada factura"}
+            {soloSaldoFavor
+              ? "El saldo a favor cubre todo: se confirma sin plata (no se hace recibo)"
+              : Math.abs(diferencia) < 0.01
+                ? "La diferencia es $0 — listo para confirmar"
+                : "Hay diferencia: al confirmar te avisa cómo queda cada factura"}
           </div>
           <div className="flex gap-3">
             <button onClick={onClose} className="px-4 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700">
@@ -910,7 +926,7 @@ export default function CobroMasivoLiquidacion({
             </button>
             <button onClick={handleConfirmar} disabled={!canConfirm}
               className="px-6 py-2 rounded-lg bg-orange-600 text-white text-sm font-semibold hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed">
-              {saving ? "Registrando..." : "Confirmar cobro"}
+              {saving ? "Registrando..." : soloSaldoFavor ? "Aplicar saldo a favor" : "Confirmar cobro"}
             </button>
           </div>
         </div>

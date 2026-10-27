@@ -79,4 +79,12 @@ const conCheques = armarRecibos({
 assert.deepEqual(conCheques.find((r) => r.numero === 1061)!.cheques, ["11423615", "11423614"]);
 assert.deepEqual(conCheques.find((r) => r.numero === 1037)!.cheques, ["00000176"], "cobro anulado: el cheque sigue figurando");
 
+// Arreglo 25 (27/10/2026): "Enviado" (cuándo y a quién); sin la marca (o sin la migración), null
+const [enviado] = armarRecibos({
+  recibos: [{ id: "e", numero: 1079, fecha: "2026-10-27", cliente_id: null, email_enviado_at: "2026-10-27T15:00:00+00:00", email_enviado_a: "a@x.com, b@x.com" }],
+  vinculos: [], movimientos: [],
+});
+assert.deepEqual([enviado.enviado, enviado.enviadoA], ["2026-10-27T15:00:00+00:00", "a@x.com, b@x.com"]);
+assert.deepEqual([r1.enviado, r1.enviadoA], [null, null]);
+
 console.log("test-recibos OK");

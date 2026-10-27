@@ -7,7 +7,7 @@ const source = fs.readFileSync("src/lib/saldo-favor-cliente.ts", "utf8");
 const output = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
 const context = { exports: {} };
 vm.runInNewContext(output, context);
-const { fuentesSaldoFavorCliente, repartirSaldoFavorCliente, faltaSegunOrden } = context.exports;
+const { fuentesSaldoFavorCliente, repartirSaldoFavorCliente, faltaSegunOrden, cubreConSaldoFavor } = context.exports;
 
 // Solo cuentan los ajustes de crédito sin factura y sin anular.
 const fuentes = fuentesSaldoFavorCliente([
@@ -45,4 +45,15 @@ const dos = repartirSaldoFavorCliente([{ id: "viejo", monto: 50, fecha: "2026-01
   [{ id: "f", numero: "FA 1", fecha: "2026-03-01", saldo: 100 }]);
 assert.equal(JSON.stringify(dos.map((a) => [a.movimiento_id, a.monto])), JSON.stringify([["viejo", 50], ["nuevo", 50]]));
 
-console.log("OK: saldo a favor del cliente repartido (caso Del Sol OP 18722).");
+// Arreglo 24: se confirma con $ 0 solo si el saldo a favor cubre todo lo tildado y no hay medios ni retenciones.
+const cubre = (aplicado, deuda, medios = 0, retenciones = 0) => cubreConSaldoFavor({ aplicado, deuda, medios, retenciones });
+assert.equal(cubre(100, 100), true);
+assert.equal(cubre(1242839.98, 1242839.98), true);
+assert.equal(cubre(99.99, 100), false); // cubre solo una parte: pide plata, como antes
+assert.equal(cubre(100, 100, 50), false); // con plata va por el cobro de siempre
+assert.equal(cubre(100, 100, 0, 10), false); // con retenciones también
+assert.equal(cubre(0, 0), false); // sin "Aplicar" tildado
+const todo = repartirSaldoFavorCliente([{ id: "sf", monto: 9630, fecha: "2026-10-05", descripcion: "" }], [{ id: "f", numero: "FA 1", fecha: "2026-10-20", saldo: 9000 }]);
+assert.equal(cubre(todo.reduce((s, a) => s + a.monto, 0), 9000), true); // sobran $ 630 a favor
+
+console.log("OK: saldo a favor del cliente repartido (caso Del Sol OP 18722) y cobro solo con saldo a favor.");

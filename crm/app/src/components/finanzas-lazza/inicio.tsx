@@ -127,7 +127,8 @@ function loaders(sociedadId: string, periodo: string, hoy: string): (() => Promi
       const suf = ret.filter((r) => r.lado === "sufrida").reduce((s, r) => s + r.monto, 0);
       return {
         ordenes_pago: { valor: `${vigentes.filter((o) => !o.email_enviado_at).length} sin enviar`, sub: `${vigentes.length} este mes` },
-        retenciones: { valor: millones(pract + suf), sub: `del mes · practicadas ${millones(pract)}` },
+        // Arreglo 15 (27/10/2026): ya no se suman. Lo practicado va a ARCA; lo sufrido queda a favor.
+        retenciones: { valor: millones(pract), sub: `retenido para ARCA · a favor ${millones(suf)}` },
       };
     },
     // Recibos del mes y movimientos de hoy.

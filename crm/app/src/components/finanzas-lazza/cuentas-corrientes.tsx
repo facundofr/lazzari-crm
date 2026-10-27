@@ -8,13 +8,14 @@
 // Opción "Moneda: la de cada cuenta" (Augusto 19/10): cada saldo pasado a su moneda al dólar BNA del día (lib unificarMoneda).
 // Resumen de cuenta (19/10): la ficha muestra TODOS los movimientos con saldo acumulado (resumen-cuenta.tsx).
 // Saldos con las mismas reglas que Finanzas (lib/saldo-clientes y lib/saldo-proveedores); semáforo BCRA del último informe.
+// "Ocultar menores a $ 100" (auditoría UX 26/10/2026, arreglo 25): saca los saldos de centavos; abajo, un clic los muestra.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { HandCoins, Loader2, Scale, Search, Wallet, X } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
-import { armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, unificarMoneda, type FilaCuentaCorriente, type FilaVencimiento, type Semaforo } from "@/lib/finanzas-lazza";
+import { armarCuentasCorrientes, saldoMenorA, semaforoPorEntidad, tieneSaldo, unificarMoneda, type FilaCuentaCorriente, type FilaVencimiento, type Semaforo } from "@/lib/finanzas-lazza";
 import { elegirDolares } from "@/lib/dolar-presupuesto";
 import { traerDeudas } from "./datos";
 import { CobrarCliente } from "./cobrar";
@@ -108,6 +109,7 @@ function CuentasSaldos({ sociedadId }: { sociedadId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [lado, setLado] = useState<"todos" | "cliente" | "proveedor">("todos");
   const [soloConSaldo, setSoloConSaldo] = useState(true);
+  const [ocultarChicos, setOcultarChicos] = useState(true);
   const [texto, setTexto] = useState("");
   const [enSuMoneda, setEnSuMoneda] = useState(false);
   const [abierta, setAbierta] = useState<FilaCuentaCorriente | null>(null);
@@ -149,11 +151,14 @@ function CuentasSaldos({ sociedadId }: { sociedadId: string }) {
   const enPesos = useCallback((m: { ARS: number; USD: number }) => m.ARS + m.USD * tcOrden, [tcOrden]);
   const cols = useMemo(() => columnas(enPesos), [enPesos]);
 
-  const visibles = useMemo(() => filas
+  const delFiltro = useMemo(() => filas
     .filter((f) => lado === "todos" || f.lado === lado)
-    .filter((f) => !soloConSaldo || tieneSaldo(f))
-    .filter((f) => !q || `${f.nombre} ${f.cuit}`.toLowerCase().includes(q))
-    .sort((a, b) => (enPesos(b.vencido) - enPesos(a.vencido)) || (enPesos(b.saldo) - enPesos(a.saldo))), [filas, lado, soloConSaldo, q, enPesos]);
+    .filter((f) => !q || `${f.nombre} ${f.cuit}`.toLowerCase().includes(q)), [filas, lado, q]);
+  // Con "Solo con saldo": los de menos de $ 100 en cada moneda (los US$ al dólar del día) se ocultan si está el tilde.
+  const chicos = soloConSaldo && ocultarChicos ? delFiltro.filter((f) => saldoMenorA(f, tcOrden)).length : 0;
+  const visibles = useMemo(() => delFiltro
+    .filter((f) => !soloConSaldo || (tieneSaldo(f) && !(ocultarChicos && saldoMenorA(f, tcOrden))))
+    .sort((a, b) => (enPesos(b.vencido) - enPesos(a.vencido)) || (enPesos(b.saldo) - enPesos(a.saldo))), [delFiltro, soloConSaldo, ocultarChicos, tcOrden, enPesos]);
 
   const totales = useMemo(() => {
     const t = { cliente: { ARS: 0, USD: 0 }, proveedor: { ARS: 0, USD: 0 } };
@@ -186,6 +191,11 @@ function CuentasSaldos({ sociedadId }: { sociedadId: string }) {
         <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-300">
           <input type="checkbox" checked={soloConSaldo} onChange={(e) => setSoloConSaldo(e.target.checked)} className="h-4 w-4 accent-orange-500" /> Solo con saldo
         </label>
+        {soloConSaldo && (
+          <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-300" title="Saca los saldos de centavos: menos de $ 100 en cada moneda (los US$ al dólar del día)">
+            <input type="checkbox" checked={ocultarChicos} onChange={(e) => setOcultarChicos(e.target.checked)} className="h-4 w-4 accent-orange-500" /> Ocultar menores a $ 100
+          </label>
+        )}
         <select value={enSuMoneda ? "una" : "separadas"} onChange={(e) => setEnSuMoneda(e.target.value === "una")} className={control} title="Pasa cada saldo a la moneda de esa cuenta al dólar BNA del día (solo para ver)">
           <option value="separadas">Moneda: $ y US$ separados</option>
           <option value="una">Moneda: la de cada cuenta</option>
@@ -205,7 +215,10 @@ function CuentasSaldos({ sociedadId }: { sociedadId: string }) {
           )}
           <DataTable columns={cols} data={visibles} onRowClick={setAbierta} emptyMessage="No hay cuentas con ese filtro" />
           <div className="flex flex-wrap justify-end gap-x-6 gap-y-1 border-t border-zinc-200 px-3 py-2 text-xs dark:border-zinc-700">
-            <span className="text-zinc-400">{visibles.length} cuentas</span>
+            <span className="text-zinc-400">
+              {visibles.length} cuentas
+              {chicos > 0 && <>{" "}<button type="button" onClick={() => setOcultarChicos(false)} title="Mostrar los saldos de centavos" className="underline decoration-dotted underline-offset-2 hover:text-orange-600">+{chicos} con menos de $ 100</button></>}
+            </span>
             {lado !== "proveedor" && <span className="text-zinc-500">Nos deben <b className="font-mono text-emerald-700 dark:text-emerald-400">{montos(totales.cliente, "$ 0")}</b></span>}
             {lado !== "cliente" && <span className="text-zinc-500">Les debemos <b className="font-mono text-orange-700 dark:text-orange-400">{montos(totales.proveedor, "$ 0")}</b></span>}
           </div>

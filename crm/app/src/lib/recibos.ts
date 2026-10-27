@@ -2,7 +2,7 @@
 // La base arma los recibos (migración 20261019210000: tablas recibos + recibo_movimientos y un trigger);
 // acá se juntan para mostrar: medios y retenciones, facturas que cobró, totales, anulado y conciliado.
 
-export interface ReciboRow { id: string; numero: number; fecha: string; cliente_id: string | null }
+export interface ReciboRow { id: string; numero: number; fecha: string; cliente_id: string | null; email_enviado_at?: string | null; email_enviado_a?: string | null }
 export interface ReciboMovRow { recibo_id: string; movimiento_id: string }
 export interface MovReciboRow {
   id: string;
@@ -43,6 +43,9 @@ export interface Recibo {
    * (desde Finanzas simple no se cruzan con el banco: no quedan pendientes para siempre); si no, "pendiente".
    */
   banco: "conciliado" | "registrado" | "pendiente";
+  /** Cuándo y a quién se mandó por mail desde el CRM (arreglo 25, migración 20261027140000); null si no se mandó. */
+  enviado: string | null;
+  enviadoA: string | null;
 }
 
 export const MEDIO_RECIBO: Record<string, string> = {
@@ -111,6 +114,7 @@ export function armarRecibos(args: {
       id: r.id, numero: r.numero, fecha: String(r.fecha).slice(0, 10), clienteId: r.cliente_id,
       cliente: (r.cliente_id && args.clientes?.[r.cliente_id]) || "Cliente sin nombre",
       renglones, facturas, facturaIds: [...ids], cheques: [...new Set(movs.flatMap((m) => chequesDeMov[m.id] || []))], total, anulado, conciliado, banco,
+      enviado: r.email_enviado_at || null, enviadoA: r.email_enviado_a || null,
     };
   }).sort((a, b) => b.numero - a.numero);
 }

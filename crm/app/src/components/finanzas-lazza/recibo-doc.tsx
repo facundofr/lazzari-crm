@@ -19,8 +19,11 @@ export const SIN_MIGRACION_RECIBOS = "sin-migracion-recibos";
 
 export async function traerRecibos(sociedadId: string): Promise<Recibo[]> {
   let recibos: any[];
+  const pedir = (campos: string) => traerTodo<any>(() => db.from("recibos").select(campos).eq("sociedad_id", sociedadId).order("id"));
   try {
-    recibos = await traerTodo<any>(() => db.from("recibos").select("id, numero, fecha, cliente_id").eq("sociedad_id", sociedadId).order("id"));
+    // Arreglo 25 (27/10/2026): con cuándo y a quién se mandó (migración 20261027140000); sin esas columnas, sin la marca.
+    recibos = await pedir("id, numero, fecha, cliente_id, email_enviado_at, email_enviado_a")
+      .catch((e: any) => { if (/email_enviado/i.test(String(e?.message || ""))) return pedir("id, numero, fecha, cliente_id"); throw e; });
   } catch (e: any) {
     if (/recibos/i.test(String(e?.message || ""))) throw new Error(SIN_MIGRACION_RECIBOS);
     throw e;
@@ -77,8 +80,11 @@ export function abrirRecibo(r: Recibo, sociedad: Sociedad, ver: boolean) {
   void openPDFWindow(htmlRecibo(r, sociedad), ver ? undefined : `Recibo-${r.numero}.pdf`, ver);
 }
 
-/** Ventana de mail del recibo al cliente (mails de facturación, el general y los contactos). */
-export function EnviarRecibo({ recibo, onClose }: { recibo: Recibo | null; onClose: () => void }) {
+/**
+ * Ventana de mail del recibo al cliente (mails de facturación, el general y los contactos).
+ * Al mandarlo queda marcado cuándo y a quién (arreglo 25, 27/10/2026: `marcar_recibo_enviado`, migración 20261027140000).
+ */
+export function EnviarRecibo({ recibo, onClose, onEnviado }: { recibo: Recibo | null; onClose: () => void; onEnviado?: (reciboId: string, fecha: string) => void }) {
   const { sociedadActiva } = useUser();
   const [mail, setMail] = useState<{ to: string; sugeridos: { email: string; label?: string }[] } | null>(null);
 
@@ -103,6 +109,13 @@ export function EnviarRecibo({ recibo, onClose }: { recibo: Recibo | null; onClo
     return () => { vivo = false; };
   }, [recibo]);
 
+  const marcar = async (para?: string[]) => {
+    if (!recibo || !sociedadActiva) return;
+    const { data, error } = await db.rpc("marcar_recibo_enviado", { p_recibo_id: recibo.id, p_sociedad_id: sociedadActiva.id, p_enviado_a: (para || []).join(", ") || null });
+    if (error) { alert(`El mail salió, pero no se pudo guardar la marca de enviado: ${error.message}`); return; }
+    onEnviado?.(recibo.id, String(data || new Date().toISOString()));
+  };
+
   if (!recibo || !mail || !sociedadActiva) return null;
   const empresa = sociedadActiva.razonSocial || sociedadActiva.nombre || "Lazzari";
   const total = textoTotalRecibo(recibo.total, (v, m) => formatCurrency(v, m));
@@ -118,7 +131,7 @@ export function EnviarRecibo({ recibo, onClose }: { recibo: Recibo | null; onClo
       pdfFilename={`Recibo-${recibo.numero}.pdf`}
       suggestedEmails={mail.sugeridos}
       guardarContacto={recibo.clienteId ? { entityType: "cliente", entityId: recibo.clienteId, cargo: "Administración" } : undefined}
-      onSuccess={onClose}
+      onSuccess={async (_id, para) => { await marcar(para); onClose(); }}
       generatePdf={async () => htmlToPdfBase64(htmlRecibo(recibo, sociedadActiva))}
     />
   );
