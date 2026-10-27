@@ -25,15 +25,17 @@ export async function traerRecibos(sociedadId: string): Promise<Recibo[]> {
     if (/recibos/i.test(String(e?.message || ""))) throw new Error(SIN_MIGRACION_RECIBOS);
     throw e;
   }
-  const [vinculos, movimientos, aplicaciones, facturas, clientes] = await Promise.all([
+  const [vinculos, movimientos, aplicaciones, facturas, clientes, cheques] = await Promise.all([
     traerTodo<any>(() => db.from("recibo_movimientos").select("recibo_id, movimiento_id, recibos!inner(sociedad_id)").eq("recibos.sociedad_id", sociedadId).order("movimiento_id")),
     traerTodo<any>(() => db.from("movimientos").select("id, tipo, monto, monto_original, moneda, descripcion, anulado, conciliado, factura_id").eq("sociedad_id", sociedadId).not("cliente_id", "is", null).order("id")),
     traerTodo<any>(() => db.from("cobro_aplicaciones").select("id, movimiento_id, factura_id, monto, movimientos!inner(sociedad_id)").eq("movimientos.sociedad_id", sociedadId).order("id")),
     traerTodo<any>(() => db.from("facturas").select("id, tipo, punto_venta, numero").eq("sociedad_id", sociedadId).order("id")),
     traerTodo<any>(() => db.from("clientes").select("id, razon_social").eq("sociedad_id", sociedadId).order("id")),
+    // Arreglo 20 (27/10/2026): N° de los cheques de cada recibo, para buscarlo por N° de cheque. Si falla, los recibos se ven igual.
+    traerTodo<any>(() => db.from("echeqs").select("id, numero, movimiento_id").eq("sociedad_id", sociedadId).not("movimiento_id", "is", null).order("id")).catch(() => []),
   ]);
   return armarRecibos({
-    recibos, vinculos, movimientos, aplicaciones,
+    recibos, vinculos, movimientos, aplicaciones, cheques,
     comprobantes: Object.fromEntries(facturas.map((f: any) => [f.id, comprobanteVenta(f)])),
     clientes: Object.fromEntries(clientes.map((c: any) => [c.id, c.razon_social])),
   });

@@ -8,6 +8,8 @@ export interface ChequeFL extends ChequeParaPlazo {
   numero: string;
   direccion: "emitido" | "recibido";
   cubre_tercero?: string | null;
+  /** Estado según el banco (reportes eCheq), tal cual; vacío si todavía no se cargó. */
+  estadoBanco?: string | null;
 }
 
 /** Estado para mostrar (un emitido "cobrado" es uno que el banco ya debitó). */
@@ -45,24 +47,37 @@ export function resumenPorEstado(cheques: ChequeFL[]): Array<{ clave: string; la
   return [...porClave.values()].map((x) => ({ ...x, total: redondear(x.total) })).sort((a, b) => pos(a.clave) - pos(b.clave));
 }
 
-/** En fecha hoy: propios sin debitar con fecha de pago ≤ hoy (para pagar) y recibidos en cartera ≤ hoy (para cobrar). */
-export function enFecha(cheques: ChequeFL[], hoy: string): { pagar: Total; cobrar: Total } {
-  const r = { pagar: vacio(), cobrar: vacio() };
+/**
+ * En fecha hoy: propios sin debitar con fecha de pago ≤ hoy (para pagar) y recibidos en cartera ≤ hoy (para cobrar).
+ * Los recibidos que el banco ya tiene (depositados, presentados o en custodia) no van en "para cobrar", que es lo que
+ * hay que depositar: van aparte, en `depositados` (auditoría UX 26/10/2026, arreglo 19).
+ */
+export function enFecha(cheques: ChequeFL[], hoy: string): { pagar: Total; cobrar: Total; depositados: Total } {
+  const r = { pagar: vacio(), cobrar: vacio(), depositados: vacio() };
   for (const ch of cheques) {
-    if (!estaEnFecha(ch, hoy)) continue;
-    sumar(ch.direccion === "emitido" ? r.pagar : r.cobrar, ch);
+    if (situacionPago(ch, hoy) !== "en_fecha") continue;
+    sumar(ch.direccion === "emitido" ? r.pagar : depositadoSegunBanco(ch) ? r.depositados : r.cobrar, ch);
   }
-  return { pagar: redondear(r.pagar), cobrar: redondear(r.cobrar) };
+  return { pagar: redondear(r.pagar), cobrar: redondear(r.cobrar), depositados: redondear(r.depositados) };
+}
+
+/** Estados del reporte de eCheq con los que el banco ya tiene el cheque recibido (arreglo 19; CUSTODIA, Augusto 27/10/2026). */
+const YA_EN_EL_BANCO = ["DEPOSITADO", "PRESENTADO", "CUSTODIA"];
+
+/** Recibido en cartera que, según el banco, ya está depositado, presentado o en custodia: sigue pendiente hasta que se acredita, pero ya no hay que depositarlo. */
+export function depositadoSegunBanco(ch: Pick<ChequeFL, "direccion" | "estado" | "estadoBanco">): boolean {
+  return ch.direccion === "recibido" && ch.estado === "en_cartera" && YA_EN_EL_BANCO.includes(String(ch.estadoBanco || "").trim().toUpperCase());
 }
 
 const masDias = (f: string, d: number) => new Date(Date.parse(`${f}T12:00:00Z`) + d * 86_400_000).toISOString().slice(0, 10);
 
 /**
  * En fecha (26/10/2026, Augusto): pendiente, con la fecha de pago ya llegada y hasta 30 días después (regla de los cheques:
- * que no se haya debitado en la fecha no es atraso; a los 30 días el cheque vence).
+ * que no se haya debitado en la fecha no es atraso; a los 30 días el cheque vence). Los recibidos que el banco ya tiene no
+ * (arreglo 19): no hay que depositarlos.
  */
 export function estaEnFecha(ch: ChequeFL, hoy: string): boolean {
-  return situacionPago(ch, hoy) === "en_fecha";
+  return situacionPago(ch, hoy) === "en_fecha" && !depositadoSegunBanco(ch);
 }
 
 /**
@@ -108,4 +123,75 @@ export function proximasSemanas(cheques: ChequeFL[], hoy: string, cuantas = 4): 
     if (s) sumar(ch.direccion === "emitido" ? s.pagar : s.cobrar, ch);
   }
   return semanas.map((s) => ({ ...s, pagar: redondear(s.pagar), cobrar: redondear(s.cobrar) }));
+}
+
+/**
+ * Orden de la lista (auditoría UX 26/10/2026, arreglo 19): primero lo pendiente, de la fecha de pago más cercana a la más
+ * lejana (arriba lo que ya está en fecha); después el resto, del más nuevo al más viejo. Sin fecha de pago, al final.
+ */
+export function ordenCheques(a: ChequeFL, b: ChequeFL): number {
+  const pa = chequePendiente(a), pb = chequePendiente(b);
+  if (pa !== pb) return pa ? -1 : 1;
+  const fa = String(a.fecha_pago || "").slice(0, 10), fb = String(b.fecha_pago || "").slice(0, 10);
+  if (fa !== fb) {
+    if (!fa || !fb) return fa ? -1 : 1;
+    return (fa < fb ? -1 : 1) * (pa ? 1 : -1);
+  }
+  return a.numero.localeCompare(b.numero);
+}
+
+const sinCeros = (n: unknown) => String(n ?? "").trim().replace(/^0+/, "");
+const centavos = (n: unknown) => Math.round((Number(n) || 0) * 100);
+
+/** Una OP con sus medios de pago, como viene de la base (medios_pago puede venir como texto JSON). */
+export interface OpMedios { id: string; numero: string; estado: string; fecha: string; medios: unknown }
+export interface OpDelCheque { id: string; numero: string; fecha: string; anulada: boolean }
+
+function mediosDeOp(medios: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(medios)) return medios;
+  if (typeof medios !== "string" || !medios.trim()) return [];
+  try { const x = JSON.parse(medios); return Array.isArray(x) ? x : []; } catch { return []; }
+}
+
+/**
+ * En qué OP figura cada cheque (auditoría UX 26/10/2026, arreglo 20). El cheque no guarda su OP: el dato está en los medios
+ * de la OP. Va por el id del cheque (cartera y propios ya cargados, desde la V1.1.585) o por N° (sin los ceros de adelante)
+ * + importe exacto en un medio de cheque. No se mira el tipo del medio: las OP viejas (medios guardados como texto, ej.
+ * OP-000009) anotaban "echeq" tanto los propios como los endosados. Primero las vigentes y después las anuladas (el cheque
+ * de una OP anulada se puede usar en otra).
+ */
+export function opsDeCheques(cheques: Array<Pick<ChequeFL, "id" | "numero" | "monto">>, ops: OpMedios[]): Map<string, OpDelCheque[]> {
+  const indice = new Map<string, OpDelCheque[]>();
+  const agregar = (clave: string, op: OpDelCheque) => {
+    const xs = indice.get(clave) || [];
+    if (!xs.some((x) => x.id === op.id)) indice.set(clave, [...xs, op]);
+  };
+  for (const op of ops) {
+    const o: OpDelCheque = { id: op.id, numero: String(op.numero ?? ""), fecha: String(op.fecha || "").slice(0, 10), anulada: op.estado === "anulada" };
+    for (const m of mediosDeOp(op.medios)) {
+      if (!["cheque_propio", "cheque", "echeq"].includes(String(m?.tipo || ""))) continue;
+      if (m.echeq_id) agregar(`id:${m.echeq_id}`, o);
+      if (sinCeros(m.numero_cheque)) agregar(`${sinCeros(m.numero_cheque)}|${centavos(m.monto)}`, o);
+    }
+  }
+  const out = new Map<string, OpDelCheque[]>();
+  for (const ch of cheques) {
+    const xs = [...(indice.get(`id:${ch.id}`) || []), ...(indice.get(`${sinCeros(ch.numero)}|${centavos(ch.monto)}`) || [])];
+    const unicas = xs.filter((x, i) => xs.findIndex((y) => y.id === x.id) === i)
+      .sort((a, b) => Number(a.anulada) - Number(b.anulada) || b.fecha.localeCompare(a.fecha) || b.numero.localeCompare(a.numero));
+    if (unicas.length) out.set(ch.id, unicas);
+  }
+  return out;
+}
+
+/**
+ * ¿Lo que se escribió en un buscador es alguno de estos N° de cheque? (arreglo 20). Solo números. Parte del N° tal como
+ * está guardado ("3587" encuentra "00003587") o el N° entero con otros ceros adelante ("00003587" encuentra "3587").
+ * Con ceros adelante no busca partes: "00000074" no trae el "4074".
+ */
+export function coincideNumeroCheque(numeros: Array<string | null | undefined>, texto: string): boolean {
+  const t = String(texto || "").trim();
+  if (!/^\d+$/.test(t)) return false;
+  const buscado = sinCeros(t);
+  return numeros.some((n) => { const x = String(n || "").trim(); return !!x && (x.includes(t) || (!!buscado && sinCeros(x) === buscado)); });
 }

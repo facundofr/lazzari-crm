@@ -254,6 +254,25 @@ assert.deepEqual(tot, { "2026-10": { iva: -5921.82, ley_25413: 1829.52 }, "2026-
   assert.equal(g(r, "rr").auto, false, "26/10: si el CRM todavía no lo tiene rechazado (falta el reporte de eCheq), no se confirma solo");
   assert.equal(g(r, "re").clasificacion, "cheque_devuelto"); assert.equal(g(r, "re").subtipo, "emitido"); assert.equal(g(r, "re").cheque_id, "emi"); assert.equal(g(r, "re").auto, false, "un cheque propio rechazado nunca se confirma solo");
   assert.equal(g(r, "rx").cheque_id, null); assert.equal(g(r, "rx").auto, false);
+  assert.match(g(r, "rr").nota, /reporte de eCheq de rechazados/, "eCheq: lo rechaza el reporte de rechazados");
+}
+
+// 27/10/2026 (arreglo 21): el cheque de papel nunca viene en los reportes de eCheq: la línea no manda a subirlo, avisa que se rechaza desde ahí.
+{
+  const cheques = [
+    { id: "papel", numero: "85983561", monto: 290000, direccion: "recibido", estado: "en_cartera", fecha_pago: "2026-10-23", tipo_cheque: "fisico" },
+    { id: "papel-ya", numero: "00406334", monto: 266000, direccion: "recibido", estado: "rechazado", fecha_pago: "2026-10-20", tipo_cheque: "fisico" },
+  ];
+  const lin = (id, concepto, importe) => ({ id, fecha: "2026-10-27", concepto, importe, cuenta_id: null });
+  const r = Object.fromEntries(cruzarExtracto([
+    lin("p", "RECH.DEP.48H 09191840 N 85983561 #019", -290000),
+    lin("ya", "RECH.DEP.48H 09191840 N 406334 #019", -266000),
+  ], [], cheques, [], [], new Set()).map((x) => [x.linea_id, x]));
+  assert.deepEqual([r.p.clasificacion, r.p.subtipo, r.p.cheque_id, r.p.auto], ["cheque_devuelto", "recibido", "papel", false]);
+  assert.equal(r.p.motivo, "Cheque de papel RECIBIDO 85983561 rechazado (reversa del cobro)");
+  assert.equal(r.p.nota, "Cheque de papel: no viene en los reportes de eCheq. Si el banco lo rechazó, rechazalo acá.");
+  assert.deepEqual([r.ya.auto, r.ya.nota], [true, null], "ya rechazado en el CRM: se confirma solo, sin aviso");
+  assert.match(r.ya.motivo, /de papel .* ya rechazado en el CRM$/);
 }
 
 // 26/10/2026 (Finanzas simple): el depósito de un cheque no se ata a un cheque rechazado ni a uno de hace más de 60 días.

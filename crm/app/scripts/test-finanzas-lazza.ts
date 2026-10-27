@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { armarRetenciones, armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, armarTcDelDia, armarVencimientos, filtrarVencimientos, ivaDelMes, certificadoDeRetencion, periodoVepIva, esVepSinImpuesto, nivelObjetivo, reporteBasico, saldoFacturaCompra, unificarMoneda, sumarDias, conVencimiento, facturasACobrar, monedaDelCobro, clientesACobrar, proveedoresAPagar, type FacturaVentaFL, type FilaVencimiento } from "../src/lib/finanzas-lazza";
+import { armarRetenciones, totalesRetenciones, excelRetencionesSufridas, armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, armarTcDelDia, armarVencimientos, filtrarVencimientos, ivaDelMes, certificadoDeRetencion, periodoVepIva, esVepSinImpuesto, nivelObjetivo, reporteBasico, saldoFacturaCompra, unificarMoneda, sumarDias, conVencimiento, facturasACobrar, monedaDelCobro, clientesACobrar, proveedoresAPagar, type FacturaVentaFL, type FilaVencimiento } from "../src/lib/finanzas-lazza";
 
 const tcDia = armarTcDelDia([{ fecha: "2026-10-09", valor_venta: 1400 }, { fecha: "2026-10-14", valor_venta: 1500 }]);
 assert.equal(tcDia("2026-10-14"), 1500);
@@ -106,6 +106,23 @@ assert.equal(certificadoDeRetencion("Retención IVA — 50 % s/ IVA $ 286.121,37
 assert.equal(certificadoDeRetencion("Cobro FX — retencion_iva Cert. A CONFIRMAR — IVA 50 % s/ IVA $ 2.962.042,52 — Corteva Payment Advice 20.10.2026 ref 01671600159017 [cor-20/10] | TC 1524.5 del 2026-10-20"), null);
 assert.equal(certificadoDeRetencion("Retención IIBB — certificado a pedir"), null);
 assert.equal(certificadoDeRetencion(null), null);
+// Retenciones sufridas (arreglo 14): más textos reales de la base
+assert.equal(certificadoDeRetencion("Retención Ganancias — certificado RG 16418 — Limagrain Argentina Semillas SA — FA A 0008-00000670 $311.299,00"), "RG 16418");
+assert.equal(certificadoDeRetencion("Cobro FX — retencion_iibb RB 25897 | TC 1520 del 2026-10-06"), "RB 25897"); // cobro en US$
+assert.equal(certificadoDeRetencion("Cobro FX — retencion_ganancias 000000002302 | TC 1530 del 2026-10-03"), "000000002302");
+assert.equal(certificadoDeRetencion("Cobro FX — retencion_iibb 0000-00000991 | TC 1530 del 2026-10-04"), "0000-00000991");
+assert.equal(certificadoDeRetencion("Cobro FX — retencion_ganancias Cert. A CONFIRMAR — OP Termo 000100015634 / LRAFGN7562 (parte FA 15-18 a TC 1530) [mail-16/10] | TC 1530 del 2026-10-15"), null);
+assert.equal(certificadoDeRetencion("0000-00002291 — TERMO CORDOBA SAU — Retención Impuesto a las Ganancias - Enajenación de bienes muebles"), "0000-00002291");
+assert.equal(certificadoDeRetencion("2026-504 — Augusto Lazzari — Retención Impuesto a las Ganancias - Servicios"), "2026-504");
+assert.equal(certificadoDeRetencion("2026-10-14 — Retención de IIBB"), null); // una fecha adelante no es N°
+assert.equal(certificadoDeRetencion("Retención de Ganancias — Corteva Seeds (certificado 15/10, parte dólares) — Facturas: FA 00015-00000013"), null); // fecha, no N°
+assert.equal(certificadoDeRetencion("Retención de Ganancias — OP: 0001-00016902 | Ref: Cert: 11592 | AFIP | Retención acumulada ya efectuada: $193792.37"), "11592");
+assert.equal(certificadoDeRetencion("Retención Ganancias $206.067,88 (según recibo 782; OP 0001-00001483, Cert: 11236)"), "11236");
+assert.equal(certificadoDeRetencion("Cert. 0000-00006005 IIBB Bs As"), "0000-00006005");
+assert.equal(certificadoDeRetencion("Retención Ganancias — certificado A PEDIR a Chacraservicios (mail de Augusto 16/10/2026) — 2 % s/neto $1.054.105,10"), null);
+assert.equal(certificadoDeRetencion("Retención de Ganancias — FUNDACION CARGILL — aviso de pago 59016581 (certificado a pedir a Cargill)"), null);
+assert.equal(certificadoDeRetencion("Retención de IIBB — TERMO CORDOBA S.A.U. | Ref: LRADGc0932 / Nro. Transferencia 5 — Facturas: FA 00015-00000017"), null);
+assert.equal(certificadoDeRetencion("DN43 — INDUSTRIAS METALURGICAS TODD — RETENCION DN43 (BS. AS.)"), null); // régimen, no N°
 
 assert.equal(periodoVepIva({ fecha: "2026-10-21", descripcion: "ARCA VEP — VEP IVA — pago 21/10 (BBVA OP1396)" }), "2026-09"); // sin período: el mes anterior al pago
 assert.equal(periodoVepIva({ fecha: "2026-10-21", descripcion: "ARCA VEP — IVA — pago 21/10/2026" }), "2026-09"); // la fecha de pago no es el período
@@ -223,6 +240,42 @@ const ret = armarRetenciones({
   ],
 });
 assert.deepEqual(ret.map((r) => [r.id, r.lado, r.impuesto, r.monto]), [["pd-m1", "practicada", "Ganancias", 200], ["rs-m2", "sufrida", "IIBB", 300], ["op-o1", "practicada", "Ganancias", 1000]]);
+assert.deepEqual(ret.map((r) => [r.origen, r.certificado, r.faltaCertificado]), [["Pago directo", null, false], ["", null, true], ["OP-000070", null, false]]);
+assert.equal(armarRetenciones({ ops: [{ id: "o9", numero: 49, fecha: "2026-10-07", retencion_ganancias_monto: 1 }], movimientos: [] })[0].origen, "OP 49");
+
+// Retenciones sufridas (arreglo 14): N° de certificado o "falta", recibo como origen, totales por impuesto y Excel
+const suf = armarRetenciones({
+  ops: [],
+  movimientos: [
+    { id: "s1", tipo: "retencion_iva", fecha: "2026-10-13", monto: 143060.69, cliente_id: "c", clientes: { razon_social: "Corteva", cuit: "30-1" }, descripcion: "Retención IVA — 50 % s/ IVA $ 286.121,37 — certificado pendiente" },
+    { id: "s2", tipo: "retencion_ganancias", fecha: "2026-10-04", monto: 17201.04, cliente_id: "t", clientes: { razon_social: "Termo", cuit: "30-2" }, descripcion: "Cobro FX — retencion_ganancias 000000002302 | TC 1530 del 2026-10-03" },
+    { id: "s3", tipo: "retencion_iibb", fecha: "2026-10-04", monto: 18471.8, cliente_id: "t", clientes: { razon_social: "Termo", cuit: "30-2" }, descripcion: "Cobro FX — retencion_iibb 000000001115 | TC 1530 del 2026-10-03" },
+    { id: "s4", tipo: "retencion_iva", fecha: "2026-10-20", monto: 1000, cliente_id: "c", clientes: { razon_social: "Corteva", cuit: "30-1" }, descripcion: "Retención IVA — certificado 0000-00074421" },
+  ],
+  recibos: { s1: { id: "r52", numero: 1052 }, s2: { id: "r41", numero: 1041 }, s3: { id: "r41", numero: 1041 } },
+});
+assert.deepEqual(suf.map((r) => [r.id, r.origen, r.certificado, r.faltaCertificado, r.recibo?.numero ?? null]), [
+  ["rs-s2", "Recibo 1041", "000000002302", false, 1041],
+  ["rs-s3", "Recibo 1041", "000000001115", false, 1041],
+  ["rs-s1", "Recibo 1052", null, true, 1052],
+  ["rs-s4", "", "0000-00074421", false, null], // sin recibo: el origen queda vacío
+]);
+assert.equal(suf[2].detalle, "Retención IVA — 50 % s/ IVA $ 286.121,37 — certificado pendiente");
+assert.deepEqual(totalesRetenciones(suf).map((t) => [t.impuesto, t.cantidad, t.monto, t.faltan, t.montoFalta]), [
+  ["IVA", 2, 144060.69, 1, 143060.69], ["Ganancias", 1, 17201.04, 0, 0], ["IIBB", 1, 18471.8, 0, 0],
+]);
+const xls = excelRetencionesSufridas(suf);
+assert.deepEqual(xls[0], ["Fecha", "Impuesto", "Cliente", "CUIT", "Certificado", "Recibo", "Retenido", "Detalle completo"]);
+assert.deepEqual(xls[3].slice(0, 7), ["13/10/2026", "IVA", "Corteva", "30-1", "falta", 1052, 143060.69]);
+assert.deepEqual(xls[4].slice(4, 6), ["0000-00074421", ""]);
+assert.deepEqual(xls.slice(5), [
+  [], ["Impuesto", "Con certificado", "Falta certificado", "Total"],
+  ["IVA", 1000, 143060.69, 144060.69], ["Ganancias", 17201.04, 0, 17201.04], ["IIBB", 18471.8, 0, 18471.8],
+  ["Total", 36672.84, 143060.69, 179733.53],
+]);
+// Con alguna en US$: columna Moneda y totales por moneda
+const xlsUsd = excelRetencionesSufridas([...suf.slice(0, 1), { ...suf[0], id: "u", moneda: "USD", monto: 10 }]);
+assert.deepEqual([xlsUsd[0][6], xlsUsd[2][6], xlsUsd.slice(-2).map((f) => f[0])], ["Moneda", "US$", ["Total ($)", "Total (US$)"]]);
 
 // Cuentas corrientes en una sola moneda
 const tcU = { billete: 1000, divisa: 1100 };

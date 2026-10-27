@@ -234,3 +234,21 @@ export function buildOrdenPagoPlan(parsed: OpParsed, docs: PlanDoc[]): OrdenPago
   if (!incluidas.length) avisos.push("Ninguna de las facturas de este formulario figura en la orden de pago.");
   return { referencia, fecha, pagadorCuit, incluidas, otras, medios, retenciones, avisos };
 }
+
+/**
+ * Pago leído por la IA que corresponde a un medio o una retención del plan, para completar el N° y la fecha del cheque.
+ * Cada pago se usa una sola vez (Rebsa, 27/10/2026: dos eCheqs del mismo importe tomaban los dos el N° y la fecha de pago
+ * del primero). Primero el del mismo tipo y la misma referencia (o N° de cheque o certificado), después el del mismo tipo
+ * e importe, y si no, el primero libre del mismo tipo. null si no queda ninguno.
+ */
+export function pagoOriginal<T extends { tipo?: unknown; monto?: unknown; referencia?: unknown; cheque_numero?: unknown; cheque_id_digital?: unknown; certificado?: unknown }>(
+  originales: T[], usados: Set<T>, tipo: string, monto: number, referencia?: string | null,
+): T | null {
+  const libres = originales.filter((p) => !usados.has(p) && String(p.tipo || "").toLowerCase() === tipo);
+  const ref = String(referencia || "").trim();
+  const p = (ref ? libres.find((x) => [x.referencia, x.cheque_numero, x.cheque_id_digital, x.certificado].some((v) => String(v || "").trim() === ref)) : undefined)
+    || libres.find((x) => Math.abs(Number(x.monto || 0) - monto) < 0.01)
+    || libres[0] || null;
+  if (p) usados.add(p);
+  return p;
+}

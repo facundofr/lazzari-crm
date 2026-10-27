@@ -7,7 +7,7 @@ const source = fs.readFileSync("src/lib/orden-pago-plan.ts", "utf8");
 const output = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
 const context = { exports: {} };
 vm.runInNewContext(output, context);
-const { buildOrdenPagoPlan, comprobanteKey } = context.exports;
+const { buildOrdenPagoPlan, comprobanteKey, pagoOriginal } = context.exports;
 
 assert.equal(comprobanteKey(null, null, "FA 0015-00000007"), "15-7");
 assert.equal(comprobanteKey(null, null, "0001500000007"), "15-7");
@@ -101,5 +101,31 @@ assert.equal(propio.incluidas.length, 0);
 const dup = buildOrdenPagoPlan({ facturas_pagadas: [{ comprobante: "FC 65", importe_pagado: 100 }], pagos: [{ tipo: "transferencia", monto: 100 }] },
   [{ id: "a", numero: "FA 0015-00000065" }, { id: "b", numero: "FA 0016-00000065" }]);
 assert.equal(dup.incluidas.length, 0);
+
+// Caso real Rebsa (27/10/2026, OP 0001-00010132): dos eCheqs del mismo importe. Antes los dos medios tomaban el N° y la
+// fecha de pago del primero (11520327, 07/11); cada uno tiene que quedar con los suyos (el segundo: 11520326, 23/11).
+const rebsa = {
+  orden_pago_cliente: "0001-00010132",
+  facturas_pagadas: [{ tipo: "A", punto_venta: 15, numero: 85, importe_pagado: 538208 }],
+  pagos: [
+    { tipo: "echeq", monto: 269104, referencia: "11520327", banco: "Banco Provincia", cheque_numero: "11520327", cheque_fecha: "2026-11-07" },
+    { tipo: "echeq", monto: 269104, referencia: "11520326", banco: "Banco Provincia", cheque_numero: "11520326", cheque_fecha: "2026-11-23" },
+  ],
+};
+const planRebsa = buildOrdenPagoPlan(rebsa, [{ id: "fa85", numero: "FA 0015-00000085" }]);
+const usadosRebsa = new Set();
+const deRebsa = Array.from(planRebsa.medios, (m) => pagoOriginal(rebsa.pagos, usadosRebsa, m.tipo, m.monto, m.referencia));
+assert.deepEqual(deRebsa.map((p) => [p.cheque_numero, p.cheque_fecha]), [["11520327", "2026-11-07"], ["11520326", "2026-11-23"]]);
+// Sin referencia tampoco se repite: el segundo toma el pago que queda libre
+const libres = new Set();
+assert.deepEqual([pagoOriginal(rebsa.pagos, libres, "echeq", 269104), pagoOriginal(rebsa.pagos, libres, "echeq", 269104)].map((p) => p.cheque_numero), ["11520327", "11520326"]);
+assert.equal(pagoOriginal(rebsa.pagos, libres, "echeq", 269104), null, "ya se usaron los dos");
+assert.equal(pagoOriginal(rebsa.pagos, new Set(), "transferencia", 269104), null, "otro tipo");
+// Primero por referencia, después por importe y si no, el primero libre del tipo
+const mezcla = [{ tipo: "echeq", monto: 100, cheque_numero: "A" }, { tipo: "echeq", monto: 200, cheque_numero: "B" }, { tipo: "retencion_iibb", monto: 5, certificado: "C-1" }];
+assert.equal(pagoOriginal(mezcla, new Set(), "echeq", 200).cheque_numero, "B");
+assert.equal(pagoOriginal(mezcla, new Set(), "echeq", 200, "A").cheque_numero, "A");
+assert.equal(pagoOriginal(mezcla, new Set(), "echeq", 999).cheque_numero, "A");
+assert.equal(pagoOriginal(mezcla, new Set(), "retencion_iibb", 3, "C-1").certificado, "C-1");
 
 console.log("OK: orden de pago repartida por factura (caso Termo Córdoba).");

@@ -64,6 +64,13 @@ export interface ItemBandeja {
   regla?: { texto: string; clasificacion: ClasificacionLinea; subtipo?: string | null; contra_cuenta_id?: string | null };
   /** Cheques posibles para una línea de cheque (depósito, débito o rechazo) que no se confirma sola: la persona elige uno. */
   opcionesCheque?: { id: string; texto: string }[];
+  /** Pago a ARCA (137): VEP ya cargados en Gastos por el mismo importe y sin banco. La persona elige uno y la línea queda atada a su pago (arreglo 18). */
+  opcionesGasto?: { id: string; movimiento_id: string; descripcion: string; texto: string }[];
+  /**
+   * Rechazo (019) de un cheque de papel recibido que el CRM no tiene rechazado: se rechaza desde la línea con el tilde «Entendido» (arreglo 21).
+   * `conCobro`: tiene un cobro cargado en el CRM, que se anula (la factura vuelve a deber).
+   */
+  rechazarCheque?: { id: string; numero: string; monto: number; cliente: string | null; conCobro: boolean };
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -239,6 +246,8 @@ export interface DatosBandeja {
   sinCruces?: boolean;
   /** Gastos del mes atados a un gasto fijo cuyo pago todavía no está cruzado con el banco (débito automático sin duplicar). */
   gastosDeFijos?: { id: string; gasto_fijo_id: string; fecha: string; descripcion: string; monto: number }[];
+  /** Gastos de Impuestos (VEP) en pesos con su pago todavía sin cruzar con el banco: la línea 137 se ata a uno de estos (arreglo 18). */
+  gastosVep?: { id: string; fecha: string; descripcion: string; monto: number; movimiento_id: string }[];
 }
 
 /** Transferencia (cobro o pago de terceros) según el código del banco; las líneas viejas sin código, por el texto. */
@@ -251,9 +260,22 @@ export function esTransferencia(l: { concepto: string; codigo?: string | null })
 const mesLargo = (fecha: string) => new Date(`${fecha.slice(0, 7)}-15T12:00:00Z`).toLocaleDateString("es-AR", { month: "long", year: "numeric", timeZone: "UTC" });
 
 /**
+ * Arreglo 18 (auditoría de Impuestos, 27/10/2026): VEP cargados en Gastos que pueden ser este pago a ARCA.
+ * Mismo importe exacto y hasta 15 días antes o después; el más cercano primero. No se reservan: si dos líneas pueden ser el mismo VEP,
+ * se ofrece en las dos y la base no deja atarlo dos veces.
+ */
+function vepsDeLinea(l: LineaCruce, veps: NonNullable<DatosBandeja["gastosVep"]>): NonNullable<ItemBandeja["opcionesGasto"]> {
+  const dias = (g: { fecha: string }) => Math.abs(diasEntre(g.fecha, l.fecha));
+  return veps.filter((g) => cent(g.monto) === cent(-l.importe) && dias(g) <= 15)
+    .sort((a, b) => dias(a) - dias(b))
+    .map((g) => ({ id: g.id, movimiento_id: g.movimiento_id, descripcion: g.descripcion, texto: `${g.descripcion} · ${g.fecha.slice(0, 10).split("-").reverse().join("/")}` }));
+}
+
+/**
  * Finanzas simple: qué hacer con una línea (null = es una transferencia y no se muestra).
- * Reglas fijas del banco seguras → alta (bloque). Sugerencias fijas (137, tarjeta o FCI sin identificar, entre cuentas) → media ("Sí, es eso").
- * Cheques que no cierran solos → para vos, con los cheques posibles. Débitos automáticos → pagan el gasto del mes ya cargado, sin cargar otro.
+ * Reglas fijas del banco seguras → alta (bloque). Sugerencias fijas (137, tarjeta o FCI sin identificar, entre cuentas) → media ("Sí, es eso");
+ * el 137 con su VEP ya cargado en Gastos → «Es el VEP …». Cheques que no cierran solos → para vos, con los cheques posibles;
+ * el rechazo de un cheque de papel → «Rechazar este cheque». Débitos automáticos → pagan el gasto del mes ya cargado, sin cargar otro.
  */
 function itemSinCruces(
   l: LineaCruce & { codigo: string | null }, p: Propuesta | undefined, d: DatosBandeja, gastosUsados: Set<string>,
@@ -272,6 +294,17 @@ function itemSinCruces(
   }
   if (p?.clasificacion && ["cheque_emitido", "cheque_acreditado", "cheque_devuelto"].includes(p.clasificacion)) {
     const chPorId = new Map(d.cheques.map((c) => [c.id, c]));
+    // Arreglo 21 (27/10/2026): el cheque de papel nunca viene en los reportes de eCheq. Su rechazo se hace desde la línea («Rechazar este cheque»),
+    // en lugar de «Es el N° …», que ataba la línea sin rechazarlo. Lo informa el banco: respeta la regla de que los cheques los mueve el banco.
+    const papel = p.clasificacion === "cheque_devuelto" && p.subtipo === "recibido" && p.cheque_id ? chPorId.get(p.cheque_id) : undefined;
+    if (papel?.tipo_cheque === "fisico") {
+      return {
+        ...base, tipo: "sin_resolver", confianza: "baja", origen: "extracto", titulo: etiquetaClasificacion(p.clasificacion, p.subtipo),
+        detalle: [p.motivo], avisos: p.nota ? [p.nota] : [],
+        cruce: { clasificacion: p.clasificacion, subtipo: p.subtipo, cheque_id: papel.id },
+        rechazarCheque: { id: papel.id, numero: papel.numero, monto: Number(papel.monto), cliente: papel.origen_nombre || null, conCobro: Boolean(papel.movimiento_id) },
+      };
+    }
     const ids = [...new Set([p.cheque_id, ...p.candidatos].filter(Boolean) as string[])];
     const opciones = ids.flatMap((id) => {
       const c = chPorId.get(id);
@@ -286,11 +319,17 @@ function itemSinCruces(
     };
   }
   if (p?.clasificacion && !esCobroPago) {
+    // Pago a ARCA (137): si el VEP ya está en Gastos, se cierra con «Es el VEP …» y queda atado a su pago (como el débito automático con su fijo).
+    const veps = p.clasificacion === "impuesto" && p.subtipo === "afip" && l.importe < 0 ? vepsDeLinea(l, d.gastosVep || []) : null;
     return {
       ...base, tipo: "cruce", confianza: "media", origen: "extracto",
       titulo: `¿${etiquetaClasificacion(p.clasificacion, p.subtipo)}${otra ? ` → ${otra}` : ""}?`,
-      detalle: [p.motivo], avisos: [],
+      detalle: [p.motivo, ...(!veps ? [] : veps.length
+        ? ["En Gastos hay un VEP por el mismo importe sin banco: tocá «Es el VEP …» y el gasto queda «✓ banco»."]
+        : ["Si es un VEP, cargalo en Gastos (Leer VEP) con este monto y vuelve a aparecer acá para atarlo."])],
+      avisos: [],
       cruce: { clasificacion: p.clasificacion, subtipo: p.subtipo, contra_cuenta_id: p.contra_cuenta_id, nota: p.nota },
+      ...(veps?.length ? { opcionesGasto: veps } : {}),
     };
   }
   if (esTransferencia(l)) return null;

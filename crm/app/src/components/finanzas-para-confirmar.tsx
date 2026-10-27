@@ -9,6 +9,10 @@
 // 26/10/2026 — Finanzas simple (Augusto), en la versión `simple` (Bancos): las transferencias no se tocan (cobros y pagos los carga él),
 // sin IA ni mails; los reportes de eCheq actualizan el estado de los cheques (actualizar_cheques_segun_banco); el saldo del banco no se muestra;
 // dos Excel de la misma cuenta → el más nuevo; una línea ya confirmada no se vuelve a confirmar (solo_pendiente).
+// 27/10/2026 — Arreglo 18 (auditoría de Impuestos): la línea 137 con su VEP ya cargado en Gastos se cierra con «Es el VEP …»
+// y queda atada al pago del gasto (sigue como impuesto de ARCA; el gasto pasa a «✓ banco»).
+// 27/10/2026 — Arreglo 21: la línea 019 de un cheque de papel rechazado (nunca viene en los reportes de eCheq) se cierra con
+// «Rechazar este cheque», con el tilde «Entendido» del arreglo 7: rechazar_cheque_recibido (anula su cobro) y la línea queda atada al cheque.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
@@ -26,6 +30,8 @@ import { notaLiteral, notaCobro, armarCobroSistemaAnterior, pesos, RETENCION_LAB
 import { leerResumenBbva, cruzarResumen, textoContraparte, type Contraparte } from "@/lib/resumen-bbva";
 import { leerArcaRecibidos, facturaDelPago, numeroFactura } from "@/lib/arca-recibidos";
 import { gastosFijosParaDebito, cuitEnTexto } from "@/lib/finanzas-propuestas";
+import { grupoDe } from "@/lib/gastos-lazza";
+import { comprobanteVentaRC } from "@/lib/resumen-cuenta";
 import { leerArchivoExtracto, guardarArchivoExtracto, corregirTextosExtracto, leerHojas, type CuentaRow, type ArchivoPreview } from "@/components/extracto-bbva";
 import { leerReporteEcheq, type EcheqReporte } from "@/lib/echeq-reportes";
 import { abiertosFueraDelReporte, cambiosDeLaCarga, type ChequeAbiertoMin, type ChequeCrmMin } from "@/lib/cheques-estado-banco";
@@ -69,6 +75,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
     gastosFijosDebito: { id: string; descripcion: string; categoria: string; referencias: string[] }[];
     facturasCompra: { proveedor_id: string | null; punto_venta: number; numero: number; estado: string }[];
     gastosDeFijos: { id: string; gasto_fijo_id: string; fecha: string; descripcion: string; monto: number }[];
+    gastosVep: { id: string; fecha: string; descripcion: string; monto: number; movimiento_id: string }[];
   } | null>(null);
   const [ia, setIa] = useState<Map<string, SugerenciaIA>>(new Map());
   const [descartadas, setDescartadas] = useState<Set<string>>(new Set());
@@ -92,6 +99,8 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
   const [correccion, setCorreccion] = useState<{ clasificacion: ClasificacionLinea | ""; nota: string; recordar: boolean }>({ clasificacion: "", nota: "", recordar: false });
   // Un cheque de cliente rechazado anula su cobro al guardar: hay que tildar "Entendido" (auditoría UX 26/10/2026, arreglo 7).
   const [rechazoEntendido, setRechazoEntendido] = useState(false);
+  // Lo mismo para el cheque de papel que se rechaza desde su línea 019: la línea con el tilde «Entendido» puesto (arreglo 21).
+  const [rechazoLinea, setRechazoLinea] = useState<string | null>(null);
   const [arrastrando, setArrastrando] = useState(false);
   /** Formulario "Cobro de factura del sistema anterior" (facturas que no están en el CRM) abierto en un renglón. */
   const [anterior, setAnterior] = useState<{ linea_id: string; cliente: string; facturas: string; bruto: string; referencia: string; rets: { tipo: string; monto: string; certificado: string }[] } | null>(null);
@@ -122,7 +131,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
         traerTodo<MovRow>(() => db.from("movimientos")
           .select("id, fecha, monto, moneda, tipo, cliente_id, proveedor_id, anulado, descripcion, nota_credito_compra_id, ajuste_sentido, orden_pago_id, gasto_manual_id")
           .eq("sociedad_id", sociedadId).gte("fecha", desdeMovs).order("fecha").order("id")),
-        traerTodo<ChequeCruce>(() => db.from("echeqs").select("id, cheq_id, numero, monto, direccion, estado, fecha_pago, fecha_emision, tipo_cheque, destino_nombre, origen_nombre").eq("sociedad_id", sociedadId).order("id")),
+        traerTodo<ChequeCruce>(() => db.from("echeqs").select("id, cheq_id, numero, monto, direccion, estado, fecha_pago, fecha_emision, tipo_cheque, destino_nombre, origen_nombre, movimiento_id").eq("sociedad_id", sociedadId).order("id")),
         db.from("extracto_reglas").select("texto, sentido, clasificacion, subtipo, contra_cuenta_id, nota").eq("sociedad_id", sociedadId).eq("activa", true),
         traerTodo<Tercero>(() => db.from("clientes").select("id, razon_social, cuit").eq("sociedad_id", sociedadId).order("id")),
         traerTodo<Tercero>(() => db.from("proveedores").select("id, razon_social, cuit").eq("sociedad_id", sociedadId).order("id")),
@@ -130,7 +139,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
           .eq("sociedad_id", sociedadId).in("estado", ["emitida", "parcial", "vencida", "pagada"]).gte("fecha", "2026-01-01").order("id")),
         traerTodo<{ factura_id: string; monto: number }>(() => db.from("cobro_aplicaciones").select("factura_id, monto, facturas!inner(sociedad_id)").eq("facturas.sociedad_id", sociedadId).order("id")).catch(() => []),
         db.from("agente_mail_procesados").select("id, fecha_mail, asunto, datos").eq("sociedad_id", sociedadId).eq("categoria", "pago_retencion").gte("fecha_mail", desdeMovs).limit(500),
-        db.from("gastos_manuales").select("id, fecha, descripcion, monto, moneda, gasto_fijo_id, proveedores(cuit)").eq("sociedad_id", sociedadId).gte("fecha", desdeMovs).limit(1000),
+        db.from("gastos_manuales").select("id, fecha, descripcion, monto, moneda, gasto_fijo_id, grupo, categoria, proveedores(cuit)").eq("sociedad_id", sociedadId).gte("fecha", desdeMovs).limit(1000),
         db.from("gastos_fijos").select("id, descripcion, categoria, notas, monto, moneda, activo, proveedores(cuit)").eq("sociedad_id", sociedadId).eq("activo", true),
         db.from("finanzas_propuestas").select("linea_id, origen, datos, confianza, estado").eq("sociedad_id", sociedadId),
         db.from("finanzas_registro").select("id, created_at, accion, tipo, origen, confianza, resumen, usuario_id, resultado").eq("sociedad_id", sociedadId).order("created_at", { ascending: false }).limit(300),
@@ -163,9 +172,15 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
       // Gastos con su pago ya cruzado con una línea del banco (para no ofrecer dos veces el mismo débito automático).
       const cruzadas = new Set(ls.map((l) => l.match_movimiento_id).filter(Boolean) as string[]);
       const pagoCruzado = new Set<string>();
+      // Pago de cada gasto que todavía no está cruzado con el banco (la línea 137 se ata a ese pago con «Es el VEP …»).
+      const pagoSinCruzar = new Map<string, string>();
       for (let i = 0; i < gastosIds.length; i += 200) {
         const { data: mg } = await db.from("movimientos").select("id, gasto_manual_id").eq("sociedad_id", sociedadId).eq("anulado", false).in("gasto_manual_id", gastosIds.slice(i, i + 200));
-        for (const m of mg || []) { conPago.add(m.gasto_manual_id); if (cruzadas.has(m.id)) pagoCruzado.add(m.gasto_manual_id); }
+        for (const m of mg || []) {
+          conPago.add(m.gasto_manual_id);
+          if (cruzadas.has(m.id)) pagoCruzado.add(m.gasto_manual_id);
+          else if (!pagoSinCruzar.has(m.gasto_manual_id)) pagoSinCruzar.set(m.gasto_manual_id, m.id);
+        }
       }
 
       setCuentas(lista);
@@ -198,6 +213,9 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
         }),
         gastosDeFijos: ((gm.data || []) as any[]).filter((g) => g.gasto_fijo_id && !pagoCruzado.has(g.id)).map((g) => ({
           id: g.id, gasto_fijo_id: g.gasto_fijo_id, fecha: String(g.fecha).slice(0, 10), descripcion: g.descripcion, monto: Number(g.monto),
+        })),
+        gastosVep: ((gm.data || []) as any[]).filter((g) => grupoDe(g) === "Impuestos" && (g.moneda || "ARS") === "ARS" && !pagoCruzado.has(g.id) && pagoSinCruzar.has(g.id)).map((g) => ({
+          id: g.id, fecha: String(g.fecha).slice(0, 10), descripcion: g.descripcion || "", monto: Number(g.monto), movimiento_id: pagoSinCruzar.get(g.id)!,
         })),
       });
       const mapaIa = new Map<string, SugerenciaIA>();
@@ -241,7 +259,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
       facturas: datos.facturas, clientes: datos.clientes, proveedores: datos.proveedores,
       pagosMail: datos.pagosMail, gastos: datos.gastos, ia: simple ? new Map() : ia, descartadas,
       gastosFijosDebito: datos.gastosFijosDebito, facturasCompra: datos.facturasCompra,
-      sinCruces: simple, gastosDeFijos: datos.gastosDeFijos,
+      sinCruces: simple, gastosDeFijos: datos.gastosDeFijos, gastosVep: datos.gastosVep,
     });
   }, [datos, lineas, pendientes, cuentas, ia, descartadas, simple]);
 
@@ -531,6 +549,55 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
     }
   }
 
+  /** Pago a ARCA (137) → el VEP ya cargado en Gastos (arreglo 18): la línea queda atada al pago del gasto y sigue como impuesto de ARCA. No crea nada. */
+  async function elegirGasto(item: ItemBandeja, o: NonNullable<ItemBandeja["opcionesGasto"]>[number]) {
+    if (!item.cruce) return;
+    setOcupado(item.linea_id);
+    try {
+      const salteadas = await aplicarCruces([{ linea_id: item.linea_id, clasificacion: item.cruce.clasificacion, subtipo: item.cruce.subtipo || null, movimiento_id: o.movimiento_id, nota: notaDe(item, undefined, `VEP cargado en Gastos: ${o.descripcion}.`) }]);
+      if (salteadas) setAviso("Esa línea ya la había confirmado otra persona (u otra pestaña): no se tocó.");
+      else await anotar(item, "confirmada", { gasto_id: o.id, movimiento_id: o.movimiento_id }, `${formatDate(item.fecha)} ${formatCurrency(item.importe)} · ${item.concepto} → VEP de Gastos: ${o.descripcion}`);
+      await cargar();
+    } catch (e) {
+      alert(`No se pudo guardar: ${errorTexto(e)}`);
+    } finally {
+      setOcupado(null);
+    }
+  }
+
+  /**
+   * Cheque de papel rechazado por el banco (línea 019, arreglo 21): la misma función que el reporte de eCheq (anula su cobro, la factura
+   * vuelve a deber y deja el aviso en la campana) y después la línea queda atada al cheque. Primero el rechazo: si el cruce fallara,
+   * la línea vuelve como «ya rechazado en el CRM» y se confirma con las seguras.
+   */
+  async function rechazarCheque(item: ItemBandeja) {
+    const r = item.rechazarCheque;
+    if (!r) return;
+    setOcupado(item.linea_id);
+    try {
+      const { data, error: e } = await (supabase as any).rpc("rechazar_cheque_recibido", { p_cheque_id: r.id, p_motivo: `Rechazado por el banco (extracto del ${formatDate(item.fecha)})` });
+      if (e) throw e;
+      const facturas = ((data?.facturas || []) as string[]).map((id) => {
+        const f = datos?.facturas.find((x) => x.id === id);
+        return f ? comprobanteVentaRC(f) : "otra factura";
+      });
+      const cheque = `Cheque N° ${r.numero}${r.cliente ? ` de ${r.cliente}` : ""} (${formatCurrency(r.monto)})`;
+      const salteadas = await aplicarCruces([{ linea_id: item.linea_id, clasificacion: "cheque_devuelto", subtipo: "recibido", cheque_id: r.id, nota: notaDe(item, undefined, `Rechazado en el CRM desde esta línea${data?.cobro_anulado ? "; se anuló su cobro" : ""}.`) }]);
+      await anotar(item, "cheque_rechazado", { cheque_id: r.id, rechazo: data }, `${formatDate(item.fecha)} ${formatCurrency(item.importe)} · ${item.concepto} → ${cheque} rechazado${data?.cobro_anulado ? " (se anuló el cobro)" : ""}`);
+      setAviso([
+        data?.replayed ? `${cheque}: ya estaba rechazado en el CRM.` : `✔ ${cheque} rechazado.${data?.cobro_anulado ? ` Se anuló su cobro${facturas.length ? ` y vuelve${facturas.length > 1 ? "n" : ""} a deber: ${facturas.join(", ")}` : ""}.` : ""}`,
+        ...(Array.isArray(data?.avisos) ? data.avisos.map(String) : []),
+        salteadas ? "La línea ya la había confirmado otra persona (u otra pestaña): no se tocó." : "",
+      ].filter(Boolean).join("\n"));
+      setRechazoLinea(null);
+      await cargar();
+    } catch (e) {
+      alert(`No se pudo rechazar el cheque: ${errorTexto(e)}`);
+    } finally {
+      setOcupado(null);
+    }
+  }
+
   async function descartar(item: ItemBandeja) {
     const motivo = prompt("¿Por qué lo descartás? (queda en el Registro; la línea sigue en Extractos para resolverla a mano)", "");
     if (motivo === null) return;
@@ -798,8 +865,9 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
   const renglon = (i: ItemBandeja) => {
     const abiertoCorregir = corrigiendo === i.linea_id;
     // Línea de cheque con cheques posibles: se cierra tocando "Es el N° …" (así queda atada al cheque).
-    // "Sí, es eso" la cerraba sin atarla (auditoría UX 26/10/2026, arreglo 7).
-    const puedeConfirmar = Boolean(i.cobro || i.gasto || i.gastoFijo || i.pagoProveedor || (i.cruce && !i.opcionesCheque?.length)) && !faltaMigracion;
+    // "Sí, es eso" la cerraba sin atarla (auditoría UX 26/10/2026, arreglo 7). Igual el pago a ARCA con su VEP en Gastos: «Es el VEP …» (arreglo 18)
+    // y el cheque de papel rechazado: «Rechazar este cheque» (arreglo 21).
+    const puedeConfirmar = Boolean(i.cobro || i.gasto || i.gastoFijo || i.pagoProveedor || (i.cruce && !i.opcionesCheque?.length && !i.opcionesGasto?.length && !i.rechazarCheque)) && !faltaMigracion;
     return (
       <div key={i.linea_id} className="py-2">
         <div className="flex flex-wrap items-start gap-2 text-sm">
@@ -823,6 +891,36 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
                 ))}
               </div>
             )}
+            {i.opcionesGasto && i.opcionesGasto.length > 0 && !faltaMigracion && (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {i.opcionesGasto.map((o) => (
+                  <button key={o.id} type="button" disabled={ocupado !== null} onClick={() => void elegirGasto(i, o)} title={`Es el VEP: ${o.texto}`}
+                    className="max-w-full truncate rounded-md border border-emerald-300 px-2 py-0.5 text-xs text-emerald-800 hover:bg-emerald-50 disabled:opacity-50 dark:border-emerald-800 dark:text-emerald-200">
+                    Es el VEP: {o.texto}
+                  </button>
+                ))}
+              </div>
+            )}
+            {i.rechazarCheque && !faltaMigracion && (() => {
+              const r = i.rechazarCheque;
+              const entendido = rechazoLinea === i.linea_id;
+              const cheque = `cheque N° ${r.numero}${r.cliente ? ` de ${r.cliente}` : ""} (${formatCurrency(r.monto)})`;
+              return (
+                <div className="mt-1 space-y-1">
+                  <label className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 px-2 py-1.5 text-xs font-medium text-red-800 dark:border-red-800 dark:bg-red-950/30 dark:text-red-200">
+                    <input type="checkbox" checked={entendido} onChange={(e) => setRechazoLinea(e.target.checked ? i.linea_id : null)} className="mt-0.5" />
+                    <span>{r.conCobro
+                      ? `Entendido: al rechazarlo se anula el cobro del ${cheque} y la factura vuelve a deber.`
+                      : `Entendido: el ${cheque} queda rechazado. No tiene un cobro cargado en el CRM: la deuda reclamala aparte.`}</span>
+                  </label>
+                  <button type="button" disabled={ocupado !== null || !entendido} onClick={() => void rechazarCheque(i)}
+                    title={entendido ? undefined : "Tildá «Entendido» para rechazarlo"}
+                    className="rounded-md bg-red-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50">
+                    {ocupado === i.linea_id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Rechazar este cheque"}
+                  </button>
+                </div>
+              );
+            })()}
           </div>
           <span className={`w-32 shrink-0 text-right font-mono ${i.importe < 0 ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(i.importe)}</span>
           <div className="flex shrink-0 gap-1">

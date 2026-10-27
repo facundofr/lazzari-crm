@@ -13,9 +13,9 @@ import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { clasificarMovimiento, esCobroDeCliente, type ClaseMovimiento } from "@/lib/tipos-movimiento";
-import { armarRetenciones, comprobanteVenta, type FilaRetencion } from "@/lib/finanzas-lazza";
+import { armarRetenciones, comprobanteVenta, excelRetencionesSufridas, totalesRetenciones, type FilaRetencion } from "@/lib/finanzas-lazza";
 import { textoTotalRecibo, type Recibo } from "@/lib/recibos";
-import { abrirRecibo, EnviarRecibo, SIN_MIGRACION_RECIBOS, traerRecibos } from "@/components/finanzas-lazza/recibo-doc";
+import { abrirRecibo, EnviarRecibo, SIN_MIGRACION_RECIBOS, traerRecibo, traerRecibos } from "@/components/finanzas-lazza/recibo-doc";
 import { useUser } from "@/lib/auth-context";
 import { descargarOP, EnviarOrdenPago, verOP } from "@/components/finanzas-lazza/orden-pago-doc";
 import { CobrarCliente } from "@/components/finanzas-lazza/cobrar";
@@ -23,6 +23,7 @@ import { PagarProveedor } from "@/components/finanzas-lazza/pagar";
 import { NuevoMovimiento } from "@/components/finanzas-lazza/nuevo-movimiento";
 import { Modal } from "@/components/ui/modal";
 import { pctTexto, type AvisosSicore } from "@/lib/certificado-retencion";
+import { coincideNumeroCheque } from "@/lib/cheques-lazza";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -96,6 +97,17 @@ function Fechas({ desde, hasta, setDesde, setHasta }: { desde: string; hasta: st
   );
 }
 
+/** Lo que se busca está fuera de las fechas elegidas (arreglo 20, 27/10/2026): se avisa y un clic saca las fechas. */
+function FueraDeFechas({ cantidad, texto, ver }: { cantidad: number; texto: string; ver: () => void }) {
+  if (cantidad <= 0) return null;
+  return (
+    <p className="border-b border-zinc-200 px-3 py-1.5 text-xs text-amber-700 dark:border-zinc-700 dark:text-amber-300">
+      Hay {cantidad} más con «{texto.trim()}» fuera de las fechas.{" "}
+      <button type="button" onClick={ver} className="font-medium underline hover:text-orange-600">Ver todas las fechas</button>
+    </p>
+  );
+}
+
 const enRango = (fecha: string, desde: string, hasta: string) => (!desde || fecha >= desde) && (!hasta || fecha <= hasta);
 const sumar = <T,>(filas: T[], monto: (f: T) => number, moneda: (f: T) => "ARS" | "USD") => {
   const t = { ARS: 0, USD: 0 };
@@ -165,7 +177,7 @@ function AnularOP({ op, sociedadId, onClose, onAnulada }: {
   );
 }
 
-interface OP { id: string; proveedorId: string | null; numero: string; fecha: string; proveedor: string; cuit: string; bruto: number; retGan: number; retPct: number | null; neto: number; moneda: "ARS" | "USD"; medios: string[]; estado: string; enviada: string | null; sobreVerde: boolean }
+interface OP { id: string; proveedorId: string | null; numero: string; fecha: string; proveedor: string; cuit: string; bruto: number; retGan: number; retPct: number | null; neto: number; moneda: "ARS" | "USD"; medios: string[]; cheques: string[]; estado: string; enviada: string | null; sobreVerde: boolean }
 
 export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string }) {
   const [recarga, setRecarga] = useState(0);
@@ -180,6 +192,7 @@ export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string })
         bruto: Number(r.monto_bruto || 0), retGan: Number(r.retencion_ganancias_monto || 0), retPct: r.retencion_ganancias_pct ?? null,
         neto: Number(r.neto_a_pagar ?? r.neto ?? 0), moneda: mon(r.moneda),
         medios: medios.length > 1 ? medios.map((m) => MEDIO_LABEL[m.tipo] || m.tipo) : [MEDIO_LABEL[r.medio_pago || "transferencia"] || r.medio_pago || "Transf."],
+        cheques: medios.filter((m) => ["cheque", "cheque_propio", "echeq"].includes(m?.tipo) && m?.numero_cheque).map((m) => String(m.numero_cheque)),
         estado: r.estado || "pendiente", enviada: r.email_enviado_at || null, sobreVerde: !!r.sobre_verde,
       };
     });
@@ -195,9 +208,11 @@ export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string })
   const [desde, setDesde] = useState("");
   const [hasta, setHasta] = useState("");
   const q = sinAcentos(texto.trim());
-  const visibles = useMemo(() => (datos || []).map((o) => (enviadas[o.id] ? { ...o, enviada: enviadas[o.id] } : o)).filter((o) =>
-    (!estado || o.estado === estado) && (!envio || (envio === "si") === !!o.enviada) && enRango(o.fecha, desde, hasta)
-    && (!q || sinAcentos(`${o.numero} ${o.proveedor} ${o.cuit} ${o.medios.join(" ")}`).includes(q))), [datos, enviadas, estado, envio, desde, hasta, q]);
+  // Arreglo 20 (27/10/2026): también por N° de cheque, con o sin los ceros de adelante.
+  const coinciden = useMemo(() => (datos || []).map((o) => (enviadas[o.id] ? { ...o, enviada: enviadas[o.id] } : o)).filter((o) =>
+    (!estado || o.estado === estado) && (!envio || (envio === "si") === !!o.enviada)
+    && (!q || sinAcentos(`${o.numero} ${o.proveedor} ${o.cuit} ${o.medios.join(" ")}`).includes(q) || coincideNumeroCheque(o.cheques, texto))), [datos, enviadas, estado, envio, q, texto]);
+  const visibles = useMemo(() => coinciden.filter((o) => enRango(o.fecha, desde, hasta)), [coinciden, desde, hasta]);
   const cols: Column<OP>[] = [
     { key: "numero", label: "N°", sortable: true, sortValue: (o) => o.numero, render: (o) => <span className={`whitespace-nowrap font-mono text-xs ${o.estado === "anulada" ? "text-zinc-400 line-through" : ""}`}>{o.numero}</span> },
     { key: "fecha", label: "Fecha", sortable: true, sortValue: (o) => o.fecha, render: (o) => <span className="whitespace-nowrap">{formatDate(o.fecha)}</span> },
@@ -231,11 +246,12 @@ export function FinanzasLazzaOrdenesPago({ sociedadId }: { sociedadId: string })
         className="inline-flex h-8 items-center gap-1 rounded-lg bg-orange-500 px-3 text-sm font-medium text-white hover:bg-orange-600">
         <Wallet className="h-4 w-4" /> Nueva OP
       </button>
-      <Buscador valor={texto} cambiar={setTexto} placeholder="Buscar N°, proveedor, CUIT o medio" />
+      <Buscador valor={texto} cambiar={setTexto} placeholder="Buscar N°, proveedor, CUIT, medio o N° de cheque" />
       <select value={estado} onChange={(e) => setEstado(e.target.value)} className={control}><option value="">Todos los estados</option><option value="pendiente">Pendientes</option><option value="pagada">Pagadas</option><option value="anulada">Anuladas</option></select>
       <select value={envio} onChange={(e) => setEnvio(e.target.value)} className={control}><option value="">Enviadas y no</option><option value="si">Enviadas por mail</option><option value="no">No enviadas</option></select>
       <Fechas desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} />
     </>} pie={<><span>{visibles.length} órdenes</span><span>Entregado <b className="font-mono">{sumar(visibles.filter((o) => o.estado !== "anulada"), (o) => o.neto, (o) => o.moneda)}</b></span></>}>
+      <FueraDeFechas cantidad={q ? coinciden.length - visibles.length : 0} texto={texto} ver={() => { setDesde(""); setHasta(""); }} />
       <DataTable columns={cols} data={visibles} emptyMessage="No hay órdenes de pago con ese filtro" />
       <EnviarOrdenPago opId={enviando} onClose={() => setEnviando(null)} onEnviada={(id, fecha) => setEnviadas((e) => ({ ...e, [id]: fecha }))} />
       {pagando && <PagarProveedor sociedadId={sociedadId} onClose={() => setPagando(false)} onPagado={() => setRecarga((n) => n + 1)} />}
@@ -333,8 +349,10 @@ export function FinanzasLazzaRecibos({ sociedadId }: { sociedadId: string }) {
     return () => { vivo = false; };
   }, [sociedadId, recarga]);
   const q = sinAcentos(texto.trim());
-  const visibles = useMemo(() => (datos || []).filter((r) => enRango(r.fecha, desde, hasta)
-    && (!q || sinAcentos(`${r.numero} ${r.cliente} ${r.facturas.join(" ")} ${resumenMedios(r)}`).includes(q))), [datos, desde, hasta, q]);
+  // Arreglo 20 (27/10/2026): también por N° de cheque, con o sin los ceros de adelante.
+  const coinciden = useMemo(() => (datos || []).filter((r) => !q || sinAcentos(`${r.numero} ${r.cliente} ${r.facturas.join(" ")} ${resumenMedios(r)}`).includes(q)
+    || coincideNumeroCheque(r.cheques, texto)), [datos, q, texto]);
+  const visibles = useMemo(() => coinciden.filter((r) => enRango(r.fecha, desde, hasta)), [coinciden, desde, hasta]);
   if (sinMigracion) return (
     <div className="space-y-2">
       <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">Los recibos numerados todavía no están activos (falta correr la migración 20261019210000). Por ahora se ve 1 renglón por movimiento.</p>
@@ -371,9 +389,10 @@ export function FinanzasLazzaRecibos({ sociedadId }: { sociedadId: string }) {
           className="inline-flex h-8 items-center gap-1 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700">
           <HandCoins className="h-4 w-4" /> Nuevo cobro
         </button>
-        <Buscador valor={texto} cambiar={setTexto} placeholder="Buscar N°, cliente, factura o medio" />
+        <Buscador valor={texto} cambiar={setTexto} placeholder="Buscar N°, cliente, factura, medio o N° de cheque" />
         <Fechas desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} />
       </>} pie={<><span>{visibles.length} recibos</span><span>Cobrado <b className="font-mono text-emerald-700 dark:text-emerald-400">{textoTotalRecibo(cobrado, (v, m) => formatCurrency(v, m))}</b></span></>}>
+        <FueraDeFechas cantidad={q ? coinciden.length - visibles.length : 0} texto={texto} ver={() => { setDesde(""); setHasta(""); }} />
         <DataTable columns={cols} data={visibles} emptyMessage="No hay recibos con ese filtro" />
       </Marco>
       {cobrando && <CobrarCliente sociedadId={sociedadId} onClose={() => setCobrando(false)} onCobrado={() => setRecarga((n) => n + 1)} />}
@@ -540,7 +559,13 @@ function ExportarSicore({ sociedadId, desde, hasta }: { sociedadId: string; desd
   );
 }
 
+/**
+ * Retenciones practicadas (las de nuestras OP, van al TXT SICORE) y sufridas (las que nos hicieron los clientes).
+ * Sufridas (auditoría UX 26/10/2026, arreglo 14): N° de certificado o "falta" (se lee del texto: `certificadoDeRetencion`)
+ * con el filtro "Falta certificado", el recibo como origen (abre su PDF), totales por impuesto y Excel para el contador.
+ */
 export function FinanzasLazzaRetenciones({ sociedadId }: { sociedadId: string }) {
+  const { sociedadActiva } = useUser();
   const { datos, error } = useCarga<FilaRetencion[]>(async () => {
     const [ops, movs] = await Promise.all([
       traerTodo<any>(() => db.from("ordenes_pago").select("id, numero, fecha, estado, moneda, retencion_ganancias_monto, retencion_ganancias_pct, base_retencion_ganancias, proveedores(razon_social, cuit)")
@@ -548,23 +573,61 @@ export function FinanzasLazzaRetenciones({ sociedadId }: { sociedadId: string })
       traerTodo<any>(() => db.from("movimientos").select("id, tipo, fecha, monto, moneda, anulado, descripcion, cliente_id, proveedor_id, retencion_ganancias_monto, retencion_ganancias_pct, base_retencion_ganancias, clientes(razon_social, cuit), proveedores(razon_social, cuit)")
         .eq("sociedad_id", sociedadId).or("tipo.in.(retencion_iva,retencion_ganancias,retencion_iibb,retencion_suss),retencion_ganancias_monto.gt.0").order("id")),
     ]);
-    return armarRetenciones({ ops, movimientos: movs });
+    // Recibo de cada retención sufrida, para el origen (si falla, quedan sin recibo y se ve el texto al pasar el mouse).
+    const ids = movs.filter((m) => String(m.tipo || "").startsWith("retencion_") && m.cliente_id).map((m) => m.id);
+    const recibos: Record<string, { id: string; numero: number }> = {};
+    for (let i = 0; i < ids.length; i += 200) {
+      const { data } = await db.from("recibo_movimientos").select("movimiento_id, recibos(id, numero)").in("movimiento_id", ids.slice(i, i + 200));
+      for (const r of data || []) if (r.recibos?.numero) recibos[r.movimiento_id] = { id: r.recibos.id, numero: r.recibos.numero };
+    }
+    return armarRetenciones({ ops, movimientos: movs, recibos });
   }, [sociedadId]);
   const [lado, setLado] = useState<"practicada" | "sufrida">("practicada");
+  const [soloFalta, setSoloFalta] = useState(false);
   const [texto, setTexto] = useState("");
   const [desde, setDesde] = useState(primeroDelMes());
   const [hasta, setHasta] = useState("");
+  const sufridas = lado === "sufrida";
   const q = sinAcentos(texto.trim());
-  const visibles = useMemo(() => (datos || []).filter((r) => r.lado === lado && enRango(r.fecha, desde, hasta)
-    && (!q || sinAcentos(`${r.nombre} ${r.cuit} ${r.origen} ${r.impuesto}`).includes(q))), [datos, lado, desde, hasta, q]);
+  const delLado = useMemo(() => (datos || []).filter((r) => r.lado === lado && enRango(r.fecha, desde, hasta)
+    && (!q || sinAcentos(`${r.nombre} ${r.cuit} ${r.origen} ${r.impuesto} ${r.certificado || ""} ${r.detalle}`).includes(q))), [datos, lado, desde, hasta, q]);
+  const faltan = useMemo(() => delLado.filter((r) => r.faltaCertificado), [delLado]);
+  const visibles = sufridas && soloFalta ? faltan : delLado;
+  const faltanVisibles = visibles.filter((r) => r.faltaCertificado);
+
+  const verRecibo = async (r: FilaRetencion) => {
+    if (!r.recibo || !sociedadActiva) return;
+    const rec = await traerRecibo(sociedadId, r.recibo.id).catch(() => null);
+    if (rec) abrirRecibo(rec, sociedadActiva, true);
+    else alert("No se pudo abrir el recibo.");
+  };
+  const bajarExcel = async () => {
+    const XLSX: any = await import("xlsx");
+    const filas = excelRetencionesSufridas(visibles);
+    const ws = XLSX.utils.aoa_to_sheet(filas);
+    const anchos: Record<string, number> = { Fecha: 11, Impuesto: 16, Cliente: 36, CUIT: 16, Certificado: 16, Recibo: 8, Moneda: 8, Retenido: 14, "Detalle completo": 90 };
+    ws["!cols"] = filas[0].map((h) => ({ wch: anchos[String(h)] || 14 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Sufridas");
+    XLSX.writeFile(wb, `Retenciones sufridas ${desde ? `${desde} a` : "hasta"} ${hasta || todayAR()}.xlsx`);
+  };
+
   const cols: Column<FilaRetencion>[] = [
     { key: "fecha", label: "Fecha", sortable: true, sortValue: (r) => r.fecha, render: (r) => formatDate(r.fecha) },
-    { key: "lado", label: "Tipo", sortable: true, sortValue: (r) => r.lado, render: (r) => <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${r.lado === "practicada" ? "bg-orange-50 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300" : "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"}`}>{r.lado === "practicada" ? "Practicada" : "Sufrida"}</span> },
     { key: "impuesto", label: "Impuesto", sortable: true, sortValue: (r) => r.impuesto },
-    { key: "origen", label: "Origen", sortable: true, sortValue: (r) => r.origen, render: (r) => <span className="text-xs">{r.origen || "—"}</span> },
+    { key: "origen", label: "Origen", sortable: true, sortValue: (r) => r.origen, render: (r) => (r.recibo
+      ? <button type="button" title={`${r.detalle}\n\nTocá para ver el recibo`} onClick={(e) => { e.stopPropagation(); void verRecibo(r); }}
+          className="whitespace-nowrap text-xs text-zinc-700 underline decoration-dotted underline-offset-2 hover:text-orange-600 dark:text-zinc-300">{r.origen}</button>
+      : <span className="text-xs" title={r.detalle || undefined}>{r.origen || "—"}</span>) },
     { key: "nombre", label: "Cliente / Proveedor", sortable: true, sortValue: (r) => r.nombre, render: (r) => <span>{r.nombre || "—"}{r.cuit && <span className="block text-[10px] text-zinc-400">CUIT {r.cuit}</span>}</span> },
-    { key: "base", label: "Base", sortable: true, sortValue: (r) => r.base ?? 0, className: "text-right", render: (r) => (r.base === null ? "—" : <span className="whitespace-nowrap font-mono">{formatCurrency(r.base, r.moneda)}</span>) },
-    { key: "pct", label: "%", sortable: true, sortValue: (r) => r.pct ?? 0, className: "text-right", render: (r) => (r.pct === null ? "—" : `${r.pct}%`) },
+    ...(sufridas ? [
+      { key: "certificado", label: "Certificado", sortable: true, sortValue: (r) => r.certificado || "", render: (r) => (r.certificado
+        ? <span className="whitespace-nowrap font-mono text-xs">{r.certificado}</span>
+        : <span className="text-xs font-medium text-amber-600 dark:text-amber-400" title="Sin el N° de certificado no se puede computar">falta</span>) },
+    ] as Column<FilaRetencion>[] : [
+      { key: "base", label: "Base", sortable: true, sortValue: (r) => r.base ?? 0, className: "text-right", render: (r) => (r.base === null ? "—" : <span className="whitespace-nowrap font-mono">{formatCurrency(r.base, r.moneda)}</span>) },
+      { key: "pct", label: "%", sortable: true, sortValue: (r) => r.pct ?? 0, className: "text-right", render: (r) => (r.pct === null ? "—" : `${r.pct}%`) },
+    ] as Column<FilaRetencion>[]),
     { key: "monto", label: "Retenido", sortable: true, sortValue: (r) => r.monto, className: "text-right", render: (r) => <span className="whitespace-nowrap font-mono font-semibold">{formatCurrency(r.monto, r.moneda)}</span> },
   ];
   return (
@@ -575,12 +638,28 @@ export function FinanzasLazzaRetenciones({ sociedadId }: { sociedadId: string })
           {l}
         </button>
       ))}
-      <Buscador valor={texto} cambiar={setTexto} placeholder="Buscar nombre, CUIT u OP" />
+      {sufridas && (
+        <button type="button" onClick={() => setSoloFalta((v) => !v)} title="Solo las que no tienen N° de certificado: sin el certificado no se pueden computar"
+          className={`rounded-lg border px-3 py-1 text-xs font-medium ${soloFalta ? "border-amber-400 bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300" : "border-zinc-200 bg-white text-zinc-600 hover:border-amber-300 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"}`}>
+          Falta certificado ({faltan.length})
+        </button>
+      )}
+      <Buscador valor={texto} cambiar={setTexto} placeholder={sufridas ? "Buscar cliente, CUIT, certificado o recibo" : "Buscar nombre, CUIT u OP"} />
       <Fechas desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} />
-      <ExportarSicore sociedadId={sociedadId} desde={desde} hasta={hasta} />
-    </>} pie={<>
+      {sufridas ? (
+        <button type="button" disabled={!visibles.length} onClick={() => void bajarExcel()} title="Las retenciones sufridas que se ven, para el contador: con el N° de certificado y el total por impuesto"
+          className="flex h-8 items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+          <Download className="h-3 w-3" /> Excel
+        </button>
+      ) : <ExportarSicore sociedadId={sociedadId} desde={desde} hasta={hasta} />}
+    </>} pie={sufridas ? <>
       <span>{visibles.length} retenciones</span>
-      <span>{lado === "practicada" ? "Practicadas" : "Sufridas"} <b className="font-mono">{sumar(visibles, (r) => r.monto, (r) => r.moneda)}</b></span>
+      {totalesRetenciones(visibles).map((t) => <span key={`${t.impuesto}-${t.moneda}`}>{t.impuesto} <b className="font-mono">{formatCurrency(t.monto, t.moneda)}</b></span>)}
+      <span>Total <b className="font-mono">{sumar(visibles, (r) => r.monto, (r) => r.moneda)}</b></span>
+      {faltanVisibles.length > 0 && <span className="text-amber-700 dark:text-amber-400">Falta certificado <b className="font-mono">{sumar(faltanVisibles, (r) => r.monto, (r) => r.moneda)}</b> ({faltanVisibles.length})</span>}
+    </> : <>
+      <span>{visibles.length} retenciones</span>
+      <span>Practicadas <b className="font-mono">{sumar(visibles, (r) => r.monto, (r) => r.moneda)}</b></span>
     </>}>
       <DataTable columns={cols} data={visibles} emptyMessage="No hay retenciones con ese filtro" />
     </Marco>

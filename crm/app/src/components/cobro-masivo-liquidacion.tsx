@@ -5,7 +5,7 @@ import { X, Plus, Trash2, AlertCircle, Copy, ArrowDown, RefreshCw, Maximize2, Mi
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
 import { parseDecimalInput, toDecimalInput } from "@/lib/decimal-input";
-import { buildOrdenPagoPlan, type OpParsed } from "@/lib/orden-pago-plan";
+import { buildOrdenPagoPlan, pagoOriginal, type OpParsed } from "@/lib/orden-pago-plan";
 import { fechaMedioCobro, avisoFechaCobroFutura } from "@/lib/fecha-cobro";
 import { repartirCobro, avisoDiferenciaCobro, facturasParaRegistrar } from "@/lib/cobro-reparto";
 import { fuentesSaldoFavorCliente, repartirSaldoFavorCliente, faltaSegunOrden, type FuenteSaldoFavorCliente } from "@/lib/saldo-favor-cliente";
@@ -253,10 +253,11 @@ export default function CobroMasivoLiquidacion({
       // paga otras facturas (por ejemplo en dólares), su parte queda informada aparte.
       const plan = buildOrdenPagoPlan(parsed, facturas.map((f) => ({ id: f.id, numero: f.numero })));
       const originales: any[] = Array.isArray(parsed.pagos) ? parsed.pagos : [];
-      const original = (tipo: string, monto: number) => originales.find((p) => String(p.tipo || "").toLowerCase() === tipo && Math.abs(Number(p.monto || 0) - monto) < 0.01)
-        || originales.find((p) => String(p.tipo || "").toLowerCase() === tipo) || {};
+      // Cada pago leído se usa una sola vez (27/10/2026: dos eCheqs de Rebsa del mismo importe salían con el N° y la fecha del primero).
+      const usados = new Set<any>();
+      const original = (tipo: string, monto: number, referencia?: string): any => pagoOriginal(originales, usados, tipo, monto, referencia) || {};
       const parsedRetenciones: RetencionLinea[] = plan.retenciones.map((r) => {
-        const p = original(r.tipo, r.monto);
+        const p = original(r.tipo, r.monto, r.certificado);
         return {
           _id: uid(),
           tipo: RETENCION_TIPOS.some((option) => option.value === r.tipo) ? r.tipo : "ajuste",
@@ -267,7 +268,7 @@ export default function CobroMasivoLiquidacion({
         };
       });
       const parsedMedios: MedioPago[] = plan.medios.map((m) => {
-        const p = original(m.tipo, m.monto);
+        const p = original(m.tipo, m.monto, m.referencia);
         const tipo = m.tipo;
         // Todo cheque recibido se presume electrónico. Solo el operador puede
         // cambiarlo a físico con la casilla explícita antes de confirmar.

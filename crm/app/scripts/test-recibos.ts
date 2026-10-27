@@ -60,4 +60,23 @@ const [r4] = armarRecibos({
 });
 assert.equal(r4.banco, "pendiente", "falta un cheque: sigue pendiente");
 
+// Arreglo 20 (27/10/2026): N° de los cheques de cada recibo (también si el cobro se anuló, ej. cheque rechazado), para buscarlo
+assert.deepEqual(r1.cheques, [], "sin la lista de cheques: vacío");
+const conCheques = armarRecibos({
+  recibos: [{ id: "a", numero: 1061, fecha: "2026-10-24", cliente_id: null }, { id: "b", numero: 1037, fecha: "2026-10-01", cliente_id: null }],
+  vinculos: [{ recibo_id: "a", movimiento_id: "c1" }, { recibo_id: "a", movimiento_id: "c2" }, { recibo_id: "a", movimiento_id: "ret" }, { recibo_id: "b", movimiento_id: "c3" }],
+  movimientos: [
+    { id: "c1", tipo: "cheque_recibido", monto: 1038632.84, moneda: "ARS" },
+    { id: "c2", tipo: "cheque_recibido", monto: 1038632.85, moneda: "ARS" },
+    { id: "ret", tipo: "retencion_iibb", monto: 100, moneda: "ARS" },
+    { id: "c3", tipo: "cheque_recibido", monto: 0, monto_original: 9220848.56, moneda: "ARS", anulado: true },
+  ],
+  cheques: [
+    { numero: "11423615", movimiento_id: "c1" }, { numero: "11423614", movimiento_id: "c2" },
+    { numero: "00000176", movimiento_id: "c3" }, { numero: "999", movimiento_id: "otro" }, { numero: "888", movimiento_id: null },
+  ],
+});
+assert.deepEqual(conCheques.find((r) => r.numero === 1061)!.cheques, ["11423615", "11423614"]);
+assert.deepEqual(conCheques.find((r) => r.numero === 1037)!.cheques, ["00000176"], "cobro anulado: el cheque sigue figurando");
+
 console.log("test-recibos OK");

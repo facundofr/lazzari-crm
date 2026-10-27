@@ -1,6 +1,7 @@
 // Prueba rápida: npx tsx scripts/test-finanzas-propuestas.ts
 import assert from "node:assert/strict";
 import { armarBandeja, esTransferencia, nombreEsComienzoDe, textoParaRegla, cuitEnTexto, lineasParaIA, resumenBandeja, gastosFijosParaDebito, type DatosBandeja, type FacturaBandeja } from "../src/lib/finanzas-propuestas";
+import type { ChequeCruce } from "../src/lib/extracto-bbva";
 
 const CTA = "cta-cc";
 const fac = (id: string, pv: number, numero: number, saldo: number, cliente: string, extra: Partial<FacturaBandeja> = {}): FacturaBandeja => ({
@@ -261,6 +262,74 @@ assert.equal(cuitEnTexto("CTE 007875 285 30707784292 X"), "30707784292");
   assert.equal(s("raro")?.titulo, "Salida sin identificar", "lo que no es transferencia ni regla queda para vos");
   assert.ok(esTransferencia({ concepto: "TRANSFERENCIA CCP091 312483 1" }), "sin código: por el texto");
   assert.ok(!esTransferencia({ concepto: "TRANSF ALGO", codigo: "263" }), "con código: manda el código");
+}
+
+// 27/10/2026 — Arreglo 18 (auditoría de Impuestos): el pago a ARCA (137) ofrece «Es el VEP …» con los gastos de Impuestos cargados por el
+// mismo importe exacto, hasta 15 días antes o después y sin banco (el más cercano primero). Sin VEP cargado, la sugerencia de siempre con la ayuda.
+{
+  const veps = armarBandeja({
+    ...base, sinCruces: true,
+    gastosVep: [
+      { id: "aut", fecha: "2026-10-23", descripcion: "ARCA Autónomos — período 09/2026", monto: 107789.2, movimiento_id: "mov-aut" },
+      { id: "aut-antes", fecha: "2026-10-12", descripcion: "ARCA Autónomos — otro con el mismo importe", monto: 107789.2, movimiento_id: "mov-aut-antes" },
+      { id: "lejos", fecha: "2026-09-20", descripcion: "Mismo importe, más de 15 días", monto: 107789.2, movimiento_id: "mov-lejos" },
+      { id: "iva", fecha: "2026-10-21", descripcion: "VEP IVA", monto: 1518750.73, movimiento_id: "mov-iva" },
+    ],
+    lineas: [
+      { id: "v137", fecha: "2026-10-23", concepto: "PAGO SERVICI 17779347 OP3636 #137", importe: -107789.2, cuenta_id: CTA },
+      { id: "v-centavo", fecha: "2026-10-21", concepto: "PAGO DE SERVICIOS TARJETA 17779347 OP1397 #137", importe: -1518750.74, cuenta_id: CTA },
+      { id: "v-viejo", fecha: "2026-10-21", concepto: "PAGO DE SERVICIOS TARJETA 17779347 OP1396", importe: -1518750.73, cuenta_id: CTA },
+      { id: "v-ley", fecha: "2026-10-21", concepto: "IMP. LEY 25413 DEB", importe: -1518750.73, cuenta_id: CTA },
+    ],
+  });
+  const v = (id: string) => veps.find((i) => i.linea_id === id);
+  assert.deepEqual(v("v137")?.opcionesGasto?.map((o) => o.id), ["aut", "aut-antes"], "mismo importe y hasta 15 días, el más cercano primero");
+  assert.equal(v("v137")?.opcionesGasto?.[0].movimiento_id, "mov-aut", "se ata al pago del gasto");
+  assert.equal(v("v137")?.opcionesGasto?.[0].texto, "ARCA Autónomos — período 09/2026 · 23/10/2026");
+  assert.equal(v("v137")?.cruce?.clasificacion, "impuesto", "sigue como impuesto de ARCA");
+  assert.equal(v("v137")?.cruce?.subtipo, "afip");
+  assert.equal(v("v137")?.confianza, "media", "no se confirma sola");
+  assert.ok(v("v137")?.detalle.some((t) => t.includes("Es el VEP")));
+  assert.equal(v("v-centavo")?.opcionesGasto, undefined, "un centavo de diferencia no es el mismo VEP");
+  assert.ok(v("v-centavo")?.detalle.some((t) => t.includes("Leer VEP")), "sin VEP cargado: la ayuda para cargarlo");
+  assert.deepEqual(v("v-viejo")?.opcionesGasto?.map((o) => o.id), ["iva"], "también las líneas sin código (tarjeta 17779347)");
+  assert.equal(v("v-ley")?.opcionesGasto, undefined, "los demás impuestos no buscan VEP");
+  assert.equal(armarBandeja({ ...base, sinCruces: true, lineas: [{ id: "x", fecha: "2026-10-23", concepto: "PAGO SERVICI 17779347 OP3636 #137", importe: -107789.2, cuenta_id: CTA }] })[0]?.opcionesGasto, undefined, "sin gastosVep anda igual que antes");
+}
+
+// 27/10/2026 — Arreglo 21 (auditoría de Impuestos): el rechazo (019) de un cheque de papel que el CRM no tiene rechazado se rechaza desde
+// la línea («Rechazar este cheque»), sin «Es el N° …» ni «Sí, es eso». Con cobro cargado se avisa que se anula; sin cobro (sistema anterior),
+// que la deuda va aparte. Los eCheq siguen igual (los rechaza el reporte de rechazados) y el que ya está rechazado se confirma solo.
+{
+  const ch = (id: string, numero: string, monto: number, extra: Partial<ChequeCruce> = {}): ChequeCruce => ({
+    id, numero, monto, direccion: "recibido", estado: "en_cartera", fecha_pago: "2026-10-23", tipo_cheque: "fisico", origen_nombre: "MARCOS MARTIN BICHARA", movimiento_id: null, ...extra,
+  });
+  const rech = (id: string, numero: string, importe: number) => ({ id, fecha: "2026-10-27", concepto: `RECH.DEP.48H 09191840 N ${numero} #019`, importe, cuenta_id: CTA });
+  const r = armarBandeja({
+    ...base, sinCruces: true,
+    cheques: [
+      ch("papel", "85983561", 290000),
+      ch("papel-cobro", "00406334", 266000, { estado: "cobrado", movimiento_id: "mov-cobro" }),
+      ch("echeq", "00000131", 5000, { tipo_cheque: "echeq", origen_nombre: "JESICA PAOLA BARRAZA" }),
+      ch("ya", "77777777", 1000, { estado: "rechazado" }),
+      ch("otro-monto", "55555555", 1500),
+    ],
+    lineas: [rech("p", "85983561", -290000), rech("pc", "406334", -266000), rech("e", "131", -5000), rech("y", "77777777", -1000), rech("m", "55555555", -1499)],
+  });
+  const x = (id: string) => r.find((i) => i.linea_id === id);
+  assert.deepEqual(x("p")?.rechazarCheque, { id: "papel", numero: "85983561", monto: 290000, cliente: "MARCOS MARTIN BICHARA", conCobro: false }, "papel sin cobro: queda rechazado y la deuda va aparte");
+  assert.equal(x("p")?.opcionesCheque, undefined, "sin «Es el N° …», que ataba la línea sin rechazar el cheque");
+  assert.deepEqual(x("p")?.cruce, { clasificacion: "cheque_devuelto", subtipo: "recibido", cheque_id: "papel" }, "la línea queda atada al cheque");
+  assert.equal(x("p")?.confianza, "baja", "queda para vos: nunca entra en un bloque");
+  assert.ok(x("p")?.detalle[0].startsWith("Cheque de papel RECIBIDO 85983561"));
+  assert.deepEqual(x("p")?.avisos, ["Cheque de papel: no viene en los reportes de eCheq. Si el banco lo rechazó, rechazalo acá."]);
+  assert.equal(x("pc")?.rechazarCheque?.conCobro, true, "papel con cobro cargado (ya depositado): se anula el cobro");
+  assert.equal(x("e")?.rechazarCheque, undefined, "eCheq: igual que antes");
+  assert.deepEqual(x("e")?.opcionesCheque?.map((o) => o.id), ["echeq"]);
+  assert.ok(x("e")?.avisos.some((a) => a.includes("reporte de eCheq de rechazados")));
+  assert.equal(x("y")?.confianza, "alta", "ya rechazado en el CRM: se confirma solo");
+  assert.equal(x("y")?.rechazarCheque, undefined);
+  assert.equal(x("m")?.rechazarCheque, undefined, "otro importe: no ofrece rechazar");
 }
 
 console.log("finanzas-propuestas: OK", items.length, "renglones");

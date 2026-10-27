@@ -16,6 +16,8 @@ export interface MovReciboRow {
   factura_id?: string | null;
 }
 export interface AplicacionCobroRow { movimiento_id: string; factura_id: string; monto?: number | string | null }
+/** Cheque recibido con su cobro (echeqs.movimiento_id). */
+export interface ChequeReciboRow { numero: string | null; movimiento_id: string | null }
 
 export interface RenglonRecibo { tipo: string; medio: string; detalle: string; moneda: "ARS" | "USD"; monto: number; retencion: boolean }
 export interface Recibo {
@@ -29,6 +31,8 @@ export interface Recibo {
   facturas: string[];
   /** Ids de las facturas cobradas (para Finanzas Lazza › Facturas: "Cobrada con"). */
   facturaIds: string[];
+  /** N° de los cheques que entraron con este recibo, también si el cobro se anuló (para buscarlo por N° de cheque, arreglo 20). */
+  cheques: string[];
   total: { ARS: number; USD: number };
   /** Todos sus movimientos anulados. */
   anulado: boolean;
@@ -60,6 +64,8 @@ export function armarRecibos(args: {
   comprobantes?: Record<string, string>;
   /** cliente_id → razón social */
   clientes?: Record<string, string>;
+  /** Cheques recibidos con su cobro (arreglo 20). */
+  cheques?: ChequeReciboRow[];
 }): Recibo[] {
   const movPorId = new Map(args.movimientos.map((m) => [m.id, m]));
   const movsDe: Record<string, MovReciboRow[]> = {};
@@ -69,6 +75,8 @@ export function armarRecibos(args: {
   }
   const factDeMov: Record<string, string[]> = {};
   for (const a of args.aplicaciones || []) (factDeMov[a.movimiento_id] ||= []).push(a.factura_id);
+  const chequesDeMov: Record<string, string[]> = {};
+  for (const c of args.cheques || []) if (c.movimiento_id && c.numero) (chequesDeMov[c.movimiento_id] ||= []).push(String(c.numero));
 
   return args.recibos.map((r) => {
     const movs = movsDe[r.id] || [];
@@ -102,7 +110,7 @@ export function armarRecibos(args: {
     return {
       id: r.id, numero: r.numero, fecha: String(r.fecha).slice(0, 10), clienteId: r.cliente_id,
       cliente: (r.cliente_id && args.clientes?.[r.cliente_id]) || "Cliente sin nombre",
-      renglones, facturas, facturaIds: [...ids], total, anulado, conciliado, banco,
+      renglones, facturas, facturaIds: [...ids], cheques: [...new Set(movs.flatMap((m) => chequesDeMov[m.id] || []))], total, anulado, conciliado, banco,
     };
   }).sort((a, b) => b.numero - a.numero);
 }

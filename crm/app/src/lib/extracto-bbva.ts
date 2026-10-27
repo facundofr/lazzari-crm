@@ -431,6 +431,10 @@ export interface ChequeCruce {
   estado: string;
   fecha_pago: string | null;
   tipo_cheque?: string | null;
+  /** Cobro que generó el cheque recibido (lo ata la base al cargarlo). Al rechazar el cheque, ese cobro se anula. */
+  movimiento_id?: string | null;
+  /** Quién dio el cheque recibido. */
+  origen_nombre?: string | null;
 }
 
 export interface CuentaCruce {
@@ -645,10 +649,12 @@ export function cruzarExtracto(
       if (recOk.length === 1 && emiOk.length === 0) {
         const ch = recOk[0]; usar("cheque_devuelto", ch.id);
         // 26/10/2026: se confirma sola solo si el cheque ya está rechazado en el CRM (lo rechaza el reporte de eCheq al subirlo).
+        // 27/10/2026 (arreglo 21): el de papel nunca viene en los reportes de eCheq: se rechaza desde la línea («Rechazar este cheque»).
+        const rechazado = ch.estado === "rechazado", papel = ch.tipo_cheque === "fisico";
         out.set(l.id, {
-          linea_id: l.id, clasificacion: "cheque_devuelto", subtipo: "recibido", cheque_id: ch.id, auto: ch.estado === "rechazado", candidatos: [],
-          motivo: `Cheque RECIBIDO ${devuelto[1]} rechazado (reversa del cobro)${ch.estado === "rechazado" ? " — ya rechazado en el CRM" : ": subí el reporte de eCheq de rechazados y se rechaza en el CRM"}`,
-          nota: ch.estado !== "rechazado" ? "Falta el reporte de eCheq de rechazados (ahí se rechaza en el CRM)" : null,
+          linea_id: l.id, clasificacion: "cheque_devuelto", subtipo: "recibido", cheque_id: ch.id, auto: rechazado, candidatos: [],
+          motivo: `Cheque${papel ? " de papel" : ""} RECIBIDO ${devuelto[1]} rechazado (reversa del cobro)${rechazado ? " — ya rechazado en el CRM" : papel ? "" : ": subí el reporte de eCheq de rechazados y se rechaza en el CRM"}`,
+          nota: rechazado ? null : papel ? "Cheque de papel: no viene en los reportes de eCheq. Si el banco lo rechazó, rechazalo acá." : "Falta el reporte de eCheq de rechazados (ahí se rechaza en el CRM)",
         });
       } else if (emiOk.length === 1 && recOk.length === 0) {
         const ch = emiOk[0]; usar("cheque_devuelto", ch.id);

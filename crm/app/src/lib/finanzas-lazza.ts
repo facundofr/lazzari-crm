@@ -337,13 +337,26 @@ export const TOLERANCIA_VEP_IVA = 1000;
 
 const MESES_IVA = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 
+/** N° de certificado: dígitos y guiones, con hasta 3 letras adelante ("RG 16418" de Limagrain). Una fecha ("15/10") no es N°. */
+const NRO_CERTIFICADO = /^((?:[A-Z]{1,3} ?)?\d(?:[\d-]*\d)?)(?![\d/])/;
+const SOLO_NRO_CERTIFICADO = /^(?:[A-Z]{1,3} ?)?\d(?:[\d-]*\d)?$/;
+
 /**
- * N° de certificado escrito en la descripción de una retención sufrida ("certificado 0000-00074421", "Cert: 34539").
- * null si no dice ninguno o dice que falta ("certificado pendiente", "Cert. A CONFIRMAR", "a pedir").
+ * N° de certificado escrito en la descripción de una retención sufrida (la base no tiene columna de certificado):
+ * - "certificado 0000-00074421", "Cert: 34539", "Cert. N° 777", "certificado RG 16418";
+ * - cobro en US$ (fx_settlements): "Cobro FX — retencion_iibb 000000001115 | TC 1530 del 2026-10-03";
+ * - el N° al principio: "0000-00002291 — TERMO CORDOBA SAU — Retención Impuesto a las Ganancias …".
+ * null si no dice ninguno o dice que falta ("certificado pendiente", "Cert. A CONFIRMAR", "a pedir", "certificado 15/10").
  */
 export function certificadoDeRetencion(descripcion: string | null | undefined): string | null {
-  const m = String(descripcion || "").match(/\bcert(?:ificado)?\b\.?\s*(?:n(?:ro|°|º)?\.?\s*)?:?\s*(\d(?:[\d-]*\d)?)/i);
-  return m ? m[1] : null;
+  const t = String(descripcion || "");
+  for (const m of t.matchAll(/\bcert(?:ificado)?\b\.?\s*(?:n(?:ro|°|º)?\.?\s*)?:?\s*/gi)) {
+    const nro = t.slice((m.index ?? 0) + m[0].length).match(NRO_CERTIFICADO);
+    if (nro) return nro[1];
+  }
+  const fx = t.match(/—\s*retencion_[a-z]+\s+(.+?)\s*\|\s*TC\b/)?.[1];
+  if (fx && SOLO_NRO_CERTIFICADO.test(fx)) return fx;
+  return t.match(/^\s*(?!\d{4}-\d{2}-\d{2}\b)(\d[\d-]*\d)\s+—/)?.[1] ?? null;
 }
 
 /** Período escrito en un texto sin acentos: "período 09/2026", "09/2026", "septiembre 2026" o "2026-09". Las fechas no cuentan. */
@@ -633,6 +646,7 @@ export interface FilaRetencion {
   /** Practicada = la hicimos nosotros al pagar; sufrida = nos la hizo un cliente al cobrar. */
   lado: "practicada" | "sufrida";
   impuesto: string;
+  /** Corto: "OP-000083", "Pago directo" o, en las sufridas, "Recibo 1041" (arreglo 14). */
   origen: string;
   nombre: string;
   cuit: string;
@@ -640,38 +654,96 @@ export interface FilaRetencion {
   pct: number | null;
   monto: number;
   moneda: "ARS" | "USD";
+  /** Sufridas: N° de certificado escrito en el texto (`certificadoDeRetencion`). En las practicadas no se usa. */
+  certificado: string | null;
+  /** Sufrida sin N° de certificado: sin el certificado no se puede computar. */
+  faltaCertificado: boolean;
+  /** Recibo del cobro en que entró la retención sufrida (para abrir su PDF). */
+  recibo: { id: string; numero: number } | null;
+  /** Texto completo de la retención sufrida: se ve al pasar el mouse, se busca y va al Excel. */
+  detalle: string;
 }
 
 const IMPUESTO: Record<string, string> = { retencion_ganancias: "Ganancias", retencion_iva: "IVA", retencion_iibb: "IIBB", retencion_suss: "SUSS" };
 
 /**
  * Misma regla que Finanzas → Retenciones: OP no anuladas con retención de Ganancias + pagos directos (tipo pago)
- * con retención. Además, las sufridas: movimientos retencion_* de un cliente, no anulados.
+ * con retención. Además, las sufridas: movimientos retencion_* de un cliente, no anulados, con su N° de certificado
+ * y su recibo (`recibos`: movimiento → recibo, de recibo_movimientos).
  */
 export function armarRetenciones(input: {
   ops: { id: string; numero?: string | number | null; fecha: string; estado?: string | null; moneda?: string | null; retencion_ganancias_monto?: number | string | null; retencion_ganancias_pct?: number | string | null; base_retencion_ganancias?: number | string | null; proveedores?: { razon_social?: string | null; cuit?: string | null } | null }[];
   movimientos: { id: string; tipo: string | null; fecha: string; monto: number | string | null; moneda?: string | null; anulado?: boolean | null; descripcion?: string | null; cliente_id?: string | null; proveedor_id?: string | null; retencion_ganancias_monto?: number | string | null; retencion_ganancias_pct?: number | string | null; base_retencion_ganancias?: number | string | null; clientes?: { razon_social?: string | null; cuit?: string | null } | null; proveedores?: { razon_social?: string | null; cuit?: string | null } | null }[];
+  recibos?: Record<string, { id: string; numero: number }>;
 }): FilaRetencion[] {
   const out: FilaRetencion[] = [];
   const nulo = (v: unknown) => (v === null || v === undefined || v === "" ? null : num(v));
+  const practicada = { certificado: null, faltaCertificado: false, recibo: null, detalle: "" };
   for (const op of input.ops) {
     if (op.estado === "anulada" || num(op.retencion_ganancias_monto) <= 0) continue;
-    out.push({ id: `op-${op.id}`, fecha: String(op.fecha).slice(0, 10), lado: "practicada", impuesto: "Ganancias", origen: `OP ${op.numero ?? ""}`.trim(),
+    // El N° ya viene como "OP-000083" (antes se veía "OP OP-000083").
+    const nro = String(op.numero ?? "").trim();
+    out.push({ id: `op-${op.id}`, fecha: String(op.fecha).slice(0, 10), lado: "practicada", impuesto: "Ganancias", origen: /^op\b/i.test(nro) ? nro : `OP ${nro}`.trim(),
       nombre: op.proveedores?.razon_social || "", cuit: op.proveedores?.cuit || "", base: nulo(op.base_retencion_ganancias), pct: nulo(op.retencion_ganancias_pct),
-      monto: num(op.retencion_ganancias_monto), moneda: normalizarMoneda(op.moneda) });
+      monto: num(op.retencion_ganancias_monto), moneda: normalizarMoneda(op.moneda), ...practicada });
   }
   for (const m of input.movimientos) {
     if (m.anulado) continue;
     if (m.tipo === "pago" && num(m.retencion_ganancias_monto) > 0) {
       out.push({ id: `pd-${m.id}`, fecha: String(m.fecha).slice(0, 10), lado: "practicada", impuesto: "Ganancias", origen: "Pago directo",
         nombre: m.proveedores?.razon_social || "", cuit: m.proveedores?.cuit || "", base: nulo(m.base_retencion_ganancias), pct: nulo(m.retencion_ganancias_pct),
-        monto: num(m.retencion_ganancias_monto), moneda: normalizarMoneda(m.moneda) });
+        monto: num(m.retencion_ganancias_monto), moneda: normalizarMoneda(m.moneda), ...practicada });
     } else if (String(m.tipo || "").startsWith("retencion_") && m.cliente_id) {
-      out.push({ id: `rs-${m.id}`, fecha: String(m.fecha).slice(0, 10), lado: "sufrida", impuesto: IMPUESTO[String(m.tipo)] || String(m.tipo), origen: m.descripcion || "",
-        nombre: m.clientes?.razon_social || "", cuit: m.clientes?.cuit || "", base: null, pct: null, monto: num(m.monto), moneda: normalizarMoneda(m.moneda) });
+      const certificado = certificadoDeRetencion(m.descripcion);
+      const recibo = input.recibos?.[m.id] ?? null;
+      out.push({ id: `rs-${m.id}`, fecha: String(m.fecha).slice(0, 10), lado: "sufrida", impuesto: IMPUESTO[String(m.tipo)] || String(m.tipo), origen: recibo ? `Recibo ${recibo.numero}` : "",
+        nombre: m.clientes?.razon_social || "", cuit: m.clientes?.cuit || "", base: null, pct: null, monto: num(m.monto), moneda: normalizarMoneda(m.moneda),
+        certificado, faltaCertificado: !certificado, recibo, detalle: String(m.descripcion || "") });
     }
   }
   return out.sort((a, b) => a.fecha.localeCompare(b.fecha));
+}
+
+const ORDEN_IMPUESTO = ["IVA", "Ganancias", "IIBB", "SUSS"];
+
+export interface TotalRetencion { impuesto: string; moneda: "ARS" | "USD"; cantidad: number; monto: number; faltan: number; montoFalta: number }
+
+/** Total por impuesto (IVA, Ganancias, IIBB, SUSS) y moneda, con lo que falta certificar (arreglo 14). */
+export function totalesRetenciones(filas: FilaRetencion[]): TotalRetencion[] {
+  const por = new Map<string, TotalRetencion>();
+  for (const r of filas) {
+    const k = `${r.impuesto}|${r.moneda}`;
+    const t = por.get(k) || { impuesto: r.impuesto, moneda: r.moneda, cantidad: 0, monto: 0, faltan: 0, montoFalta: 0 };
+    t.cantidad += 1;
+    t.monto = r2(t.monto + r.monto);
+    if (r.faltaCertificado) { t.faltan += 1; t.montoFalta = r2(t.montoFalta + r.monto); }
+    por.set(k, t);
+  }
+  const orden = (i: string) => (ORDEN_IMPUESTO.includes(i) ? ORDEN_IMPUESTO.indexOf(i) : ORDEN_IMPUESTO.length);
+  return [...por.values()].sort((a, b) => orden(a.impuesto) - orden(b.impuesto) || a.impuesto.localeCompare(b.impuesto) || a.moneda.localeCompare(b.moneda));
+}
+
+const ddmmaaaa = (iso: string) => iso.slice(0, 10).split("-").reverse().join("/");
+
+/**
+ * Excel de retenciones sufridas para el contador (arreglo 14): un renglón por retención, con el N° de certificado
+ * o "falta", y abajo el total por impuesto con certificado, falta certificado y total. Los montos van como número.
+ */
+export function excelRetencionesSufridas(filas: FilaRetencion[]): (string | number)[][] {
+  const conUSD = filas.some((r) => r.moneda === "USD");
+  const signo = (m: "ARS" | "USD") => (m === "USD" ? "US$" : "$");
+  const out: (string | number)[][] = [["Fecha", "Impuesto", "Cliente", "CUIT", "Certificado", "Recibo", ...(conUSD ? ["Moneda"] : []), "Retenido", "Detalle completo"]];
+  for (const r of filas) out.push([ddmmaaaa(r.fecha), r.impuesto, r.nombre, r.cuit, r.certificado || "falta", r.recibo?.numero ?? "", ...(conUSD ? [signo(r.moneda)] : []), r.monto, r.detalle]);
+  const totales = totalesRetenciones(filas);
+  out.push([], ["Impuesto", "Con certificado", "Falta certificado", "Total"]);
+  for (const t of totales) out.push([conUSD ? `${t.impuesto} (${signo(t.moneda)})` : t.impuesto, r2(t.monto - t.montoFalta), t.montoFalta, t.monto]);
+  for (const m of ["ARS", "USD"] as const) {
+    const de = totales.filter((t) => t.moneda === m);
+    if (!de.length) continue;
+    const suma = (f: (t: TotalRetencion) => number) => r2(de.reduce((s, t) => s + f(t), 0));
+    out.push([conUSD ? `Total (${signo(m)})` : "Total", suma((t) => t.monto - t.montoFalta), suma((t) => t.montoFalta), suma((t) => t.monto)]);
+  }
+  return out;
 }
 
 // ── Cuentas corrientes en una sola moneda (Augusto 19/10/2026) ─────────

@@ -4,15 +4,21 @@
 // arriba lo que está EN FECHA de pago y de cobro, el resumen por estado y las próximas 4 semanas. Solo informativo:
 // los estados cambian solos con cobros, OP y el Excel del banco (sin botones a mano). Pestaña aparte "Martín F."
 // = la misma pantalla de Finanzas (components/cheques-tercero, echeqs.cubre_tercero). Cálculos en lib/cheques-lazza.
+// 27/10/2026 (auditoría UX, arreglos 19 y 20): la lista abre con lo pendiente ("Ver todos" a un clic), el pie suma por estado,
+// lo que el banco ya tiene sale de "para depositar" y el detalle muestra la OP o el recibo del cheque, con link.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, Search, Upload, X } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import ChequesTercero from "@/components/cheques-tercero";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
+import { useUser } from "@/lib/auth-context";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
-import { enFecha, estaEnFecha, estadoCheque, proximaSemana, proximasSemanas, resumenPorEstado, situacionPago, type ChequeFL, type Total } from "@/lib/cheques-lazza";
+import { chequePendiente } from "@/lib/cheques-plazo";
+import { enFecha, estaEnFecha, estadoCheque, opsDeCheques, ordenCheques, proximaSemana, proximasSemanas, resumenPorEstado, situacionPago, type ChequeFL, type OpDelCheque, type Total } from "@/lib/cheques-lazza";
 import { ChequesBanco } from "./cheques-banco";
+import { verOP } from "./orden-pago-doc";
+import { abrirRecibo, traerRecibo } from "./recibo-doc";
 
 const MOSTRAR_SUBIR_VIEJO = false;
 import { diferenciaConBanco } from "@/lib/cheques-estado-banco";
@@ -28,6 +34,12 @@ interface Cheque extends ChequeFL {
   estadoBanco: string;
   /** Día en que la plata se movió en la cuenta según el Excel "Movimientos" (débito, depósito o devolución), o null (26/10/2026, Augusto). */
   diaBanco: string | null;
+  /** OP donde figura (auditoría UX 26/10/2026, arreglo 20): la que pagó un propio o donde se endosó uno recibido; vigentes primero. */
+  ops: OpDelCheque[];
+  /** Recibo en que entró un cheque recibido (por su cobro), o null. */
+  recibo: { id: string; numero: number } | null;
+  /** El cobro del cheque está anulado (por ejemplo, cheque rechazado). */
+  cobroAnulado: boolean;
 }
 
 const TONO: Record<string, string> = {
@@ -42,12 +54,16 @@ const TONO: Record<string, string> = {
 const montos = (t: Total) => <>{formatCurrency(t.ARS)}{t.USD > 0 && <span className="ml-1 text-xs text-zinc-500">+ {formatCurrency(t.USD, "USD")}</span>}</>;
 
 async function traerCheques(sociedadId: string): Promise<Cheque[]> {
-  const rows = await traerTodo<any>(() => db.from("echeqs")
-    .select("id, numero, banco_emisor, cuit_emisor, monto, moneda, fecha_emision, fecha_pago, estado, origen_nombre, destino_nombre, fecha_endoso, fecha_deposito, observaciones, tipo_cheque, direccion, cubre_tercero, estado_banco")
-    .eq("sociedad_id", sociedadId).order("fecha_pago", { ascending: false }).order("id"));
-  // 26/10/2026: el día exacto lo da la línea del Excel atada al cheque (la última: un rechazado tiene depósito y devolución).
-  const lineas = await traerTodo<{ cheque_id: string; fecha: string }>(() => db.from("extracto_movimientos")
-    .select("cheque_id, fecha").not("cheque_id", "is", null).in("clasificacion", ["cheque_emitido", "cheque_acreditado", "cheque_devuelto"]).order("id")).catch(() => []);
+  const [rows, lineas, ops] = await Promise.all([
+    traerTodo<any>(() => db.from("echeqs")
+      .select("id, numero, banco_emisor, cuit_emisor, monto, moneda, fecha_emision, fecha_pago, estado, origen_nombre, destino_nombre, fecha_endoso, fecha_deposito, observaciones, tipo_cheque, direccion, cubre_tercero, estado_banco, movimiento_id")
+      .eq("sociedad_id", sociedadId).order("fecha_pago", { ascending: false }).order("id")),
+    // 26/10/2026: el día exacto lo da la línea del Excel atada al cheque (la última: un rechazado tiene depósito y devolución).
+    traerTodo<{ cheque_id: string; fecha: string }>(() => db.from("extracto_movimientos")
+      .select("cheque_id, fecha").not("cheque_id", "is", null).in("clasificacion", ["cheque_emitido", "cheque_acreditado", "cheque_devuelto"]).order("id")).catch(() => []),
+    // Arreglo 20 (27/10/2026): el cheque no guarda su OP; está en los medios de la OP. Si falla, la lista se ve igual.
+    traerTodo<any>(() => db.from("ordenes_pago").select("id, numero, estado, fecha, medios_pago").eq("sociedad_id", sociedadId).order("id")).catch(() => []),
+  ]);
   const ids = new Set(rows.map((r) => r.id));
   const diaBanco = new Map<string, string>();
   for (const l of lineas) {
@@ -55,26 +71,47 @@ async function traerCheques(sociedadId: string): Promise<Cheque[]> {
     const f = String(l.fecha).slice(0, 10);
     if (f > (diaBanco.get(l.cheque_id) || "")) diaBanco.set(l.cheque_id, f);
   }
-  return rows.map((r) => ({
-    id: r.id, numero: String(r.numero ?? ""), direccion: r.direccion === "emitido" ? "emitido" : "recibido", estado: r.estado || "",
-    fecha_pago: r.fecha_pago ? String(r.fecha_pago).slice(0, 10) : null, monto: Number(r.monto || 0), moneda: r.moneda === "USD" ? "USD" : "ARS",
-    cubre_tercero: r.cubre_tercero || null,
-    banco: r.banco_emisor || "", cuit: r.cuit_emisor || "", tipo: r.tipo_cheque === "fisico" ? "Físico" : "eCheq",
-    emision: r.fecha_emision ? String(r.fecha_emision).slice(0, 10) : null, pago: r.fecha_pago ? String(r.fecha_pago).slice(0, 10) : "",
-    origen: r.origen_nombre || "", destino: r.destino_nombre || "", fechaEndoso: r.fecha_endoso || null, fechaDeposito: r.fecha_deposito || null,
-    observaciones: r.observaciones || "", estadoBanco: r.estado_banco || "", diaBanco: diaBanco.get(r.id) || null,
-  }));
+  // Recibo en que entró cada cheque recibido: por su cobro (echeqs.movimiento_id), como las retenciones (arreglo 14).
+  const movIds = [...new Set(rows.map((r) => r.movimiento_id).filter(Boolean))] as string[];
+  const reciboDeMov = new Map<string, { id: string; numero: number; anulado: boolean }>();
+  for (let i = 0; i < movIds.length; i += 200) {
+    const { data } = await db.from("recibo_movimientos").select("movimiento_id, recibos(id, numero), movimientos(anulado)").in("movimiento_id", movIds.slice(i, i + 200));
+    for (const r of data || []) if (r.recibos?.numero) reciboDeMov.set(r.movimiento_id, { id: r.recibos.id, numero: r.recibos.numero, anulado: !!r.movimientos?.anulado });
+  }
+  const cheques = rows.map((r) => {
+    const recibo = r.movimiento_id ? reciboDeMov.get(r.movimiento_id) : undefined;
+    return {
+      id: r.id, numero: String(r.numero ?? ""), direccion: r.direccion === "emitido" ? "emitido" as const : "recibido" as const, estado: r.estado || "",
+      fecha_pago: r.fecha_pago ? String(r.fecha_pago).slice(0, 10) : null, monto: Number(r.monto || 0), moneda: r.moneda === "USD" ? "USD" : "ARS",
+      cubre_tercero: r.cubre_tercero || null,
+      banco: r.banco_emisor || "", cuit: r.cuit_emisor || "", tipo: r.tipo_cheque === "fisico" ? "Físico" : "eCheq",
+      emision: r.fecha_emision ? String(r.fecha_emision).slice(0, 10) : null, pago: r.fecha_pago ? String(r.fecha_pago).slice(0, 10) : "",
+      origen: r.origen_nombre || "", destino: r.destino_nombre || "", fechaEndoso: r.fecha_endoso || null, fechaDeposito: r.fecha_deposito || null,
+      observaciones: r.observaciones || "", estadoBanco: r.estado_banco || "", diaBanco: diaBanco.get(r.id) || null,
+      ops: [] as OpDelCheque[], recibo: recibo ? { id: recibo.id, numero: recibo.numero } : null, cobroAnulado: !!recibo?.anulado,
+    };
+  });
+  const opsPorCheque = opsDeCheques(cheques, ops.map((o) => ({ id: o.id, numero: o.numero, estado: o.estado, fecha: o.fecha, medios: o.medios_pago })));
+  return cheques.map((c) => ({ ...c, ops: opsPorCheque.get(c.id) || [] }));
 }
 
 /** Con quién: en los recibidos, quién lo dio (y a quién se endosó); en los emitidos, a quién se le dio. */
 const conQuien = (c: Cheque) => (c.direccion === "emitido" ? c.destino : [c.origen, c.destino ? `→ ${c.destino}` : ""].filter(Boolean).join(" "));
 
+/** Nombre del estado en el pie: "Rechazado" y "Anulado" hay de los dos lados. */
+const nombreEstado = (e: { clave: string; label: string; direccion: "emitido" | "recibido" }) =>
+  (/:(rechazado|anulado)$/.test(e.clave) ? `${e.label} (${e.direccion === "emitido" ? "propios" : "recibidos"})` : e.label);
+
+/** Estado de la lista (arreglo 19, 27/10/2026): abre con lo pendiente (propios sin debitar y recibidos en cartera). "" = todos. */
+const PENDIENTES = "pendientes";
+
 export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
+  const { sociedadActiva } = useUser();
   const [pestana, setPestana] = useState<"todos" | "martin">("todos");
   const [cheques, setCheques] = useState<Cheque[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [categoria, setCategoria] = useState<"" | "emitido" | "recibido">("");
-  const [estado, setEstado] = useState("");
+  const [estado, setEstado] = useState(PENDIENTES);
   const [tipo, setTipo] = useState("");
   const [segunBanco, setSegunBanco] = useState<"" | "diferencia" | "con" | "sin">("");
   const [soloEnFecha, setSoloEnFecha] = useState(false);
@@ -102,9 +139,9 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
   const semanas = useMemo(() => proximasSemanas(todos, hoy), [todos, hoy]);
 
   const q = sinAcentos(texto.trim());
-  const visibles = useMemo(() => todos.filter((c) => {
+  // Todos los filtros menos el de estado (así "Ver todos" y "Solo pendientes" dicen cuántos van a mostrar).
+  const base = useMemo(() => todos.filter((c) => {
     if (categoria && c.direccion !== categoria) return false;
-    if (estado && estadoCheque(c).clave !== estado) return false;
     if (tipo && c.tipo !== tipo) return false;
     if (segunBanco === "diferencia" && !diferenciaConBanco(c.direccion, c.estado, c.estadoBanco)) return false;
     if (segunBanco === "con" && !c.estadoBanco) return false;
@@ -112,11 +149,17 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
     if (soloEnFecha && !estaEnFecha(c, hoy)) return false;
     if (desde && c.pago < desde) return false;
     if (hasta && c.pago > hasta) return false;
-    if (q && !sinAcentos(`${c.numero} ${c.banco} ${c.cuit} ${c.origen} ${c.destino} ${c.cubre_tercero || ""} ${c.monto}`).includes(q)) return false;
+    // También por la OP o el recibo (arreglo 20): "OP-000083" trae sus cheques.
+    if (q && !sinAcentos(`${c.numero} ${c.banco} ${c.cuit} ${c.origen} ${c.destino} ${c.cubre_tercero || ""} ${c.monto} ${c.ops.map((o) => o.numero).join(" ")} ${c.recibo ? `recibo ${c.recibo.numero}` : ""}`).includes(q)) return false;
     return true;
-  }), [todos, categoria, estado, tipo, segunBanco, soloEnFecha, desde, hasta, q, hoy]);
+  }), [todos, categoria, tipo, segunBanco, soloEnFecha, desde, hasta, q, hoy]);
+  const pendientes = useMemo(() => base.filter((c) => chequePendiente(c)), [base]);
+  // Arreglo 19: lo pendiente primero, de la fecha de pago más cercana a la más lejana; el resto, del más nuevo al más viejo.
+  const visibles = useMemo(() => (estado === PENDIENTES ? pendientes : estado ? base.filter((c) => estadoCheque(c).clave === estado) : base).slice().sort(ordenCheques),
+    [base, pendientes, estado]);
+  const totalesPie = useMemo(() => resumenPorEstado(visibles), [visibles]);
 
-  const limpiar = () => { setCategoria(""); setEstado(""); setTipo(""); setSegunBanco(""); setSoloEnFecha(false); setTexto(""); setDesde(""); setHasta(""); };
+  const limpiar = () => { setCategoria(""); setEstado(PENDIENTES); setTipo(""); setSegunBanco(""); setSoloEnFecha(false); setTexto(""); setDesde(""); setHasta(""); };
   const filtrar = (f: { categoria?: "" | "emitido" | "recibido"; estado?: string; enFecha?: boolean; desde?: string; hasta?: string }) => {
     limpiar();
     if (f.categoria !== undefined) setCategoria(f.categoria);
@@ -151,13 +194,16 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
     } },
   ];
 
-  const totalVisibles = useMemo(() => {
-    const t = { ARS: 0, USD: 0 };
-    for (const c of visibles) t[c.moneda === "USD" ? "USD" : "ARS"] += Number(c.monto) || 0;
-    return t;
-  }, [visibles]);
+  /** Arreglo 20: la OP y el recibo del cheque se abren en otra pestaña, como en el Resumen de cuenta. */
+  const verLaOP = (id: string) => { if (sociedadActiva) void verOP(id, sociedadActiva); };
+  const verElRecibo = async (id: string) => {
+    if (!sociedadActiva) return;
+    const r = await traerRecibo(sociedadId, id).catch(() => null);
+    if (r) abrirRecibo(r, sociedadActiva, true);
+    else alert("No se pudo abrir el recibo.");
+  };
 
-  const boton = (activo: boolean) => `rounded-lg border px-3 py-1 text-xs font-medium ${activo ? "border-orange-400 bg-orange-50 text-orange-700 dark:bg-orange-950/30 dark:text-orange-300" : "border-zinc-200 bg-white text-zinc-600 hover:border-orange-300 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"}`;
+  const boton =(activo: boolean) => `rounded-lg border px-3 py-1 text-xs font-medium ${activo ? "border-orange-400 bg-orange-50 text-orange-700 dark:bg-orange-950/30 dark:text-orange-300" : "border-zinc-200 bg-white text-zinc-600 hover:border-orange-300 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"}`;
 
   return (
     <div className="space-y-3">
@@ -194,6 +240,10 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
               <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">En fecha para cobrar</p>
               <p className="font-mono text-lg font-bold text-zinc-900 dark:text-white">{montos(fecha.cobrar)}</p>
               <p className="text-xs text-zinc-500">{fecha.cobrar.cantidad} cheque{fecha.cobrar.cantidad === 1 ? "" : "s"} en cartera que ya se puede{fecha.cobrar.cantidad === 1 ? "" : "n"} depositar</p>
+              {/* Arreglo 19: los que el banco ya tiene (depositados, presentados o en custodia) no hay que depositarlos: van aparte. */}
+              {fecha.depositados.cantidad > 0 && (
+                <p className="text-xs text-zinc-500">+ {fecha.depositados.cantidad} ya depositado{fecha.depositados.cantidad === 1 ? "" : "s"} según el banco ({montos(fecha.depositados)}), esperando la acreditación</p>
+              )}
             </button>
             {/* Próxima semana (26/10/2026, Augusto): sin comparar con el saldo del banco, solo indica. */}
             {(["pagar", "cobrar"] as const).map((lado) => (
@@ -255,16 +305,20 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
           {/* Lista */}
           <div className="flex flex-wrap items-center gap-1.5">
             {([["", "Todos"], ["emitido", "Emitidos"], ["recibido", "Recibidos"]] as const).map(([k, l]) => (
-              <button key={k} type="button" onClick={() => { setCategoria(k); setEstado(""); }} className={boton(categoria === k)}>{l}</button>
+              // Un estado del otro lado no tiene sentido: vuelve a Pendientes (antes volvía a todos los estados).
+              <button key={k} type="button" onClick={() => { setCategoria(k); if (k && estado.includes(":") && !estado.startsWith(`${k}:`)) setEstado(PENDIENTES); }} className={boton(categoria === k)}>{l}</button>
             ))}
             <div className="relative min-w-[200px] flex-1">
               <Search className="absolute left-2.5 top-2 h-4 w-4 text-zinc-400" />
-              <input value={texto} onChange={(e) => setTexto(e.target.value)} placeholder="Buscar N°, banco, CUIT, cliente, proveedor o importe" className={`${control} w-full pl-8`} />
+              <input value={texto} onChange={(e) => setTexto(e.target.value)} placeholder="Buscar N°, banco, CUIT, cliente, proveedor, importe, OP o recibo" className={`${control} w-full pl-8`} />
             </div>
             <select value={estado} onChange={(e) => setEstado(e.target.value)} className={control}>
+              <option value={PENDIENTES}>Pendientes</option>
               <option value="">Todos los estados</option>
               {porEstado.filter((e) => !categoria || e.direccion === categoria).map((e) => <option key={e.clave} value={e.clave}>{e.label} ({e.direccion === "emitido" ? "emitidos" : "recibidos"})</option>)}
             </select>
+            {estado === PENDIENTES && <button type="button" onClick={() => setEstado("")} className={boton(false)} title="Ver también los debitados, cobrados, endosados, rechazados y anulados">Ver todos ({base.length})</button>}
+            {estado === "" && <button type="button" onClick={() => setEstado(PENDIENTES)} className={boton(false)} title="Solo propios sin debitar y recibidos en cartera">Solo pendientes ({pendientes.length})</button>}
             <select value={tipo} onChange={(e) => setTipo(e.target.value)} className={control}>
               <option value="">eCheq y físicos</option><option value="eCheq">eCheq</option><option value="Físico">Físicos</option>
             </select>
@@ -274,13 +328,25 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
             <input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} title="Fecha de pago desde" className={control} />
             <input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} title="Fecha de pago hasta" className={control} />
             {soloEnFecha && <span className="rounded bg-red-50 px-2 py-0.5 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">Solo en fecha</span>}
-            {(categoria || estado || tipo || segunBanco || soloEnFecha || texto || desde || hasta) && <button type="button" onClick={limpiar} className="text-xs text-orange-600 hover:underline">Limpiar</button>}
+            {(categoria || estado !== PENDIENTES || tipo || segunBanco || soloEnFecha || texto || desde || hasta) && <button type="button" onClick={limpiar} className="text-xs text-orange-600 hover:underline">Limpiar</button>}
           </div>
           <div className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+            {/* Arreglo 19: si lo que se busca está en un cheque que ya no está pendiente, se avisa (si no, parecería que no existe). */}
+            {estado === PENDIENTES && q && base.length > pendientes.length && (
+              <p className="border-b border-zinc-200 px-3 py-1.5 text-xs text-amber-700 dark:border-zinc-700 dark:text-amber-300">
+                Hay {base.length - pendientes.length} más con «{texto.trim()}» que no {base.length - pendientes.length === 1 ? "está pendiente" : "están pendientes"}.{" "}
+                <button type="button" onClick={() => setEstado("")} className="font-medium underline hover:text-orange-600">Ver todos</button>
+              </p>
+            )}
             <DataTable columns={cols} data={visibles} onRowClick={setAbierto} emptyMessage="No hay cheques con ese filtro" />
-            <div className="flex flex-wrap justify-end gap-x-6 gap-y-1 border-t border-zinc-200 px-3 py-2 text-xs text-zinc-500 dark:border-zinc-700">
-              <span>{visibles.length} cheques</span>
-              <span>Total <b className="font-mono">{formatCurrency(totalVisibles.ARS)}{totalVisibles.USD > 0 && ` + ${formatCurrency(totalVisibles.USD, "USD")}`}</b></span>
+            {/* Arreglo 19: un total por estado, nunca todo junto (antes sumaba debitados, anulados y rechazados con lo pendiente). */}
+            <div className="flex flex-wrap items-center justify-end gap-x-5 gap-y-1 border-t border-zinc-200 px-3 py-2 text-xs text-zinc-500 dark:border-zinc-700">
+              <span>{visibles.length} cheque{visibles.length === 1 ? "" : "s"}</span>
+              {totalesPie.map((e) => (
+                <span key={e.clave} className="whitespace-nowrap">
+                  <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${TONO[e.tono]}`}>{nombreEstado(e)}</span> {e.total.cantidad} · <b className="font-mono">{montos(e.total)}</b>
+                </span>
+              ))}
             </div>
           </div>
         </>
@@ -302,7 +368,23 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
                 ...(abierto.estadoBanco ? [["Según el banco", <span key="sb">{abierto.estadoBanco}{diferenciaConBanco(abierto.direccion, abierto.estado, abierto.estadoBanco) && <span className="mt-0.5 block text-xs font-medium text-amber-700 dark:text-amber-300">⚠️ {diferenciaConBanco(abierto.direccion, abierto.estado, abierto.estadoBanco)} No se cambió nada solo.</span>}</span>]] : []),
                 ["Monto", <b key="m" className="font-mono">{formatCurrency(Number(abierto.monto), abierto.moneda === "USD" ? "USD" : "ARS")}</b>],
                 ["De dónde vino", abierto.direccion === "emitido" ? "Lo emitimos nosotros" : abierto.origen || "—"],
+                // Arreglo 20 (27/10/2026): el recibo en que entró y la OP que pagó (o donde se endosó), con link a su PDF.
+                ...(abierto.direccion === "recibido" ? [["Recibo", abierto.recibo ? (
+                  <button key="rec" type="button" onClick={() => verElRecibo(abierto.recibo!.id)} title="Ver el recibo (se abre en otra pestaña)" className="font-medium text-orange-600 hover:underline">
+                    Entró en el recibo N° {abierto.recibo.numero}{abierto.cobroAnulado ? " · cobro anulado" : ""}
+                  </button>
+                ) : <span key="rec" className="text-zinc-400">No tiene recibo en el CRM</span>]] : []),
                 ["A dónde fue", abierto.destino || (abierto.direccion === "recibido" && abierto.estado === "en_cartera" ? "Sigue en cartera" : "—")],
+                ...(abierto.direccion === "emitido" || abierto.ops.length ? [["Orden de pago", abierto.ops.length ? (
+                  <span key="op" className="flex flex-col items-end gap-0.5">
+                    {abierto.ops.map((o, i) => (
+                      <button key={o.id} type="button" onClick={() => verLaOP(o.id)} title="Ver la OP (se abre en otra pestaña)"
+                        className={o.anulada ? "text-xs text-zinc-500 hover:text-orange-600 hover:underline" : "font-medium text-orange-600 hover:underline"}>
+                        {o.anulada ? `${i === 0 ? "Estuvo en" : "Antes en"} la ${o.numero} (anulada)` : `${abierto.direccion === "emitido" ? "Pagó" : "Se endosó en"} la ${o.numero}`}
+                      </button>
+                    ))}
+                  </span>
+                ) : <span key="op" className="text-zinc-400">No figura en ninguna OP del CRM</span>]] : []),
                 ["Banco", abierto.banco || "—"],
                 ["CUIT del emisor", abierto.cuit || "—"],
                 ["Emisión", abierto.emision ? formatDate(abierto.emision) : "—"],
