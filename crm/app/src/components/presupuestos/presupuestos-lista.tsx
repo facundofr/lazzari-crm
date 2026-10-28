@@ -576,17 +576,11 @@ export default function PresupuestosLista() {
   const [prWarningModal, setPrWarningModal] = useState<{ matches: { numero: string; estado: string; fecha: string; codigos: string[] }[] } | null>(null);
   const prWarningBypassRef = useRef(false);
 
-  // AI presupuesto
-  const [showAIPanel, setShowAIPanel] = useState(false);
   const [showExpress, setShowExpress] = useState(false);
   // Solicitud: además de escribir lo que pide el cliente, se pueden elegir productos como en un PR (o armarlos con IA).
   const [solicitudItems, setSolicitudItems] = useState(false);
   const [expressTexto, setExpressTexto] = useState("");
   useEffect(() => { if (!showNewPR) { setSolicitudItems(false); setExpressTexto(""); } }, [showNewPR]);
-  const [aiMessage, setAiMessage] = useState("");
-  const [aiImage, setAiImage] = useState<{ data: string; media_type: string; name: string } | null>(null);
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiNotes, setAiNotes] = useState("");
   // Drag-to-reorder items
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
@@ -901,93 +895,6 @@ export default function PresupuestosLista() {
           }
         }
       } catch { /* ignore */ }
-    }
-  }
-
-  function handleAIImageFile(file: File) {
-    if (!file.type.startsWith("image/")) {
-      toast.error("El archivo pegado no es una imagen");
-      return;
-    }
-    if (file.size > 10 * 1024 * 1024) { toast.error("Imagen muy grande (máx 10MB)"); return; }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      const base64 = result.split(",")[1];
-      if (!base64) { toast.error("No se pudo leer la imagen del portapapeles"); return; }
-      setAiImage({ data: base64, media_type: file.type || "image/jpeg", name: file.name || "imagen-pegada.png" });
-    };
-    reader.onerror = () => toast.error("No se pudo leer la imagen");
-    reader.readAsDataURL(file);
-  }
-
-  function handleAIPaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
-    const imageItem = Array.from(event.clipboardData.items).find((item) => item.type.startsWith("image/"));
-    const imageFile = imageItem?.getAsFile();
-    if (!imageFile) return;
-    event.preventDefault();
-    handleAIImageFile(imageFile);
-  }
-
-  async function handleAIGenerate() {
-    if (!aiMessage.trim() && !aiImage) return;
-    setAiLoading(true);
-    setAiNotes("");
-    try {
-      const res = await fetch("/api/ai-presupuesto", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mensaje: aiMessage,
-          cliente_id: newPR.cliente_id || null,
-          moneda: newPR.moneda,
-          sociedad_id: sociedadActiva?.id || null,
-          imagen: aiImage ? { data: aiImage.data, media_type: aiImage.media_type } : undefined,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Error de la IA");
-
-      if (data.items && Array.isArray(data.items) && data.items.length > 0) {
-        const newItems: NewPRItem[] = data.items.map((item: any) => {
-          const markup = newPR.markup_general;
-          const precioCosto = Number(item.precio_costo) || 0;
-          const precioVenta = Number((precioCosto * (1 + markup / 100)).toFixed(2));
-          return {
-            codigo: item.codigo || "",
-            descripcion: item.descripcion || "",
-            categoria: item.categoria || "",
-            cantidad: Number(item.cantidad) || 1,
-            unidad: item.unidad || "UN",
-            precio_costo: precioCosto,
-            costo_moneda: (item.costo_moneda || item.moneda || newPR.moneda || "USD") as "ARS" | "USD" | "USD Divisa",
-            markup_porcentaje: markup,
-            precio_venta: precioVenta,
-            iva_porcentaje: 21,
-            proveedor_nombre: item.proveedor || "",
-            proveedor_id: "",
-            stock_propio: false,
-            lista_item_id: item.lista_id || "",
-          };
-        });
-        setNewPR((prev) => {
-          // Append to existing items (skip empty placeholder items)
-          const existing = prev.items.filter(it => it.descripcion.trim() || it.codigo.trim());
-          return { ...prev, items: existing.length > 0 ? [...existing, ...newItems] : newItems };
-        });
-        if (data.notas_generales) setAiNotes(data.notas_generales);
-        toast.success(`IA generó ${newItems.length} item(s)`);
-        setShowAIPanel(false);
-        setAiMessage("");
-        setAiImage(null);
-      } else {
-        toast.warning("La IA no encontró productos para este pedido");
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Error inesperado";
-      toast.error(`Error IA: ${msg}`);
-    } finally {
-      setAiLoading(false);
     }
   }
 
@@ -4181,71 +4088,6 @@ export default function PresupuestosLista() {
             })}
           />
 
-          {/* AI Panel */}
-          {showAIPanel && (
-            <div className="mb-4 rounded-lg border border-orange-200 bg-orange-50/50 p-4 dark:border-orange-800 dark:bg-orange-950/20">
-              <div className="flex items-center gap-2 mb-2">
-                <Sparkles className="h-4 w-4 text-orange-500" />
-                <span className="text-sm font-semibold text-orange-800 dark:text-orange-300">Pega el mensaje del cliente</span>
-              </div>
-              <p className="text-xs text-orange-600 dark:text-orange-400 mb-3">
-                Pegá el mensaje del cliente o subí una foto (captura de WhatsApp, mail, lista de productos, etc). La IA busca en las listas de precios y crea los items que no encuentre.
-              </p>
-              <textarea
-                value={aiMessage}
-                onChange={(e) => setAiMessage(e.target.value)}
-                onPaste={handleAIPaste}
-                rows={3}
-                placeholder="Pegá un pedido o pegá una captura de imagen (Ctrl/Cmd+V)…"
-                className="w-full rounded-lg border border-orange-200 px-3 py-2 text-sm dark:border-orange-800 dark:bg-zinc-900 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-200 resize-none"
-              />
-              {/* Image upload */}
-              <div className="flex items-center gap-3 mt-2">
-                <label className="flex items-center gap-1.5 cursor-pointer text-xs text-orange-600 hover:text-orange-800 dark:text-orange-400 dark:hover:text-orange-300 transition-colors">
-                  <ImagePlus className="h-4 w-4" />
-                  <span>{aiImage ? "Cambiar foto" : "Adjuntar foto"}</span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (!file) return;
-                      handleAIImageFile(file);
-                      e.target.value = "";
-                    }}
-                  />
-                </label>
-                {aiImage && (
-                  <div className="flex items-center gap-1.5 text-xs text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/30 px-2 py-1 rounded-md">
-                    <Check className="h-3 w-3" />
-                    <span className="truncate max-w-[180px]">{aiImage.name}</span>
-                    <button onClick={() => setAiImage(null)} className="text-red-400 hover:text-red-600 ml-1"><X className="h-3 w-3" /></button>
-                  </div>
-                )}
-              </div>
-              <div className="flex items-center justify-between mt-3">
-                <button onClick={() => { setShowAIPanel(false); setAiMessage(""); setAiImage(null); }} className="text-xs text-zinc-500 hover:text-zinc-700">
-                  Cancelar
-                </button>
-                <button
-                  onClick={handleAIGenerate}
-                  disabled={aiLoading || (!aiMessage.trim() && !aiImage)}
-                  className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
-                >
-                  {aiLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                  {aiLoading ? "Procesando..." : "Generar items"}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* AI Notes */}
-          {aiNotes && (
-            <div className="mb-3 rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-700 dark:bg-blue-950/20 dark:border-blue-800 dark:text-blue-400">
-              <span className="font-semibold">Notas de la IA:</span> {aiNotes}
-            </div>
-          )}
           <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
             <table className="w-full table-fixed text-sm [&_td]:border-r [&_td]:border-zinc-200 dark:[&_td]:border-zinc-700 [&_th]:border-r [&_th]:border-zinc-300 dark:[&_th]:border-zinc-600" style={{ minWidth: 70 + 300 + colsVisibles.reduce((x, c) => x + (colW[c] || COLS_DEFAULT[c] || 80), 0) }}>
               <thead>
