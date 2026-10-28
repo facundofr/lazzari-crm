@@ -100,6 +100,25 @@ async function textoDePdf(buf: Buffer): Promise<string> {
   }
 }
 
+/**
+ * Busca mails en administracion@ con la sintaxis de Gmail (cualquier fecha, también archivados) y devuelve el texto y el de los PDF adjuntos.
+ * Solo lee: no guarda nada ni marca los mails (Augusto 28/10/2026: "dale permiso para que lo busque él", para los VEP viejos de Musso).
+ */
+export async function buscarEnCorreo(consulta: string, max = 10): Promise<Array<{ fecha: string | null; de: string; asunto: string; texto: string; adjuntos: Array<{ nombre: string; texto: string }> }>> {
+  const token = await tokenGmail();
+  const j = await gmail(token, `messages?q=${encodeURIComponent(consulta)}&maxResults=${Math.min(20, Math.max(1, max))}`);
+  const out = [];
+  for (const { id } of j.messages || []) {
+    const m = await leerMensaje(token, id);
+    const adjuntos = [];
+    for (const a of m.adjuntos.filter((x) => /pdf/i.test(x.mime) || /\.pdf$/i.test(x.nombre)).slice(0, 6)) {
+      adjuntos.push({ nombre: a.nombre, texto: (await textoDePdf(await bajarAdjunto(token, m.id, a))).slice(0, 2000) || "(PDF sin texto: es una imagen)" });
+    }
+    out.push({ fecha: m.fecha, de: m.remitente, asunto: m.asunto, texto: m.texto.slice(0, 2500), adjuntos });
+  }
+  return out;
+}
+
 // ── IA ───────────────────────────────────────────────────────────────────────
 type Uso = { costo: number; entrada: number; salida: number };
 

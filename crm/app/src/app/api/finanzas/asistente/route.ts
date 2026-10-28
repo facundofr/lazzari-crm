@@ -3,7 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { registrarUsoIA } from "@/lib/ia-uso";
-import { correrAgenteMail } from "@/lib/agente-mail-server";
+import { buscarEnCorreo, correrAgenteMail } from "@/lib/agente-mail-server";
 import { SUBTIPO_LABEL, CLASIFICACION_LABEL, type ClasificacionLinea } from "@/lib/extracto-bbva";
 
 /**
@@ -25,6 +25,7 @@ Reglas:
 - Respuestas breves: primero la respuesta en 1 o 2 líneas, después el detalle en viñetas o una tabla chica si ayuda.
 - Si ves algo para mejorar o un riesgo (falta plata para un cheque, cliente atrasado, impuesto raro, extracto viejo), avisalo en una línea con ⚠️. Todo es sugerencia: nunca digas que algo "está prohibido" ni trabes al usuario.
 - Podés mandar al agente de correo a leer los mails nuevos (herramienta leer_correos_ahora) cuando te lo pidan o cuando haga falta para contestar sobre pagos o retenciones recientes.
+- Para mails viejos o puntuales (VEP del contador, certificados de retención, avisos de pago anteriores) usá buscar_en_correo: busca en todo el correo de administracion@ con la sintaxis de Gmail (from:, subject:, after:AAAA/MM/DD, before:, has:attachment) y trae el texto y el de los PDF. Probá varias búsquedas cortas si la primera no trae nada.
 - Para que la persona actúe, ofrecé botones con sugerir_boton (ej. "Para confirmar" para confirmar cruces del banco, "Correo" para ver avisos de pago, facturas de proveedores y reclamos de cobranza listos para copiar, "Extractos" para resolver líneas a mano). Vos no confirmás cobros ni pagos: los confirma la persona con un clic.
 - Para cargar el extracto del banco: Finanzas > Bancos > Movimientos > "Subir archivos del banco" (el Excel "Movimientos" una vez por mes y los reportes de eCheq todos los días). Este chat no carga archivos. Los cobros y pagos los carga la persona; el sistema no cruza transferencias.
 - No mandás mails ni WhatsApp, no tocás facturación de ARCA, no borrás nada.`;
@@ -35,6 +36,7 @@ const tools: Anthropic.Tool[] = [
   { name: "lineas_banco", description: "Líneas de los extractos del banco cargados, con su clasificación (impuesto, gasto bancario, cobro, pago, cheque, FCI, entre cuentas, sueldo…) y totales por tipo y subtipo (impuesto al cheque, SIRCREB, IVA, comisiones…). Sirve para '¿cuánto me cobró el banco de impuestos?' o para buscar un movimiento del banco.", input_schema: { type: "object", properties: { desde: { type: "string", description: "YYYY-MM-DD" }, hasta: { type: "string", description: "YYYY-MM-DD" }, texto: { type: "string", description: "Buscar en el concepto o importe" }, solo_pendientes: { type: "boolean", description: "Solo las que falta cerrar" } } } },
   { name: "correos_agente", description: "Lo que leyó el agente de correo (avisos de pago, retenciones, reclamos, facturas de proveedores) con su resumen y acción sugerida.", input_schema: { type: "object", properties: { dias: { type: "number", description: "Últimos N días (por defecto 10)" }, categoria: { type: "string", enum: ["pago_retencion", "reclamo_consulta", "factura_proveedor", "oc_cliente", "vencimiento_aviso", "otro"] } } } },
   { name: "leer_correos_ahora", description: "Manda al agente a leer YA los mails nuevos de administracion@ (solo lee y guarda sugerencias; no responde). Tarda hasta un minuto.", input_schema: { type: "object", properties: {} } },
+  { name: "buscar_en_correo", description: "Busca mails en TODO el correo de administracion@ (cualquier fecha, también los que el agente no leyó) con la sintaxis de Gmail, y devuelve asunto, fecha, texto y el texto de los PDF adjuntos. Solo lee.", input_schema: { type: "object", properties: { consulta: { type: "string", description: "Búsqueda de Gmail, ej. from:agustin.musso8@hotmail.com after:2026/09/01 before:2026/10/18" }, max: { type: "number", description: "Cuántos mails traer (por defecto 10, máximo 20)" } }, required: ["consulta"] } },
   { name: "gastos_fijos", description: "Gastos fijos del mes (alquiler, sueldos, consultores) y si ya están pagados.", input_schema: { type: "object", properties: {} } },
   { name: "movimientos", description: "Buscar cobros, pagos y gastos cargados en el CRM.", input_schema: { type: "object", properties: { texto: { type: "string" }, desde: { type: "string" }, hasta: { type: "string" }, tipo: { type: "string", description: "transferencia, pago, efectivo, cheque_recibido, retencion_..." } } } },
   { name: "registro", description: "Bitácora de Finanzas: qué propuso el sistema/IA y qué confirmó, corrigió o descartó cada persona.", input_schema: { type: "object", properties: { dias: { type: "number" } } } },
@@ -161,6 +163,12 @@ async function ejecutar(nombre: string, input: any, ctx: { db: any; soc: string;
       const admin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY) as any;
       const r = await correrAgenteMail(admin, "manual");
       return r;
+    }
+    case "buscar_en_correo": {
+      if (!ctx.puedeAgente) return { error: "Tu usuario no tiene permiso para buscar en el correo." };
+      const consulta = String(input?.consulta || "").trim();
+      if (!consulta) return { error: "Falta qué buscar." };
+      return { consulta, mails: await buscarEnCorreo(consulta, Number(input?.max) || 10) };
     }
     case "gastos_fijos": {
       const mes = hoy.slice(0, 7);
