@@ -34,7 +34,6 @@ import {
 } from "@/lib/reportes-comprobantes";
 import type { Presupuesto, ActivityLog, Alert, GastoFijo, Objetivo } from "@/lib/types";
 import { facturaDelMes, pagoDelMes, type FacturaParaGasto, type PagoParaGasto } from "@/lib/gasto-fijo-factura";
-import { PendientesWidget } from "@/components/presupuestos/pendientes-widget";
 
 const statusConfig: Record<string, { label: string; variant: "success" | "warning" | "danger" | "purple" | "outline" | "info" }> = {
   solicitud: { label: "Solicitud", variant: "info" },
@@ -446,7 +445,6 @@ export default function DashboardPage() {
             </p>
           </div>
           <div className="flex gap-2">
-            {(isAdmin || userRole === "administrativo") && <PendientesWidget />}
             <Link
               href="/presupuestos"
               className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2.5 py-1 text-[13px] font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"

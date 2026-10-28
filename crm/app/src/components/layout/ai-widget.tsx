@@ -307,7 +307,6 @@ export function AIWidget() {
                 <div className="flex flex-wrap gap-1.5">
                   <button onClick={resumenDelDia} className={atajo}>Resumen de hoy</button>
                   {rolPuedeVer(role, "stock") && <button onClick={stockBajo} className={atajo}>Stock bajo</button>}
-                  <Link href="/pendientes" onClick={cerrarYReset} className={atajo}>Mis pendientes</Link>
                   {rolPuedeVer(role, "clientes") && <Link href="/oportunidades" onClick={cerrarYReset} className={atajo}>Clientes dormidos</Link>}
                 </div>
                 {cargandoDato && <Loader2 className="h-4 w-4 animate-spin text-violet-500" />}

@@ -30,7 +30,6 @@ import {
   Scissors,
   Plane,
   FileSearch,
-  ListChecks,
   Sparkles,
 } from "lucide-react";
 import { useState } from "react";
@@ -48,7 +47,6 @@ import { APP_VERSION_LABEL } from "@/lib/app-version";
 const navigation: { grupo: string; items: { name: string; href: string; icon: typeof Users; module: string; oculto?: boolean; soloSuperAdmin?: boolean; soloRoles?: string[] }[] }[] = [
   { grupo: "Inicio", items: [
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, module: "dashboard", oculto: true }, // Augusto 20/10: fuera del menú (sigue por link); el sistema abre en Presupuestos
-    { name: "Pendientes", href: "/pendientes", icon: ListChecks, module: "dashboard" },
     { name: "Calendario", href: "/calendario", icon: Calendar, module: "calendario" },
   ] },
   { grupo: "Vender", items: [
