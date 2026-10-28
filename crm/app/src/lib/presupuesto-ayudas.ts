@@ -1,6 +1,7 @@
 // Ayudas de la ventana de presupuestos (Augusto 13/10): último precio vendido al cliente,
 // búsqueda en la lista de costos mientras se escribe y resumen de totales/margen. Funciones puras.
 import { normalizarTexto, palabrasBusqueda, coincideTodas } from "@/lib/buscar-texto";
+import { margenNetoPct } from "@/lib/presupuesto-margen";
 
 export const MARGEN_MINIMO_PR = 15;
 
@@ -73,29 +74,40 @@ export function filaPorCodigo<T extends { codigo: string; codigo_interno?: strin
   return filas.find((f) => n(f.codigo_interno) === c) || filas.find((f) => n(f.codigo) === c) || null;
 }
 
-export interface RenglonResumen { cantidad: number; neto: number; costo: number; iva: number }
+/** costo: en la moneda del PR; null si está en otra moneda y no hay dólar cargado (queda fuera del margen). */
+export interface RenglonResumen { cantidad: number; neto: number; costo: number | null; iva: number }
 export interface ResumenPR {
   subtotal: number; iva: number; total: number; costo: number;
   margen: number | null;      // % sobre el costo
   ganancia: number | null;    // subtotal − costo
-  bajoMargen: number;         // renglones con costo y margen < mínimo
+  bajoMargen: number;         // renglones con costo y margen NETO < mínimo
+  margenNeto: number | null;  // % sobre el costo, descontando gastos e impuestos sobre la venta (regla única, H43)
+  gananciaNeta: number | null;
+  sinDolar: number;           // renglones sin dólar para pasar el costo: no entran en el margen
 }
 
 /** Totales del presupuesto: subtotal, IVA, total, margen real y ganancia (todo en la moneda del PR). */
-export function resumenPresupuesto(renglones: RenglonResumen[], margenMinimo = MARGEN_MINIMO_PR): ResumenPR {
-  let subtotal = 0, iva = 0, costo = 0, bajoMargen = 0;
+// gastosPct: gastos e impuestos sobre la venta (lib/presupuesto-margen, 7 % ARCA / 2 % manual). El aviso de margen bajo usa el neto.
+export function resumenPresupuesto(renglones: RenglonResumen[], margenMinimo = MARGEN_MINIMO_PR, gastosPct = 0): ResumenPR {
+  let subtotal = 0, iva = 0, costo = 0, ventaConDato = 0, bajoMargen = 0, sinDolar = 0;
   for (const r of renglones) {
     const sub = r.cantidad * r.neto;
     subtotal += sub;
     iva += sub * (r.iva / 100);
+    if (r.costo === null) { sinDolar++; continue; }
+    ventaConDato += sub;
     costo += r.cantidad * r.costo;
-    if (r.costo > 0 && r.neto > 0 && ((r.neto / r.costo) - 1) * 100 < margenMinimo) bajoMargen++;
+    const m = margenNetoPct(r.neto, r.costo, gastosPct);
+    if (m !== null && m < margenMinimo) bajoMargen++;
   }
-  const hay = costo > 0 && subtotal > 0;
+  const hay = costo > 0 && ventaConDato > 0;
   return {
     subtotal, iva, total: subtotal + iva, costo,
-    margen: hay ? ((subtotal / costo) - 1) * 100 : null,
-    ganancia: hay ? subtotal - costo : null,
+    margen: hay ? ((ventaConDato / costo) - 1) * 100 : null,
+    ganancia: hay ? ventaConDato - costo : null,
     bajoMargen,
+    margenNeto: margenNetoPct(ventaConDato, costo, gastosPct),
+    gananciaNeta: hay ? ventaConDato * (1 - gastosPct / 100) - costo : null,
+    sinDolar,
   };
 }

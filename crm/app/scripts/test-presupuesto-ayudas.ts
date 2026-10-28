@@ -38,6 +38,19 @@ ok(Math.abs((r.margen ?? 0) - (360 / 260 - 1) * 100) < 1e-9, "margen");
 ok(r.bajoMargen === 1, "uno bajo el 15 %");
 ok(resumenPresupuesto([]).margen === null, "sin renglones");
 
+// Margen neto (H43): con 7 % de gastos un renglón con 20 % bruto queda bajo el 15 %.
+const n = resumenPresupuesto([
+  { cantidad: 1, neto: 120, costo: 100, iva: 21 },   // bruto 20 %, neto 111,6/100 → 11,6 % → bajo
+  { cantidad: 1, neto: 150, costo: 100, iva: 21 },   // neto 139,5 → 39,5 %
+  { cantidad: 1, neto: 500, costo: null, iva: 21 },  // costo en US$ sin dólar: fuera del margen, sí en el total
+], 15, 7);
+ok(n.subtotal === 770 && n.costo === 200, "sin dólar suma al total pero no al costo");
+ok(n.bajoMargen === 1, "bajo margen con el neto");
+ok(n.margenNeto === 25.6, "margen neto total (270 × 0,93 / 200 − 1 = 25,55 → 25,6)");
+ok(Math.abs((n.gananciaNeta ?? 0) - 51.1) < 1e-9, "ganancia neta");
+ok(n.sinDolar === 1, "cuenta los renglones sin dólar");
+ok(Math.abs((n.margen ?? 0) - 35) < 1e-9, "el bruto también deja afuera los sin dólar");
+
 // Precio escrito a mano: no se corre por el markup redondeado (PR-2026-1264: 18.000 quedaba 17.999,76).
 ok(precioDesdeMarkup(8593, 109.47, 18000) === 18000, "respeta el precio escrito (mismo costo)");
 ok(precioDesdeMarkup(9800, 61.84, 15860) === 15860, "respeta 15.860");

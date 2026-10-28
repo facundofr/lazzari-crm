@@ -153,57 +153,6 @@ function mapRow(row: ClienteRow): Client & { vendedorNombre: string; monedaPrede
 // saldoUSD: saldo real de cuenta corriente en dólares (saldoCuentaCorriente queda en pesos).
 type ClienteExt = Client & { vendedorNombre: string; monedaPredeterminada: string; saldoUSD?: number };
 
-interface ConsumoCategory {
-  categoria: string;
-  cantidad: number;
-  total: number;
-}
-
-interface ConsumoData {
-  categorias: ConsumoCategory[];
-  totalFacturado: number;
-  cantidadPresupuestos: number;
-  ultimaCompra: string | null;
-  loading: boolean;
-}
-
-interface FichaPresupuesto {
-  id: string;
-  numero: string;
-  fecha: string;
-  estado: string;
-  total: number;
-  moneda: string;
-}
-
-interface FichaFactura {
-  id: string;
-  tipo: string;
-  numero: string;
-  punto_venta: string;
-  fecha: string;
-  estado: string;
-  total: number;
-  moneda: string;
-}
-
-interface FichaItemCotizado {
-  descripcion: string;
-  cantidadTotal: number;
-  vecesAparece: number;
-}
-
-interface FichaData {
-  presupuestos: FichaPresupuesto[];
-  facturas: FichaFactura[];
-  itemsCotizados: FichaItemCotizado[];
-  totalPresupuestos: number;
-  totalFacturado: number;
-  ultimoPresupuestoFecha: string | null;
-  saldoCC: number;
-  loading: boolean;
-}
-
 const emptyForm = {
   razon_social: "",
   cuit: "",
@@ -351,15 +300,6 @@ export default function ClientesPage() {
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
 
-  // Consumo analysis
-  const [consumoData, setConsumoData] = useState<ConsumoData>({
-    categorias: [],
-    totalFacturado: 0,
-    cantidadPresupuestos: 0,
-    ultimaCompra: null,
-    loading: false,
-  });
-
   // Vendedores list (for assigning to contactos)
   const [vendedores, setVendedores] = useState<{id: string; full_name: string}[]>([]);
 
@@ -399,17 +339,6 @@ export default function ClientesPage() {
   const [relevProdResults, setRelevProdResults] = useState<{ codigo: string; descripcion: string; variante?: string; proveedor_nombre?: string }[]>([]);
   const [relevProdSearching, setRelevProdSearching] = useState(false);
 
-  // Ficha completa
-  const [fichaData, setFichaData] = useState<FichaData>({
-    presupuestos: [],
-    facturas: [],
-    itemsCotizados: [],
-    totalPresupuestos: 0,
-    totalFacturado: 0,
-    ultimoPresupuestoFecha: null,
-    saldoCC: 0,
-    loading: false,
-  });
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     presupuestos: true,
     facturas: false,
@@ -590,82 +519,6 @@ export default function ClientesPage() {
     } catch (err: any) { toast.error(err.message || "Error al guardar relevamiento"); }
     finally { setRelevSaving(false); }
   }
-
-  useEffect(() => {
-    if (!selectedCliente) return;
-    const clienteId = selectedCliente.id;
-
-    async function fetchConsumo() {
-      setConsumoData((prev) => ({ ...prev, loading: true }));
-
-      try {
-        // Fetch approved presupuestos with items for this client
-        let presQ = supabase
-          .from("presupuestos")
-          .select("id, fecha, total, presupuesto_items(categoria, cantidad, total)")
-          .eq("cliente_id", clienteId)
-          .eq("estado", "aprobado")
-          .order("fecha", { ascending: false });
-        if (sociedadActiva?.id) presQ = presQ.eq("sociedad_id" as any, sociedadActiva.id);
-        const { data: presupuestos, error: presError } = await presQ;
-
-        // Fetch facturas total for this client
-        let factQ = supabase
-          .from("facturas")
-          .select("total")
-          .eq("cliente_id", clienteId);
-        if (sociedadActiva?.id) factQ = factQ.eq("sociedad_id" as any, sociedadActiva.id);
-        const { data: facturas, error: factError } = await factQ;
-
-        if (presError || factError) {
-          // Sin datos inventados: si falla, queda vacío y avisa.
-          setConsumoData({ categorias: [], totalFacturado: 0, cantidadPresupuestos: 0, ultimaCompra: null, loading: false });
-          toast.error("No se pudieron cargar las compras del cliente. Recargá la página.");
-          return;
-        }
-
-        // Process real Supabase data
-        const catMap = new Map<string, { cantidad: number; total: number }>();
-        for (const p of presupuestos) {
-          const items = (p as any).presupuesto_items || [];
-          for (const item of items) {
-            const cat = item.categoria || "Sin categoría";
-            const existing = catMap.get(cat) || { cantidad: 0, total: 0 };
-            catMap.set(cat, {
-              cantidad: existing.cantidad + (item.cantidad || 0),
-              total: existing.total + (item.total || 0),
-            });
-          }
-        }
-        const categorias = Array.from(catMap.entries())
-          .map(([categoria, data]) => ({ categoria, ...data }))
-          .sort((a, b) => b.total - a.total);
-
-        const totalFacturado = facturas
-          ? facturas.reduce((sum, f) => sum + (f.total || 0), 0)
-          : 0;
-
-        setConsumoData({
-          categorias,
-          totalFacturado,
-          cantidadPresupuestos: presupuestos.length,
-          ultimaCompra: presupuestos.length > 0 ? (presupuestos[0] as any).fecha : null,
-          loading: false,
-        });
-      } catch (err) {
-        console.error("Error fetching consumo:", err);
-        setConsumoData({
-          categorias: [],
-          totalFacturado: 0,
-          cantidadPresupuestos: 0,
-          ultimaCompra: null,
-          loading: false,
-        });
-      }
-    }
-
-    fetchConsumo();
-  }, [selectedCliente?.id]);
 
   // La pestaña "Historial" ahora es la Ficha 360 (components/clientes/ficha-360.tsx), que carga sus propios datos.
 

@@ -1,6 +1,7 @@
 // Presupuestos nuevo: lógica pura (sin pantalla ni base) para que la IA arme el PR.
 // Todo es sugerencia: ninguna función bloquea; devuelven avisos para mostrar.
 // Prueba: scripts/test-presupuesto-ia.ts
+import { margenNetoPct, GASTOS_PR_ARCA } from "./presupuesto-margen";
 
 export const MARGEN_MINIMO_IA = 15;
 
@@ -25,6 +26,8 @@ export interface EntradaPrecio {
   /** Último precio vendido a ESTE cliente (misma moneda del presupuesto), si hay. */
   ultimo?: UltimoPrecio | null;
   margenMinimo?: number;
+  /** Gastos e impuestos sobre la venta (lib/presupuesto-margen). Sin dato: 7 % (PR por ARCA). */
+  gastosPct?: number;
 }
 
 export interface PrecioPropuesto {
@@ -44,11 +47,14 @@ export interface PrecioPropuesto {
  */
 export function proponerPrecio(e: EntradaPrecio): PrecioPropuesto {
   const min = e.margenMinimo ?? MARGEN_MINIMO_IA;
+  // Margen NETO de gastos e impuestos: la misma regla que la lista y la ventana del PR (auditoría H43).
+  const gastos = e.gastosPct ?? GASTOS_PR_ARCA;
+  const margenNeto = (precio: number, costo: number) => margenNetoPct(precio, costo, gastos);
   const costo = e.costo && e.costo > 0 ? e.costo : null;
   const lista = e.ventaLista && e.ventaLista > 0 ? redondear2(e.ventaLista) : null;
   const ult = e.ultimo && e.ultimo.precio > 0 ? e.ultimo : null;
 
-  const margenUlt = ult ? margenSobreCosto(ult.precio, costo ?? 0) : null;
+  const margenUlt = ult ? margenNeto(ult.precio, costo ?? 0) : null;
   // Si no hay costo no se puede juzgar el margen del último precio: se usa igual (es lo que ya pagó el cliente).
   const usarUltimo = !!ult && (costo === null || (margenUlt !== null && margenUlt >= min));
 
@@ -66,7 +72,7 @@ export function proponerPrecio(e: EntradaPrecio): PrecioPropuesto {
     nota = "Sin precio de lista: cargalo a mano";
   }
 
-  const margenPct = costo !== null && precio > 0 ? margenSobreCosto(precio, costo) : null;
+  const margenPct = costo !== null && precio > 0 ? margenNeto(precio, costo) : null;
   const bajoMinimo = margenPct !== null && margenPct < min;
   if (bajoMinimo) nota = `${nota ? nota + ". " : ""}Margen ${margenPct}% (mínimo ${min}%)`;
   return { precio, origen, margenPct, nota, bajoMinimo };
@@ -169,6 +175,8 @@ export interface EntradaAvisos {
   clienteMonedaPredeterminada?: string | null;
   lineas: Array<{ incluir: boolean; precio: number; costo: number | null; cantidad: number; margenPct: number | null; descripcion: string; sinTc?: boolean }>;
   margenMinimo?: number;
+  /** Gastos e impuestos sobre la venta para el margen total (neto, H43). Sin dato: 7 %. */
+  gastosPct?: number;
 }
 
 export function avisosPresupuesto(e: EntradaAvisos): string[] {
@@ -183,7 +191,7 @@ export function avisosPresupuesto(e: EntradaAvisos): string[] {
   if (dec.length) out.push(`${dec.length} cantidad(es) con decimales`);
   let venta = 0, costo = 0;
   for (const l of act) if (l.costo && l.costo > 0 && l.precio > 0) { venta += l.precio * l.cantidad; costo += l.costo * l.cantidad; }
-  if (costo > 0) { const m = margenSobreCosto(venta, costo); if (m !== null && m < min) out.push(`Margen total ${m}% (mínimo ${min}%)`); }
+  if (costo > 0) { const m = margenNetoPct(venta, costo, e.gastosPct ?? GASTOS_PR_ARCA); if (m !== null && m < min) out.push(`Margen neto total ${m}% (mínimo ${min}%)`); }
   if (e.moneda === "USD" && e.clienteMonedaPredeterminada) {
     const pref = e.clienteMonedaPredeterminada === "USD" ? "billetes" : e.clienteMonedaPredeterminada === "USD Divisa" ? "divisas" : null;
     if (pref && e.cotizacionModalidad && e.cotizacionModalidad !== pref) out.push(`Este cliente cotiza en USD ${pref === "divisas" ? "divisa" : "billete"} y el presupuesto está en el otro`);

@@ -39,7 +39,7 @@ import { calculateOwnStockPurchaseOrder, groupOwnStockItemsByCurrency, normalize
 import { estadoPorRecibido } from "@/lib/compras-recepcion";
 import { calculateNetPrice, parseQuantityRange, type PriceListRule } from "@/lib/price-list-rules";
 import { observacionesParaCliente } from "@/lib/observaciones-cliente";
-import { margenPR, MARGEN_MINIMO_PR } from "@/lib/presupuesto-margen";
+import { margenPR, MARGEN_MINIMO_PR, gastosPorcentajePR, margenNetoPct, costoEnMonedaPR } from "@/lib/presupuesto-margen";
 import { RemitoVentana } from "@/components/remito-ventana";
 import { traerSaldoUnCliente } from "@/lib/cuenta-corriente-cliente";
 import { VentaCaidaOCs } from "@/components/presupuestos/venta-caida-ocs";
@@ -401,8 +401,8 @@ interface PriceTier {
 // Precio neto = lista − descuento del artículo − descuento general (ambos antes del IVA).
 // En la base se guarda el NETO en precio_venta (así facturación, PDF y OC siguen igual)
 // y la lista y el descuento en precio_lista / descuento_porcentaje.
-const MARGEN_MINIMO = 15;
-const GASTOS_PORCENTAJE = 7; // gastos e impuestos aproximados sobre la venta
+// Margen: una sola regla (lib/presupuesto-margen, auditoría H43): NETO de gastos e impuestos (7 % ARCA, 2 % manual).
+const MARGEN_MINIMO = MARGEN_MINIMO_PR;
 function precioNeto(item: NewPRItem, descGeneral = 0): number {
   const dl = Math.min(100, Math.max(0, Number(item.descuento_porcentaje) || 0));
   const dg = Math.min(100, Math.max(0, Number(descGeneral) || 0));
@@ -1533,19 +1533,24 @@ export default function PresupuestosLista() {
 
     // Alertas (no bloquean): margen real bajo el mínimo y tipo de dólar distinto al del cliente.
     {
+      // Mismo margen neto que la lista y la ventana (H43). Sin dólar no se calcula ese renglón (no se inventa un margen).
+      const gastos = gastosPorcentajePR(newPR.modalidad_emision);
       const bajos: string[] = [];
-      let netoTot = 0, costoTot = 0;
+      let netoTot = 0, costoTot = 0, sinDolar = 0;
       for (const it of validItems) {
-        const costoConv = convertCosto(it.precio_costo, it.costo_moneda, newPR.moneda, newPR.tipo_cambio, newPR.tipo_cambio_divisas);
+        const costoConv = costoEnMonedaPR(it.precio_costo, it.costo_moneda, newPR.moneda, newPR.tipo_cambio, newPR.tipo_cambio_divisas);
+        if (costoConv === null) { sinDolar++; continue; }
         const neto = precioNeto(it, descGeneral);
         netoTot += neto * it.cantidad; costoTot += costoConv * it.cantidad;
-        if (costoConv > 0 && neto > 0 && ((neto / costoConv) - 1) * 100 < MARGEN_MINIMO) bajos.push(`${it.codigo || it.descripcion.slice(0, 30)} (${(((neto / costoConv) - 1) * 100).toFixed(1)}%)`);
+        const m = margenNetoPct(neto, costoConv, gastos);
+        if (m !== null && m < MARGEN_MINIMO) bajos.push(`${it.codigo || it.descripcion.slice(0, 30)} (${m.toFixed(1)}%)`);
       }
-      const margenTot = costoTot > 0 ? ((netoTot / costoTot) - 1) * 100 : null;
+      const margenTot = margenNetoPct(netoTot, costoTot, gastos);
       const avisos: string[] = [];
       if (bajos.length || (margenTot !== null && margenTot < MARGEN_MINIMO)) {
-        avisos.push(`Margen real total: ${margenTot === null ? "—" : margenTot.toFixed(1) + "%"} (mínimo ${MARGEN_MINIMO}%).` + (bajos.length ? `\nArtículos bajo el mínimo: ${bajos.slice(0, 8).join(", ")}${bajos.length > 8 ? "…" : ""}` : ""));
+        avisos.push(`Margen neto total: ${margenTot === null ? "—" : margenTot.toFixed(1) + "%"} (mínimo ${MARGEN_MINIMO}%, descontando ${gastos}% de gastos e impuestos).` + (bajos.length ? `\nArtículos bajo el mínimo: ${bajos.slice(0, 8).join(", ")}${bajos.length > 8 ? "…" : ""}` : ""));
       }
+      if (sinDolar) avisos.push(`${sinDolar} artículo(s) con costo en otra moneda y sin dólar cargado: no se pudo calcular su margen.`);
       const cli = clientes.find((c) => c.id === newPR.cliente_id) as any;
       const pref = cli?.moneda_predeterminada === "USD" ? "billetes" : cli?.moneda_predeterminada === "USD Divisa" ? "divisas" : null;
       if (newPR.moneda === "USD" && pref && newPR.cotizacion_modalidad && newPR.cotizacion_modalidad !== pref) {
@@ -2083,6 +2088,8 @@ export default function PresupuestosLista() {
           orden: idx + 1,
           cantidad_recibida: 0,
           presupuesto_item_id: it.id,
+          // Cada renglón guarda la moneda de su costo: una OC puede tener renglones en pesos y en dólares (auditoría H42).
+          moneda: normalizePurchaseCurrency(it.costo_moneda),
         }));
         const { error: itemsErr } = await supabase.from("orden_compra_items").insert(ocItems as any);
         if (itemsErr) {
@@ -2142,6 +2149,7 @@ export default function PresupuestosLista() {
             orden: idx + 1,
             cantidad_recibida: 0,
             presupuesto_item_id: it.id,
+            moneda: normalizePurchaseCurrency(it.costo_moneda),
           }));
           const { error: stockItemsErr } = await supabase.from("orden_compra_items").insert(stockOCItems as any);
           if (stockItemsErr) {
@@ -2200,6 +2208,7 @@ export default function PresupuestosLista() {
             orden: idx + 1,
             cantidad_recibida: 0,
             presupuesto_item_id: it.id,
+            moneda: normalizePurchaseCurrency(it.costo_moneda),
           }));
           const { error: itemsSPError } = await supabase.from("orden_compra_items").insert(ocItemsSP as any);
           if (itemsSPError) {
@@ -2711,8 +2720,8 @@ export default function PresupuestosLista() {
   // Resumen fijo abajo de la ventana: subtotal, IVA, total, margen y ganancia (margen < 15 % en rojo: aviso, nunca bloquea).
   const resumenPR = resumenPresupuesto(newPR.items.map((it) => ({
     cantidad: it.cantidad, neto: precioNeto(it, descGeneral), iva: newPR.modalidad_emision === "manual" ? 0 : it.iva_porcentaje,
-    costo: convertCosto(it.precio_costo, it.costo_moneda, newPR.moneda, newPR.tipo_cambio, newPR.tipo_cambio_divisas),
-  })), MARGEN_MINIMO);
+    costo: costoEnMonedaPR(it.precio_costo, it.costo_moneda, newPR.moneda, newPR.tipo_cambio, newPR.tipo_cambio_divisas),
+  })), MARGEN_MINIMO, gastosPorcentajePR(newPR.modalidad_emision));
   const mostrarIva = verIva || newPR.items.some((it) => Number(it.iva_porcentaje) !== 21);
   const colsVisibles = Object.keys(COLS_DEFAULT).filter((c) => c !== "iva" || mostrarIva);
 
@@ -4444,10 +4453,12 @@ export default function PresupuestosLista() {
                           className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
                         {(() => {
                           const neto = precioNeto(item, descGeneral);
-                          if (!(costoConvForm > 0) || !(neto > 0)) return null;
-                          const m = ((neto / costoConvForm) - 1) * 100;
+                          const costoMg = costoEnMonedaPR(item.precio_costo, item.costo_moneda, newPR.moneda, newPR.tipo_cambio, newPR.tipo_cambio_divisas);
+                          if (costoMg === null || !(costoMg > 0) || !(neto > 0)) return null;
+                          const m = margenNetoPct(neto, costoMg, gastosPorcentajePR(newPR.modalidad_emision));
+                          if (m === null) return null;
                           const color = m < MARGEN_MINIMO ? "text-red-600" : m < MARGEN_MINIMO + 5 ? "text-amber-600" : "text-emerald-600";
-                          return <div className={`mt-0.5 text-right text-[10px] font-semibold ${color}`} title="Margen real sobre el costo, con descuentos">mg {m.toFixed(1)}%</div>;
+                          return <div className={`mt-0.5 text-right text-[10px] font-semibold ${color}`} title="Margen neto sobre el costo (con descuentos, menos gastos e impuestos)">mg {m.toFixed(1)}%</div>;
                         })()}
                       </td>
                       {mostrarIva && <td className="px-2 py-1.5">
@@ -4507,20 +4518,19 @@ export default function PresupuestosLista() {
           <div className="flex justify-end mt-3">
             <div className="w-full max-w-md space-y-1.5 text-sm rounded-lg bg-zinc-50 p-3 dark:bg-zinc-800/50">
               {(() => {
-                let lista = 0, conDescArt = 0, costo = 0;
+                let lista = 0, conDescArt = 0;
                 for (const it of newPR.items) {
                   lista += it.cantidad * it.precio_venta;
                   conDescArt += it.cantidad * precioNeto(it, 0);
-                  costo += it.cantidad * convertCosto(it.precio_costo, it.costo_moneda, newPR.moneda, newPR.tipo_cambio, newPR.tipo_cambio_divisas);
                 }
                 const descArt = lista - conDescArt;
                 const descGen = conDescArt - newPRSub;
-                // Margen neto: descontando ~7 % de gastos e impuestos sobre la venta.
-                const margenNeto = costo > 0 && newPRSub > 0 ? (((newPRSub * (1 - GASTOS_PORCENTAJE / 100)) / costo) - 1) * 100 : null;
-                const colorNeto = margenNeto === null ? "text-zinc-400" : margenNeto < MARGEN_MINIMO ? "text-red-600" : margenNeto < MARGEN_MINIMO + 5 ? "text-amber-600" : "text-emerald-600";
                 const r = resumenPR;
                 const m = newPR.moneda;
-                const color = r.margen === null ? "text-zinc-400" : r.margen < MARGEN_MINIMO ? "text-red-600" : r.margen < MARGEN_MINIMO + 5 ? "text-amber-600" : "text-emerald-600";
+                // Margen neto (descontando gastos e impuestos: 7 % ARCA, 2 % manual) = el mismo de la lista y del aviso al guardar (H43).
+                // El color de margen y ganancia sale del neto.
+                const colorNeto = r.margenNeto === null ? "text-zinc-400" : r.margenNeto < MARGEN_MINIMO ? "text-red-600" : r.margenNeto < MARGEN_MINIMO + 5 ? "text-amber-600" : "text-emerald-600";
+                const color = colorNeto;
                 const celda = "flex flex-col";
                 const rotulo = "text-[10px] uppercase tracking-wide text-zinc-400";
                 return <>
@@ -4540,13 +4550,14 @@ export default function PresupuestosLista() {
                     <div className={celda}><span className={rotulo}>IVA</span><b className="font-mono text-zinc-800 dark:text-zinc-100">{newPR.modalidad_emision === "manual" ? "—" : formatCurrency(r.iva, m)}</b></div>
                     <div className={`${celda} text-right`}><span className={rotulo}>Total</span><b className="font-mono text-orange-600 dark:text-orange-400">{formatCurrency(r.total, m)}</b></div>
                   </div>
-                  <div className="grid grid-cols-4 gap-2 border-t border-dashed border-zinc-300 pt-1.5 text-xs dark:border-zinc-600" title={`Solo interno: no sale en el PDF. Neto = menos ${GASTOS_PORCENTAJE}% de gastos e impuestos sobre la venta.`}>
+                  <div className="grid grid-cols-4 gap-2 border-t border-dashed border-zinc-300 pt-1.5 text-xs dark:border-zinc-600" title={`Solo interno: no sale en el PDF. Neto = menos ${gastosPorcentajePR(newPR.modalidad_emision)}% de gastos e impuestos sobre la venta.`}>
                     <div className={`${celda} ${color}`}><span className={rotulo}>Margen 🔒</span><b className="font-mono">{r.margen === null ? "—" : `${r.margen.toFixed(1)}%`}</b></div>
                     <div className={`${celda} ${color}`}><span className={rotulo}>Ganancia</span><b className="font-mono">{r.ganancia === null ? "—" : formatCurrency(r.ganancia, m)}</b></div>
-                    <div className={`${celda} ${colorNeto}`}><span className={rotulo}>Margen neto</span><b className="font-mono">{margenNeto === null ? "—" : `${margenNeto.toFixed(1)}%`}</b></div>
-                    <div className={`${celda} ${colorNeto} text-right`}><span className={rotulo}>Ganancia neta</span><b className="font-mono">{costo > 0 && newPRSub > 0 ? formatCurrency(newPRSub * (1 - GASTOS_PORCENTAJE / 100) - costo, m) : "—"}</b></div>
+                    <div className={`${celda} ${colorNeto}`}><span className={rotulo}>Margen neto</span><b className="font-mono">{r.margenNeto === null ? "—" : `${r.margenNeto.toFixed(1)}%`}</b></div>
+                    <div className={`${celda} ${colorNeto} text-right`}><span className={rotulo}>Ganancia neta</span><b className="font-mono">{r.gananciaNeta === null ? "—" : formatCurrency(r.gananciaNeta, m)}</b></div>
                   </div>
-                  {r.bajoMargen > 0 && <div className="text-xs text-red-600" title="Es un aviso: se puede guardar igual">⚠️ {r.bajoMargen} art. con margen &lt; {MARGEN_MINIMO}%</div>}
+                  {r.bajoMargen > 0 && <div className="text-xs text-red-600" title="Es un aviso: se puede guardar igual">⚠️ {r.bajoMargen} art. con margen neto &lt; {MARGEN_MINIMO}%</div>}
+                  {r.sinDolar > 0 && <div className="text-xs text-amber-600" title="Cargá el dólar del PR para calcularlo">⚠️ {r.sinDolar} art. sin dólar: su margen no se calcula</div>}
                 </>;
               })()}
               {newPR.moneda === "USD" && (newPR.tipo_cambio > 0 || newPR.tipo_cambio_divisas > 0) && (

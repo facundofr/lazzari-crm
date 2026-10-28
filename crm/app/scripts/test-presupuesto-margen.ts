@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { margenPR, gastosPorcentajePR } from "../src/lib/presupuesto-margen";
+import { margenPR, gastosPorcentajePR, margenNetoPct, costoEnMonedaPR } from "../src/lib/presupuesto-margen";
 
 assert.equal(gastosPorcentajePR("manual"), 2);
 assert.equal(gastosPorcentajePR("electronica"), 7);
@@ -38,5 +38,25 @@ assert.equal(sinCosto.margenPct, null);
 
 // Sin renglones: no rompe
 assert.equal(margenPR({ moneda: "ARS", items: [] }).margenPct, null);
+
+// Regla única (H43): margen neto de un renglón
+assert.equal(margenNetoPct(120, 100, 7), 11.6);
+assert.equal(margenNetoPct(120, 100, 2), 17.6);
+assert.equal(margenNetoPct(120, 0, 7), null);
+assert.equal(margenNetoPct(0, 100, 7), null);
+
+// Sin dólar no se inventa: costo en US$ en PR en pesos sin TC → null (antes tomaba 100 como si fueran pesos)
+assert.equal(costoEnMonedaPR(100, "USD", "ARS", 0, 0), null);
+assert.equal(costoEnMonedaPR(100, "USD Divisa", "ARS", 0, 1400), 140000);
+assert.equal(costoEnMonedaPR(1000, "ARS", "USD", 0, 0), null);
+assert.equal(costoEnMonedaPR(100, "USD", "USD", 0, 0), 100);
+assert.equal(costoEnMonedaPR(0, "USD", "ARS", 0, 0), 0);
+const sinTc = margenPR({ moneda: "ARS", modalidadEmision: "electronica", items: [
+  { cantidad: 1, precioVenta: 1000, precioCosto: 800, costoMoneda: "ARS" },
+  { cantidad: 1, precioVenta: 200000, precioCosto: 100, costoMoneda: "USD" },
+] });
+assert.equal(sinTc.sinDolar, 1);
+assert.equal(sinTc.venta, 1000);
+assert.equal(sinTc.margenPct, 16.3);
 
 console.log("OK: ganancia y margen del PR (7 % ARCA, 2 % manual, costos en US$, sin costos).");

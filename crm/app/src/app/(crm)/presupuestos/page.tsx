@@ -28,9 +28,13 @@ import { leerExcel, leerBase64, separarTalle } from "@/components/presupuestos/c
 import { buscarCandidatos, normalizar, tokens, type CatalogoCandidato as Cand } from "@/lib/catalogo-busqueda";
 import { leerDolaresGuardados, etiquetaDolar, type DolaresGuardados } from "@/lib/dolar-presupuesto";
 import {
-  proponerPrecio, semaforoLinea, buscarClientes, clienteSeguro, ultimoPrecioCliente, avisosPresupuesto, margenSobreCosto, redondear2,
+  proponerPrecio, semaforoLinea, buscarClientes, clienteSeguro, ultimoPrecioCliente, avisosPresupuesto, redondear2,
   MARGEN_MINIMO_IA, type Confianza, type Semaforo, type ClienteBasico, type ClienteCandidato, type RenglonHistorico,
 } from "@/lib/presupuesto-ia";
+import { margenNetoPct, gastosPorcentajePR } from "@/lib/presupuesto-margen";
+
+// Margen NETO de gastos e impuestos, como la lista y la ventana del PR (auditoría H43). El PR se crea "sin definir" → 7 %.
+const GASTOS_PR_NUEVO = gastosPorcentajePR("sin_definir");
 
 const db = supabase as any;
 
@@ -197,7 +201,7 @@ export default function PresupuestosPage() {
     const ultimo = ultimoPrecioCliente(historial, [cand.codigo_interno || "", cand.codigo], cand.descripcion, moneda);
     const prop = proponerPrecio({ costo, ventaLista, ultimo });
     const precio = l.precioManual ?? prop.precio;
-    const margen = costo !== null && costo > 0 && precio > 0 ? margenSobreCosto(precio, costo) : null;
+    const margen = costo !== null && costo > 0 && precio > 0 ? margenNetoPct(precio, costo, GASTOS_PR_NUEVO) : null;
     const bajoMinimo = margen !== null && margen < MARGEN_MINIMO_IA;
     const nota = l.precioManual !== null ? (bajoMinimo ? `Margen ${margen}% (mínimo ${MARGEN_MINIMO_IA}%)` : "") : prop.nota;
     return { cand, costo, ventaLista, precio, margen, nota, bajoMinimo, sinTc, origenPrecio: l.precioManual !== null ? "manual" : prop.origen,
@@ -214,7 +218,7 @@ export default function PresupuestosPage() {
       if (f.c.costo && f.c.costo > 0 && f.c.precio > 0) costo += f.c.costo * f.l.cantidad;
     }
     const ventaConCosto = incluidas.reduce((s, f) => s + (f.c.costo && f.c.costo > 0 && f.c.precio > 0 ? f.c.precio * f.l.cantidad : 0), 0);
-    return { venta, costo, margen: costo > 0 ? margenSobreCosto(ventaConCosto, costo) : null };
+    return { venta, costo, margen: costo > 0 ? margenNetoPct(ventaConCosto, costo, GASTOS_PR_NUEVO) : null };
   }, [incluidas]);
   const avisos = useMemo(() => avisosPresupuesto({
     moneda, cotizacionModalidad: modalidad, clienteMonedaPredeterminada: cliente?.moneda_predeterminada,
@@ -728,7 +732,7 @@ export default function PresupuestosPage() {
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-700 dark:bg-zinc-900">
             <div className="text-xs text-zinc-500">
               {incluidas.length} renglones · Total sin IVA: <b className="text-zinc-800 dark:text-white">{fmt(totales.venta, moneda)}</b>
-              {totales.margen !== null && <> · Margen sobre costo: <b className={totales.margen < MARGEN_MINIMO_IA ? "text-red-600" : "text-zinc-800 dark:text-white"}>{totales.margen.toLocaleString("es-AR", { maximumFractionDigits: 1 })}%</b></>}
+              {totales.margen !== null && <> · Margen neto: <b className={totales.margen < MARGEN_MINIMO_IA ? "text-red-600" : "text-zinc-800 dark:text-white"}>{totales.margen.toLocaleString("es-AR", { maximumFractionDigits: 1 })}%</b></>}
             </div>
             <div className="flex gap-2">
               <button onClick={reiniciar} disabled={guardando || ocupado} className="rounded-lg border px-3 py-2 text-sm dark:border-zinc-700 dark:text-zinc-200">Empezar de nuevo</button>

@@ -8,7 +8,8 @@ assert.equal(margenSobreCosto(100, 0), null);
 
 // precio: lista
 let p = proponerPrecio({ costo: 100, ventaLista: 140 });
-assert.equal(p.origen, "lista"); assert.equal(p.precio, 140); assert.equal(p.margenPct, 40); assert.equal(p.bajoMinimo, false);
+// Margen NETO (H43): 140 × 0,93 = 130,2 sobre 100 → 30,2 %
+assert.equal(p.origen, "lista"); assert.equal(p.precio, 140); assert.equal(p.margenPct, 30.2); assert.equal(p.bajoMinimo, false);
 // precio: último precio vigente (margen ok)
 p = proponerPrecio({ costo: 100, ventaLista: 140, ultimo: { precio: 125, fecha: "2026-09-01", numero: "PR-2026-1100" } });
 assert.equal(p.origen, "ultimo"); assert.equal(p.precio, 125); assert.match(p.nota, /última vez/); assert.match(p.nota, /lista hoy/);
@@ -17,7 +18,13 @@ p = proponerPrecio({ costo: 110, ventaLista: 150, ultimo: { precio: 120, fecha: 
 assert.equal(p.origen, "lista"); assert.equal(p.precio, 150); assert.match(p.nota, /se usa la lista/);
 // lista con margen bajo: avisa pero no cambia el precio
 p = proponerPrecio({ costo: 100, ventaLista: 108 });
-assert.equal(p.precio, 108); assert.equal(p.bajoMinimo, true); assert.match(p.nota, /Margen 8%/);
+assert.equal(p.precio, 108); assert.equal(p.bajoMinimo, true); assert.match(p.nota, /Margen 0.4%/);
+// último precio con 20 % bruto: neto 11,6 % (bajo el 15 %) → lista
+p = proponerPrecio({ costo: 100, ventaLista: 140, ultimo: { precio: 120, fecha: "2026-09-01" } });
+assert.equal(p.origen, "lista"); assert.match(p.nota, /margen hoy 11.6%/);
+// PR manual (2 %): el mismo 20 % bruto queda en 17,6 % → se respeta el último precio
+p = proponerPrecio({ costo: 100, ventaLista: 140, ultimo: { precio: 120, fecha: "2026-09-01" }, gastosPct: 2 });
+assert.equal(p.origen, "ultimo"); assert.equal(p.margenPct, 17.6);
 // sin precio
 p = proponerPrecio({ costo: 100, ventaLista: null });
 assert.equal(p.origen, "sin_precio"); assert.equal(p.precio, 0);
