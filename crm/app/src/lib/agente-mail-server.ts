@@ -87,6 +87,10 @@ async function bajarAdjunto(token: string, msgId: string, adj: Adjunto): Promise
 async function textoDePdf(buf: Buffer): Promise<string> {
   try {
     const pdfjs: any = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    // En el servidor (Next empaqueta pdfjs) no encuentra "pdf.worker.mjs" y fallaba siempre: todo se leía con IA (28/10/2026).
+    // Con el worker cargado acá, pdfjs lo usa en el mismo proceso.
+    // @ts-expect-error: pdfjs-dist no trae los tipos del worker
+    if (!(globalThis as any).pdfjsWorker) (globalThis as any).pdfjsWorker = await import("pdfjs-dist/legacy/build/pdf.worker.mjs");
     const doc = await pdfjs.getDocument({ data: new Uint8Array(buf), useSystemFonts: true, isEvalSupported: false }).promise;
     let out = "";
     for (let i = 1; i <= Math.min(doc.numPages, 8); i++) {
