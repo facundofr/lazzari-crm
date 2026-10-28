@@ -8,6 +8,8 @@
  * Prueba: npx tsx scripts/test-cuenta-corriente-cliente.ts
  */
 
+import { calcularSaldosClientes, SALDO_CLIENTES_SELECTS, type SaldoCliente } from "./saldo-clientes";
+
 export type MonedaTotal = "ARS" | "USD";
 
 export interface TotalCC {
@@ -42,4 +44,24 @@ export function totalesCuentaCorriente(
     const dif = r2(fact - cuenta);
     return { moneda: m, facturas: fact, aFavor: dif > 0 ? dif : 0, otrosCargos: dif < 0 ? -dif : 0, saldoCuenta: cuenta };
   });
+}
+
+/**
+ * Saldo de UN cliente con la misma regla que Finanzas (lib/saldo-clientes), sin traer toda la sociedad.
+ * Lo usa el aviso de límite de crédito del PR (auditoría 28/10/2026, H30: antes leía la columna vieja
+ * clientes.saldo_cuenta_corriente, que no actualiza nadie).
+ */
+export async function traerSaldoUnCliente(supabase: any, sociedadId: string, clienteId: string): Promise<SaldoCliente | null> {
+  const { data: facturas, error } = await supabase.from("facturas").select(SALDO_CLIENTES_SELECTS.facturas)
+    .eq("sociedad_id", sociedadId).eq("cliente_id", clienteId).neq("estado", "anulada");
+  if (error) throw error;
+  const ids = (facturas || []).map((f: { id: string }) => f.id);
+  const [movs, apls, ajustes] = await Promise.all([
+    ids.length ? supabase.from("movimientos").select(SALDO_CLIENTES_SELECTS.movimientos).in("factura_id", ids) : { data: [], error: null },
+    ids.length ? supabase.from("cobro_aplicaciones").select("movimiento_id, factura_id, monto, movimientos(anulado)").in("factura_id", ids) : { data: [], error: null },
+    supabase.from("movimientos").select(SALDO_CLIENTES_SELECTS.ajustes).eq("sociedad_id", sociedadId).eq("cliente_id", clienteId)
+      .is("factura_id", null).not("ajuste_sentido", "is", null),
+  ]);
+  for (const r of [movs, apls]) if (r.error) throw r.error;
+  return calcularSaldosClientes(facturas || [], movs.data || [], apls.data || [], ajustes.error ? [] : ajustes.data || [])[clienteId] || null;
 }

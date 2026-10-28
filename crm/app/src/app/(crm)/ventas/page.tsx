@@ -8,6 +8,7 @@
  */
 
 import { Header } from "@/components/layout/header";
+import { VentaCaidaOCs } from "@/components/presupuestos/venta-caida-ocs";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
@@ -148,6 +149,8 @@ export default function VentasPage() {
   const [periodo, setPeriodo] = useState<Periodo>("todo");
   const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc");
   const [selectedVentaId, setSelectedVentaId] = useState<string | null>(null);
+  // "No facturar" con OC vivas (auditoría H09): aviso con la lista para decidir qué hacer.
+  const [ventaCaida, setVentaCaida] = useState<{ prId: string; numero: string } | null>(null);
   const [emitVenta, setEmitVenta] = useState<Venta | null>(null);
   const [downloadingFacturaId, setDownloadingFacturaId] = useState<string | null>(null);
 
@@ -337,6 +340,7 @@ export default function VentasPage() {
     if (!confirm("¿No facturar este presupuesto? Pasará a estado «rechazado» y saldrá de Ventas.")) return;
     const { error } = await (supabase as any).from("presupuestos").update({ estado: "rechazado" }).eq("id", prId).eq("sociedad_id", sociedadActiva.id);
     if (error) { alert("Error al cancelar: " + error.message); return; }
+    setVentaCaida({ prId, numero: ventas.find((v) => v.presupuesto.id === prId)?.presupuesto.numero || "El PR" });
     setSelectedVentaId(null);
     await fetchData();
   }
@@ -525,6 +529,8 @@ export default function VentasPage() {
         </div>
         </>
       </div>
+
+      {ventaCaida && <VentaCaidaOCs prId={ventaCaida.prId} prNumero={ventaCaida.numero} onClose={() => setVentaCaida(null)} />}
 
       {emitVenta && (
         <EmitirFacturaModal

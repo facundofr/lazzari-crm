@@ -41,6 +41,9 @@ import { calculateNetPrice, parseQuantityRange, type PriceListRule } from "@/lib
 import { observacionesParaCliente } from "@/lib/observaciones-cliente";
 import { margenPR, MARGEN_MINIMO_PR } from "@/lib/presupuesto-margen";
 import { RemitoVentana } from "@/components/remito-ventana";
+import { traerSaldoUnCliente } from "@/lib/cuenta-corriente-cliente";
+import { VentaCaidaOCs } from "@/components/presupuestos/venta-caida-ocs";
+import { superaLimiteCredito } from "@/lib/saldo-clientes";
 import { parseCantidadAR, textoCantidadValido, numeroAEditable, formatCantidad, avisosRenglon, renglonesSinPrecio } from "@/lib/numero-ar";
 import { convertirCostoPR, leerDolaresGuardados, fechaDolarPresupuesto, dolarAtrasado, etiquetaDolar, esCostoUsd, esCostoDivisa, tcParaCosto, type DolaresGuardados } from "@/lib/dolar-presupuesto";
 
@@ -333,6 +336,7 @@ const statusConfig: Record<PRStatus, { label: string; variant: "success" | "warn
 const ESTADOS_MANUALES: PRStatus[] = ["solicitud", "pendiente", "aprobado", "rechazado"];
 
 interface NewPRItem {
+  id?: string;                     // id del renglón en la base (al editar): así la edición lo actualiza en su lugar
   codigo: string;
   descripcion: string;
   categoria: string;
@@ -544,6 +548,20 @@ export default function PresupuestosLista() {
   const [enviarOCs, setEnviarOCs] = useState<{ ids: string[]; titulo: string } | null>(null);
   // Track PRs aprobados con costos faltantes (set of PR ids)
   const [prsSinCostos, setPrsSinCostos] = useState<Set<string>>(new Set());
+  // Aviso de límite de crédito con el saldo real de Finanzas (auditoría 28/10/2026, H30). Solo si el cliente tiene límite.
+  // Venta caída con OC vivas (auditoría H09): aviso con la lista para decidir qué hacer.
+  const [ventaCaida, setVentaCaida] = useState<{ prId: string; numero: string } | null>(null);
+  const [limiteExcedido, setLimiteExcedido] = useState<{ prId: string; excedido: boolean } | null>(null);
+  const selLimite = Number((selected as any)?.clienteLimiteCredito) || 0;
+  useEffect(() => {
+    const prId = selected?.id, clienteId = selected?.clienteId, socId = sociedadActiva?.id;
+    if (!prId || !clienteId || !socId || selLimite <= 0) { setLimiteExcedido(null); return; }
+    let vivo = true;
+    traerSaldoUnCliente(supabase, socId, clienteId)
+      .then((s) => { if (vivo) setLimiteExcedido({ prId, excedido: superaLimiteCredito(selLimite, s) }); })
+      .catch(() => { if (vivo) setLimiteExcedido(null); });
+    return () => { vivo = false; };
+  }, [selected?.id, selected?.clienteId, sociedadActiva?.id, selLimite]);
 
 
   // Nuevo PR modal
@@ -1573,7 +1591,12 @@ export default function PresupuestosLista() {
         };
       });
 
-      const buildItemRows = () => itemsWithTotals.map((it) => ({
+      // Con el id de cada renglón la base lo actualiza en su lugar y no se cortan los vínculos con OC y remitos
+      // (auditoría 28/10/2026, H06). Un id repetido (renglón copiado) va sin id: es un renglón nuevo.
+      const idsVistos = new Set<string>();
+      const idRenglon = (id?: string) => (id && !idsVistos.has(id) ? (idsVistos.add(id), id) : null);
+      const buildItemRows = () => { idsVistos.clear(); return itemsWithTotals.map((it) => ({
+        id: idRenglon(it.id),
         codigo: it.codigo ?? "",
         descripcion: it.descripcion,
         categoria: it.categoria ?? null,
@@ -1592,7 +1615,7 @@ export default function PresupuestosLista() {
         lista_item_id: it.lista_item_id || null,
         proveedor_nombre: it.proveedor_nombre || null,
         costo_moneda: it.costo_moneda || "ARS",
-      }));
+      })); };
 
       if (editingPRId) {
         // ── UPDATE existing PR ──
@@ -1912,7 +1935,8 @@ export default function PresupuestosLista() {
         const hayRecibido = ocItems.some((i) => Number(i.cantidad_recibida) > 0);
         await (supabase as any)
           .from("ordenes_compra")
-          .update({ subtotal: ocSubtotal, iva: ocIva, total: ocSubtotal + ocIva, moneda: ocMoneda, estado: hayRecibido ? estadoPorRecibido(ocItems, oc.estado || "enviada") : "pendiente" })
+          // Sin nada recibido la OC conserva su estado (antes ponía "pendiente", que no existe y fallaba en silencio: auditoría H56).
+          .update({ subtotal: ocSubtotal, iva: ocIva, total: ocSubtotal + ocIva, moneda: ocMoneda, estado: hayRecibido ? estadoPorRecibido(ocItems, oc.estado || "enviada") : (oc.estado || "enviada") })
           .eq("id", oc.id);
       }
       return ocs.length;
@@ -1925,11 +1949,12 @@ export default function PresupuestosLista() {
   async function generateOCsFromPresupuesto(prId: string) {
     try {
       // Fetch presupuesto items with proveedor info
-      const { data: items, error: itemsErr } = await supabase
+      const { data: itemsDb, error: itemsErr } = await supabase
         .from("presupuesto_items")
         .select("*")
         .eq("presupuesto_id", prId);
-      if (itemsErr || !items || items.length === 0) return;
+      if (itemsErr || !itemsDb || itemsDb.length === 0) return;
+      let items = itemsDb;
 
       // Get presupuesto header for numero and sociedad_id
       const { data: prHeader } = await (supabase as any)
@@ -1949,9 +1974,25 @@ export default function PresupuestosLista() {
         .select("id")
         .eq("presupuesto_origen_id", prId)
         .not("estado", "eq", "cancelada");
+      // Re-aprobar (auditoría 28/10/2026, H44): si el PR ya tiene OC, solo se proponen OC para los renglones que no están
+      // en ninguna (por ejemplo, si la primera vez falló un proveedor). Se pregunta antes: nada se arma solo.
       if (existingOCs && existingOCs.length > 0) {
-        toast.info("Este PR ya tiene OC generadas. No se crearon duplicados.");
-        return;
+        const { data: cubiertos } = await (supabase as any).from("orden_compra_items").select("presupuesto_item_id")
+          .in("orden_id", existingOCs.map((o: { id: string }) => o.id));
+        const ya = new Set(((cubiertos || []) as { presupuesto_item_id: string | null }[]).map((c) => c.presupuesto_item_id).filter(Boolean));
+        const faltan = items.filter((it: any) => !ya.has(it.id));
+        if (faltan.length === 0) {
+          toast.info("Este PR ya tiene OC para todos sus renglones. No se crearon duplicados.");
+          return;
+        }
+        const muestra = faltan.slice(0, 3).map((it: any) => it.descripcion).join(", ") + (faltan.length > 3 ? "…" : "");
+        if (!confirm(`Este PR ya tiene ${existingOCs.length} OC, pero ${faltan.length} renglón(es) no están en ninguna: ${muestra}.
+
+¿Armo OC solo para esos?`)) {
+          toast.info("No se crearon OC nuevas.");
+          return;
+        }
+        items = faltan;
       }
 
       // Los items de stock propio conservan su costo para el margen y ahora generan
@@ -2046,7 +2087,11 @@ export default function PresupuestosLista() {
         const { error: itemsErr } = await supabase.from("orden_compra_items").insert(ocItems as any);
         if (itemsErr) {
           console.error("Error inserting OC items:", JSON.stringify(itemsErr));
-          toast.error(`OC ${ocRow.numero ?? ""} creada pero falló la carga de items: ${itemsErr.message}`);
+          // Sin renglones la OC no sirve: se borra el encabezado para que re-aprobar la vuelva a armar (auditoría H44).
+          const { data: borrada } = await supabase.from("ordenes_compra").delete().eq("id", ocRow.id).eq("sociedad_id" as any, sociedadId).select("id").maybeSingle();
+          toast.error(borrada
+            ? `No se generó una OC: falló la carga de sus renglones (${itemsErr.message}). Aprobá de nuevo para reintentar.`
+            : `OC ${ocRow.numero ?? ""} creada pero falló la carga de items: ${itemsErr.message}`);
           ocCreationFailed = true;
           continue;
         }
@@ -2269,6 +2314,7 @@ export default function PresupuestosLista() {
         } catch { /* la propuesta es opcional: nunca frena la aprobación */ }
       }
 
+      if (estado === "rechazado") setVentaCaida({ prId: id, numero: presupuestos.find((p) => p.id === id)?.numero || "El PR" });
       await fetchPresupuestos();
       if (selected?.id === id) {
         setSelected((prev) => prev ? { ...prev, estado, motivoRechazo: motivo ?? prev.motivoRechazo } : null);
@@ -2399,9 +2445,14 @@ export default function PresupuestosLista() {
       const { error } = await restorePR;
       if (error) throw new Error(error.message);
       setPresupuestos(prev => prev.map(p => p.id === id ? { ...p, eliminado: false } as any : p));
-      // Regenerate OCs for restored PR
-      await generateOCsFromPresupuesto(id);
-      toast.success("Presupuesto restaurado (OCs regeneradas)");
+      // Solo un PR aprobado arma OC al restaurarse (auditoría H45: antes le creaba OC aunque estuviera pendiente).
+      const restaurado = presupuestos.find((p) => p.id === id);
+      if (restaurado?.estado === "aprobado") {
+        await generateOCsFromPresupuesto(id);
+        toast.success("Presupuesto restaurado");
+      } else {
+        toast.success("Presupuesto restaurado (no se arman OC: no está aprobado)");
+      }
     } catch {
       toast.error("Error al restaurar");
     }
@@ -2459,6 +2510,7 @@ export default function PresupuestosLista() {
             }
           }
           return {
+          id: it.id || undefined,
           codigo: it.codigo || "",
           descripcion: it.descripcion || "",
           categoria: it.categoria || "",
@@ -3238,7 +3290,7 @@ export default function PresupuestosLista() {
                   })()}
                 </div>
                 <p className="truncate text-sm text-zinc-500" title={selected.clienteNombre}>{selected.clienteNombre}</p>
-                {!!(selected as any).clienteLimiteCredito && (selected as any).clienteSaldoCC >= (selected as any).clienteLimiteCredito && (
+                {limiteExcedido?.prId === selected.id && limiteExcedido.excedido && (
                   <div className="flex items-center gap-1 mt-1 rounded-md bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 px-2 py-1 text-xs font-medium text-red-700 dark:text-red-300">
                     <AlertTriangle className="h-3 w-3 shrink-0" /> Límite de crédito excedido
                   </div>
@@ -4880,6 +4932,7 @@ export default function PresupuestosLista() {
           return htmlToPdfBase64(html);
         }}
       />
+      {ventaCaida && <VentaCaidaOCs prId={ventaCaida.prId} prNumero={ventaCaida.numero} onClose={() => setVentaCaida(null)} />}
       {enviarOCs && <EnviarOCProveedor ocIds={enviarOCs.ids} titulo={enviarOCs.titulo} onClose={() => setEnviarOCs(null)} />}
     </>
   );

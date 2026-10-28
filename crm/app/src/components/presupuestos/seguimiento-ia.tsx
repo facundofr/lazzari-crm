@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, CalendarClock, Check, ExternalLink, Loader2, Mail, MessageCircle, RefreshCw, Sparkles, Undo2 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
+import { VentaCaidaOCs } from "@/components/presupuestos/venta-caida-ocs";
 import { useRefrescarAlVolver } from "@/lib/use-refrescar";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
@@ -49,6 +50,8 @@ export default function SeguimientoIA() {
   const hoy = todayAR();
 
   const [prs, setPrs] = useState<PR[]>([]);
+  // PR perdido con OC vivas (auditoría H09): aviso con la lista para decidir qué hacer.
+  const [ventaCaida, setVentaCaida] = useState<{ prId: string; numero: string } | null>(null);
   const [eventos, setEventos] = useState<EventoSeg[]>([]);
   const [cargando, setCargando] = useState(true);
   const [tablaOk, setTablaOk] = useState(true);
@@ -193,6 +196,7 @@ export default function SeguimientoIA() {
     setOcupado(null); setPanel(null); setMotivoTxt("");
     setPrs(prev => prev.filter(x => x.id !== p.id));
     toast.success(`${p.numero} quedó como perdido (${texto})`);
+    setVentaCaida({ prId: p.id, numero: p.numero });
   }
   async function posponer(p: PR) {
     const ev = await anotar(p, { tipo: "posponer", proxima_fecha: sumarDias(hoy, dias) }, `Te lo vuelvo a mostrar en ${dias} días`);
@@ -314,6 +318,7 @@ export default function SeguimientoIA() {
 
   return (
     <div className="space-y-3">
+      {ventaCaida && <VentaCaidaOCs prId={ventaCaida.prId} prNumero={ventaCaida.numero} onClose={() => setVentaCaida(null)} />}
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-200 bg-white p-3 text-xs dark:border-zinc-700 dark:bg-zinc-900">
         <CalendarClock className="h-4 w-4 text-orange-500" />
         <span className="dark:text-zinc-200"><b className="text-orange-600">{total("hoy").length}</b> toca hoy · <b>{total("esperando").length}</b> esperando · <b className="text-red-600">{total("vencido").length}</b> vencidos</span>
