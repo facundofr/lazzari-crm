@@ -4,13 +4,24 @@ const vm = require('node:vm');
 const ts = require('typescript');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(path.join(__dirname, '../src/lib/pdf-templates.ts'), 'utf8');
+const libCache={};
+function cargarLib(name){
+  const base=name.replace('@/lib/','').replace('./','');
+  if(!/^[a-z0-9-]+$/.test(base)) assert.fail('dependencia inesperada: '+name);
+  if(libCache[base]) return libCache[base].exports;
+  const ctx={exports:{}}; libCache[base]=ctx;
+  const code=ts.transpileModule(fs.readFileSync(path.join(__dirname,'../src/lib/'+base+'.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+  vm.runInNewContext(code,{exports:ctx.exports,require:(n)=>n==='@/lib/utils'?{formatCurrency:(x)=>String(x),formatDate:(d)=>d}:cargarLib(n)});
+  return ctx.exports;
+}
 const fceContext={exports:{}};
 vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname,'../src/lib/fce-invoice.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,fceContext);
 const context = {exports:{}, require(name) {
   if(name==='@/lib/fce-invoice') return fceContext.exports;
   if(name==='@/lib/pdf-style-scope') return {scopePdfStyles:()=>{throw new Error('Rendering is not exercised by this template-only test');}};
-  assert.equal(name, '@/lib/utils');
-  return {formatCurrency: (n) => String(n), formatDate: (d) => d};
+  if(name==='@/lib/utils') return {formatCurrency: (n) => String(n), formatDate: (d) => d};
+  // El resto de las dependencias de pdf-templates (observaciones, mayúsculas, certificado de retención…) se cargan de verdad.
+  return cargarLib(name);
 }, Buffer, btoa:(s)=>Buffer.from(s,'binary').toString('base64')};
 vm.runInNewContext(ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,context);
 const grupo = context.exports.getSociedadPDF({id:'fee94607-747a-4e87-ba24-aff9032f7a56',nombre:'Grupo LA',razonSocial:'Grupo La Servicios Integrales SAS',cuit:'30719396042',condicionIva:'Responsable Inscripto',colorPrimario:'#2563EB'});
@@ -31,7 +42,7 @@ const cbu='2850590940090418135201';
 assert.ok(fceContext.exports.validCbu(cbu));
 const fce={...factura,tipo:'FCEA',nota_interna:fceContext.exports.withFceMetadata('',{cbu,transmision:'SCA',vencimiento:'2026-10-12',cuitReceptor:'30641405554',fecha:'2026-09-12',montoDesde:5549862,totalArs:6000000})};
 const fceHtml=context.exports.generateFacturaPDF(fce,{cuitNumero:30719396042},grupo);
-for(const text of ['FACTURA DE CRÉDITO ELECTRÓNICA MiPyME','CBU de cobro',cbu,'SCA','2026-10-12']) assert.ok(fceHtml.includes(text),text);
+for(const text of ['Factura de crédito electrónica MiPyME','CBU de cobro',cbu,'SCA','2026-10-12']) assert.ok(fceHtml.includes(text),text);
 assert.ok(!fceHtml.includes('[ARCA_FCE_V1]'));
 const legacyFce=context.exports.generateFacturaPDF({...factura,tipo:'FCEA'},{cuitNumero:30719396042},grupo);
 assert.ok(!legacyFce.includes('CBU de cobro'));

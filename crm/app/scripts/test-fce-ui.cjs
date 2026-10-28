@@ -21,8 +21,11 @@ function respond(index,data,ok=true){requests[index].resolve({ok,json:async()=>d
  props=[false,'soc-b','client-b','2026-09-11'];render();props=[true,'soc-b','client-b','2026-09-11'];assert.equal(render().ready,false);
  for(const file of ['src/components/facturacion/emitir-factura-modal.tsx']){const ui=fs.readFileSync(file,'utf8');for(const token of ['fceBlocked','fce_cbu','fce_transmision','fceExpectedTipo','Reintentar verificación FCE'])assert.ok(ui.includes(token),`${file}: ${token}`);}
  const billing=fs.readFileSync('src/app/(crm)/facturacion/facturacion-content.tsx','utf8');
- for(const token of ['ncEsFce','código ARCA','disabled={ncEsFce}','nota_credito_modo: ncMode','Importe libre','Por ítems']) assert.ok(billing.includes(token),`facturación NC: ${token}`);
- assert.match(billing,/setNcManual\(!\["FCEA", "FCEB"\]\.includes\(factura\.tipo\)/);
+ // La nota de crédito vive en su propia ventana (la usan Facturación y Finanzas): se controla ahí.
+ const nc=fs.readFileSync('src/components/facturacion/nota-credito-venta-modal.tsx','utf8');
+ for(const token of ['ncEsFce','código ARCA','disabled={ncEsFce}','nota_credito_modo: ncMode','Importe libre','Por ítems']) assert.ok(nc.includes(token),`facturación NC: ${token}`);
+ assert.ok(billing.includes('<NotaCreditoVentaModal'),'facturación usa la ventana de NC');
+ assert.match(nc,/setNcManual\(!\["FCEA", "FCEB"\]\.includes\(factura\.tipo\)/);
  const ventas=fs.readFileSync('src/app/(crm)/ventas/page.tsx','utf8');assert.ok(ventas.includes('visibilitychange'));assert.ok(ventas.includes('ventas-presupuestos-'));assert.ok(ventas.includes('<EmitirFacturaModal'));assert.ok(billing.includes('<EmitirFacturaModal'));assert.ok(!ventas.includes('fce_cbu'));assert.ok(!billing.includes('fce_cbu'));
  console.log('OK: FCE UI race guards, society/client/date isolation, malformed threshold fails closed, retry, reopen, required fields and filter refresh wiring. No network or real invoices.');
 })().catch(e=>{console.error(e);process.exitCode=1;});

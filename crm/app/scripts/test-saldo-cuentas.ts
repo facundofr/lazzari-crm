@@ -1,7 +1,8 @@
-// Prueba rápida: npx tsx scripts/test-saldo-cuentas.mjs
+// @ts-nocheck — prueba escrita en JS (venía de .mjs); se chequea corriéndola, no con tsc
+// Prueba rápida: npx tsx scripts/test-saldo-cuentas.ts
 import assert from "node:assert/strict";
-import { calcularSaldosCuentas, sugerenciasCuentas, debitosPorSemana, montoCuentaDeOp, grupoCuentaSugerido as g } from "../src/lib/saldo-cuentas.ts";
-import { diaHabilAnterior, diaHabilDesde, esDiaHabil } from "../src/lib/dias-habiles.ts";
+import { calcularSaldosCuentas, sugerenciasCuentas, debitosPorSemana, montoCuentaDeOp, grupoCuentaSugerido as g } from "../src/lib/saldo-cuentas";
+import { diaHabilAnterior, diaHabilDesde, esDiaHabil } from "../src/lib/dias-habiles";
 
 // Días hábiles: 12/10/2026 es feriado, 6/11 Día del Bancario.
 assert.equal(esDiaHabil("2026-10-12"), false);

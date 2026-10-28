@@ -6,8 +6,8 @@
 // La usan el menú "Facturas" (/consulta-facturas) y Finanzas Lazza (`completa`: pestaña "Todas" + filtros de estado, moneda y fechas,
 // y en compras la columna "OP" al final para descargar la orden de pago que la pagó — Augusto 19/10/2026).
 // En Finanzas Lazza (`completa`) las facturas de venta con saldo tienen "Cobrar": la misma liquidación de Finanzas (finanzas-lazza/cobrar.tsx).
-import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { NotaCreditoVentaModal } from "@/components/facturacion/nota-credito-venta-modal";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable, type Column } from "@/components/ui/data-table";
@@ -415,6 +415,9 @@ export function FichaFacturaVenta({ factura, facturaId, cobrable = false, onCobr
   const { sociedadActiva, profile } = useUser();
   const { toast } = useToast();
   const venta = useFactura<FacturaVenta>("facturas", SELECT_VENTA, factura, facturaId);
+  // Hacer NC sin salir de Finanzas: la misma ventana que Facturación. Si se emitió, al cerrarla se cierra la ficha (la factura cambió) y la lista se recarga.
+  const [hacerNc, setHacerNc] = useState(false);
+  const ncEmitida = useRef(false);
   const [items, setItems] = useState<ItemVenta[] | null>(null);
   const [mail, setMail] = useState<{ open: boolean; to: string; subject: string; body: string; filename: string; sugeridos: { email: string; label?: string }[] }>({ open: false, to: "", subject: "", body: "", filename: "", sugeridos: [] });
   // Quién pidió el PR (contacto del presupuesto): undefined = cargando, null = sin solicitante.
@@ -520,7 +523,8 @@ export function FichaFacturaVenta({ factura, facturaId, cobrable = false, onCobr
                 <button type="button" onClick={() => pdf(venta, false)} className={botonFicha}><Download className="h-4 w-4" /> Descargar</button>
                 <button type="button" onClick={() => prepararMail(venta)} className="inline-flex items-center gap-1 rounded-lg bg-orange-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-600"><Mail className="h-4 w-4" /> Enviar al cliente</button>
                 {/* Hacer NC: lleva a la NC de siempre (Facturación, con ARCA) con esta factura ya elegida. */}
-                {!soloLectura && venta.estado !== "anulada" && !/^NC/i.test(venta.tipo) && <Link href={`/facturacion?factura=${venta.id}&accion=nc`} title="Hacer una nota de crédito de esta factura" className="inline-flex items-center gap-1 rounded-lg border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/30"><Ban className="h-4 w-4" /> Hacer NC</Link>}
+                {!soloLectura && venta.estado !== "anulada" && !/^NC/i.test(venta.tipo) && <button type="button" onClick={() => setHacerNc(true)} title="Hacer una nota de crédito de esta factura" className="inline-flex items-center gap-1 rounded-lg border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/30"><Ban className="h-4 w-4" /> Hacer NC</button>}
+                {hacerNc && <NotaCreditoVentaModal facturaId={venta.id} onClose={() => { setHacerNc(false); if (ncEmitida.current) onClose(); }} onEmitida={() => { ncEmitida.current = true; onEnviada?.(); }} />}
                 {cobrable && onCobrar && <button type="button" onClick={onCobrar} className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700"><HandCoins className="h-4 w-4" /> Cobrar</button>}
               </div>
               <div className="divide-y divide-zinc-100 dark:divide-zinc-800">

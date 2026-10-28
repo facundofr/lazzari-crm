@@ -1,9 +1,10 @@
-// Prueba rápida: npx tsx scripts/test-extracto-bbva.mjs
+// @ts-nocheck — prueba escrita en JS (venía de .mjs); se chequea corriéndola, no con tsc
+// Prueba rápida: npx tsx scripts/test-extracto-bbva.ts
 import assert from "node:assert/strict";
 import {
   leerImporte, leerFecha, digitosCuenta, leerExtractoBbva, leerListadoCheques, chequesParaCompletar,
-  cruzarExtracto, totalesBancoPorMes, leerMovimientosBbva,
-} from "../src/lib/extracto-bbva.ts";
+  cruzarExtracto, totalesBancoPorMes, leerMovimientosBbva, lineasNuevas,
+} from "../src/lib/extracto-bbva";
 
 // Importes y fechas en los formatos del banco y de la planilla.
 assert.equal(leerImporte("-4.694.598,40"), -4694598.4);
@@ -172,7 +173,6 @@ assert.deepEqual(tot, { "2026-10": { iva: -5921.82, ley_25413: 1829.52 }, "2026-
 
 // Sin duplicar: la misma línea con otro texto (Excel "Movimientos" vs "Detalle_mov_cuenta") ya está cargada.
 {
-  const { lineasNuevas } = await import("../src/lib/extracto-bbva.ts");
   const cargadas = ["2026-10-09|-4694598.40|-1575636.31|CUENTA VISA NRO. 79099672253398"];
   const nuevas = lineasNuevas([
     { clave: "2026-10-09|-4694598.40|-1575636.31|PAGO VISA-IN 79099672253398" },

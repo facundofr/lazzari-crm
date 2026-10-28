@@ -139,143 +139,111 @@ export const GUIA_SECCIONES: SeccionGuia[] = [
     "titulo": "Plata",
     "ruta": "/finanzas",
     "modulo": "finanzas",
-    "texto": "Se ordena en 4 grupos: **Hoy, Cobrar, Pagar, Cheques y créditos**, con 12 pestañas a la vista; las demás (CC Clientes, CC Proveedores, Vencimientos, Informes, Objetivos, Gastos fijos, Retenciones) están en el botón **Más** de cada grupo. Abre en la última pestaña usada. **Nuevo movimiento** carga un cobro o pago suelto. Vendedor y viewer ven \"No tenés acceso a Finanzas\"."
+    "texto": "Abre en un inicio con tarjetas en 4 filas (**Cobrar, pagar y ventas**, **Pagos, cobros e impuestos**, **Tesorería**, **Informes**); cada tarjeta muestra un dato del momento y al tocarla abre su sección. **← Finanzas** vuelve al inicio. Todo es de la sociedad elegida arriba.\nSi falta subir algún archivo del banco, arriba aparece **¿Está todo al día?** con **Ir a Bancos**. Los demás roles ven \"No tenés acceso a esta pantalla.\""
   },
   {
-    "id": "plata-hoy-cuentas",
+    "id": "plata-facturar",
     "grupo": "Plata",
-    "titulo": "Hoy → Cuentas",
+    "titulo": "Facturar",
     "ruta": "/finanzas",
     "modulo": "finanzas",
-    "texto": "Arriba 4 números: **Bancos hoy**, **Para cubrir hoy** (rescatar o transferir), **Cobros a confirmar** (entradas del banco sin cruzar) y **Pagos de esta semana** (cheques propios hasta el domingo + facturas de compra que vencen). Debajo **Para hacer hoy**: todos los avisos juntos, cada uno con **Ir**. Después \"¿Cubro los gastos fijos?\" y \"Cómo estoy hoy\" (tengo / debo / posición neta) con **Ver detalle**. Las cuentas van en una tabla (saldo hoy, según el banco y su fecha, lo sumado desde el extracto): tocá una cuenta para ver el detalle y sus movimientos; **Nueva cuenta**, lápiz = editar. **Ojo:** sin el extracto del día, el saldo es el del sistema (la fecha del banco sale en ámbar)."
+    "texto": "Abre **Facturas** en la pestaña **Facturar**: los PR aprobados que faltan facturar y los restos (\"PR-… · resto\"). Estado **Listo** o **Esperando OC** (es un aviso: se puede facturar igual).\n1) **Facturar** abre la misma ventana de emitir de Ventas. 2) En dólares, **Traer BNA**; la moneda sale de la ficha (**USD divisa** o **USD billete**). 3) **Emitir con ARCA** o, en manual, **Guardar manual**. 4) En un resto: **Facturar** o **No facturar**; una factura anulada por NC sale con **Re-facturar**.\nSi el cliente pasó su límite de crédito, avisa \"Límite de crédito alcanzado; podés continuar con la emisión.\"\n**Ojo:** facturar solo en el sistema publicado, nunca en una compu de prueba. Corteva, Synthon y Aerolíneas se facturan en ARS o USD **divisa**, nunca billete."
   },
   {
-    "id": "plata-hoy-movimientos",
+    "id": "plata-cobrar",
     "grupo": "Plata",
-    "titulo": "Hoy → Movimientos",
+    "titulo": "Cobrar",
     "ruta": "/finanzas",
     "modulo": "finanzas",
-    "texto": "Todos los cobros y pagos (Pendiente, Conciliado, Anulado). **Conciliar** / **Desconciliar**, **Editar**, **Anular**. **Ojo:** mejor Anular que Eliminar. Los que vienen de una factura de compra no se editan acá."
+    "texto": "Abre **Facturas** en **Ventas** (facturas de venta a cobrar).\n1) Tildá las facturas de un cliente: abajo queda fija la barra con cuántas y cuánto, **Destildar** y **Cobrar (n)**. 2) Se abre la **Liquidación de cobro**: medios de pago, retenciones/percepciones, **Aplicar saldo a favor**. 3) **Adjuntar comprobante y leer con IA** (OP del cliente, transferencia, cheque o retención); si es una OP, **Cobrar todas las facturas de esta orden de pago**. 4) En US$: **Divisas** o **Billetes** y la cotización. 5) Si falta plata: **Saldo en la factura más nueva** o **Diferencia a la cuenta corriente (las facturas quedan pagadas)**. 6) **Confirmar cobro**.\n**Nuevo cobro** sirve para cobrar sin factura o eligiendo el cliente. Facturas en $ y en US$ se cobran por separado.\n**Ojo:** con diferencia se confirma igual; si sobra, queda a favor del cliente."
   },
   {
-    "id": "plata-hoy-extractos",
+    "id": "plata-pagar",
     "grupo": "Plata",
-    "titulo": "Hoy → Extractos",
+    "titulo": "Pagar",
     "ruta": "/finanzas",
     "modulo": "finanzas",
-    "texto": "1) **Elegir Excel** (\"Detalle_mov_cuenta\" del BBVA; varios a la vez, no duplica). 2) **Guardar N líneas** (antes no guarda nada). 3) \"Cruce automático\" → **Aplicar N cruces**. 4) \"Para revisar\" → **Resolver** (qué es y con qué movimiento va; \"Todavía no está cargado\"; \"Recordar: cuando el concepto diga…\"). 5) **Deshacer** por línea. **Ojo:** lo que está en el banco y no en el sistema se carga en Facturación (cobros) u Órdenes de pago (pagos) y se cruza con \"Aplicar cruces\". Cheque devuelto → se rechaza en Cheques. SIRCREB = pago a cuenta de IIBB (para el contador)."
+    "texto": "Abre **Facturas** en **Compras** (facturas de compra a pagar).\n1) Tildá las facturas de un proveedor → **Pagar (n)** en la barra fija. 2) Se abre la misma ventana de **Nueva Orden de pago** (ver Órdenes de pago). 3) **Guardar** la deja creada sin mandar nada; **Guardar y enviar** la crea y abre el mail al proveedor con la OP y los comprobantes.\n**Nueva OP** sirve para un pago a cuenta (sin factura) o eligiendo el proveedor. Una OP es de un solo proveedor: si tildás de más, avisa y sigue con el primero."
   },
   {
-    "id": "plata-hoy-revisar",
+    "id": "plata-facturas",
     "grupo": "Plata",
-    "titulo": "Hoy → Revisar",
+    "titulo": "Facturas",
     "ruta": "/finanzas",
     "modulo": "finanzas",
-    "texto": "Lo que dejaste con dudas y lo que encuentra el sistema (fechas futuras, cheques vencidos en cartera, extracto sin cruzar). **Dejar para revisar** desde un cheque, factura, cobro o línea del extracto (\"Recordarme el\"); **Agregar** suelto; **Abrir**, **Posponer**, **Resuelto** (**Marcar resuelto**); \"Ver resueltos\" → **Volver a pendiente**. Nunca frena."
+    "texto": "Una fila por factura, con pestañas **Facturar**, **Ventas** y **Compras**, filtros **Pendientes**, **Por vencer**, **Vencidas**, **Todas** y buscador. En Ventas arriba: **Facturado** del mes (◀ ▶), vencidas y las que vencen en 7 días (un clic filtra).\n- Tocá una fila para ver la ficha: **Ver**, **Descargar**, **Enviar al cliente**, **Cobrar** y **Hacer NC** (abre la ventana de nota de crédito sin salir de Finanzas: **Total**, **Por ítems** o **Importe libre**, y **Emitir NC con ARCA**).\n- **Nueva factura**: emitir sin PR, eligiendo el cliente. En **Enviada**, **Enviar** manda la factura por mail. El lápiz en **Vence** cambia el vencimiento.\n- En Compras, **Pagada con** muestra la OP (Ver, Descargar, Enviar y los adjuntos).\n**Ojo:** si la NC es mayor que el saldo pendiente se emite igual y la diferencia queda a favor del cliente."
   },
   {
-    "id": "plata-hoy-informes-y-objetivos",
+    "id": "plata-cuentas-corrientes",
     "grupo": "Plata",
-    "titulo": "Hoy → Informes y Objetivos",
+    "titulo": "Cuentas corrientes",
     "ruta": "/finanzas",
     "modulo": "finanzas",
-    "texto": "Informes: BCRA clientes y BCRA proveedores. Objetivos: consulta de objetivos (monto, período, asignado, activo)."
+    "texto": "Arriba tres pestañas: **Saldos**, **Riesgo BCRA · Clientes** y **Riesgo BCRA · Proveedores**.\nEn Saldos: **Todos / Clientes / Proveedores**, buscador, **Solo con saldo**, **Ocultar menores a $ 100** y **Moneda: $ y US$ separados** o **Moneda: la de cada cuenta** (solo para ver). Abajo **Nos deben** y **Les debemos**.\nTocá una cuenta para abrir su ficha: saldo, vencido, **Facturas pendientes** (tildar → **Cobrar** o **Pagar**, con barra fija) y el resumen con todos los movimientos (**Excel**, PDF, **Mail**).\n**Ajuste manual**: corrige el saldo sin tocar la caja ni el banco (a favor/crédito o cargo/débito). En el resumen, **Anular** un ajuste lo deja tachado con quién y cuándo.\n**Ojo:** anular un ajuste no tiene vuelta atrás; si fue un error, cargá un ajuste nuevo."
   },
   {
-    "id": "plata-cobrar-facturas-de-venta-facturacion-arca",
+    "id": "plata-ordenes-de-pago",
     "grupo": "Plata",
-    "titulo": "Cobrar → Facturas de venta (Facturación ARCA)",
+    "titulo": "Órdenes de pago",
     "ruta": "/finanzas",
     "modulo": "finanzas",
-    "texto": "1) **Emitir factura**: tipo, cliente, ítems; dólares → **Traer BNA**; **Con ARCA** o **Manual (sin CAE)**. 2) Desde Finanzas Lazza → Facturar abre lo mismo. 3) En la factura: **Registrar cobro**, **Anular comprobante** (solo sin CAE). 4) **Nota de crédito (NC) a un cliente**: abrí la factura → **Emitir Nota de crédito** (si estaba pagada queda a favor). **Ojo:** facturar solo en el sistema publicado, nunca en una compu de prueba. FCE pide CBU y SCA/ADC. Divisa o billete sale de la ficha: Corteva, Synthon y Aerolíneas se facturan en ARS o USD **divisa**, nunca billete."
+    "texto": "Lista de OP del mes (**Todas las fechas** / **Este mes**), buscador por N°, proveedor, CUIT, medio o N° de cheque, filtros de estado y de enviadas. En cada una: ver, descargar, mandar por mail y anular.\n**Nueva OP**: proveedor → documentos a pagar (las notas de crédito del proveedor restan) → **Ret. Ganancias** → **Agregar medio** (Transferencia, Depósito, Cheque tercero, Cheque propio, E-Cheq, Efectivo, Tarjeta) → **Guardar** o **Guardar y enviar**. Si los medios no alcanzan, **Pagar parcial**. En **Comprobantes**, la IA autocompleta los medios.\n**Anular** no borra: la OP queda tachada, el pago y la retención anulados, las facturas vuelven a quedar a pagar y los cheques no cambian. **Anular y pagar de nuevo** reabre la OP con las mismas facturas.\n**Ojo:** solo Lazzari retiene Ganancias; **Grupo LA no es agente de retención**. Mínimo bienes $224.000 en el mes, servicios/transporte $67.170. Si la OP ya se mandó por mail, avisale al proveedor que la anulaste."
   },
   {
-    "id": "plata-cobrar-cc-clientes-y-cobro-masivo",
+    "id": "plata-recibos",
     "grupo": "Plata",
-    "titulo": "Cobrar → CC Clientes y cobro masivo",
+    "titulo": "Recibos",
     "ruta": "/finanzas",
     "modulo": "finanzas",
-    "texto": "1) Cliente → **Realizar cobro**. 2) Tildá facturas → **Continuar a liquidación**. 3) Medios de pago y retenciones; **Adjuntar OP y leer con IA**; USD: **Divisas** o **Billetes** y cotización. 4) Si faltan pesos: \"Saldo en la factura más nueva\" o \"Diferencia a la cuenta corriente (las facturas quedan pagadas)\". 5) \"Dejar en Revisar: diferencia a confirmar\". 6) **Confirmar cobro**. **Ojo:** con diferencia se confirma igual. Si sobra, queda a favor. La diferencia a CC no aparece en USD. **Ajuste manual** corrige saldo sin mover caja."
+    "texto": "Un recibo por cobro, con su N°, medios, facturas, importe, estado en el banco y si se envió. Abre en el mes (**Todas las fechas** / **Este mes**); se busca por N°, cliente, factura, medio o N° de cheque.\nEn cada uno: ver, descargar y mandar por mail al cliente. **Nuevo cobro** abre la misma liquidación de Cobrar."
   },
   {
-    "id": "plata-cobrar-recibos-y-vencimientos",
+    "id": "plata-retenciones",
     "grupo": "Plata",
-    "titulo": "Cobrar → Recibos y Vencimientos",
+    "titulo": "Retenciones",
     "ruta": "/finanzas",
     "modulo": "finanzas",
-    "texto": "Recibos: historial de cobros, **PDF** del recibo. Vencimientos: saldos abiertos por fecha (desde Cobrar lo que hay que cobrar, desde Pagar lo que hay que pagar)."
+    "texto": "Dos botones: **Practicadas** (las de nuestras OP) y **Sufridas** (las que nos hicieron los clientes), con fechas y buscador.\n- Practicadas: arriba **Mes**, **1ª quincena** y **2ª quincena** con su total; **TXT SICORE** (antes avisa si algo no coincide; **Bajar el TXT igual**), **Excel** y **Sin concepto** (proveedores sin concepto de Ganancias, se calculan como bienes).\n- Sufridas: **Falta certificado (n)**, **Excel** para el contador y **Cargar certificado (IA)**: arrastrás uno o varios PDF o fotos, la IA lee cada certificado y propone a qué retención va; **Confirmar** de a uno o **Confirmar los que coinciden**. Nada se guarda solo.\n- En la columna **Certificado**, \"falta\" se toca para escribir el N° a mano; el cargado se puede ver y **Quitar** (queda anulado, no se borra).\n**Ojo:** sin el N° de certificado la retención sufrida no se puede computar."
   },
   {
-    "id": "plata-pagar-facturas-de-compra",
+    "id": "plata-iva",
     "grupo": "Plata",
-    "titulo": "Pagar → Facturas de compra",
+    "titulo": "IVA",
     "ruta": "/finanzas",
     "modulo": "finanzas",
-    "texto": "**Cargar facturas (IA)** o **Carga manual** (ver Compras). \"¿Cómo se paga?\": \"Va a orden de pago\", \"Ya pagada con [tarjeta]\", \"Ya pagada por otro medio (sin OP)\". **Ver pendientes** para aprobar. **Ojo:** pagada con tarjeta → baja la deuda con el proveedor y sube la de la tarjeta."
+    "texto": "IVA del mes estimado con lo cargado en el sistema (◀ mes ▶ arriba): **IVA ventas (débito)** menos **IVA compras (crédito)** (con el IVA de comisiones del banco) menos retenciones de IVA sufridas con certificado = **A pagar, estimado** o **A favor, estimado**.\nCada número tiene su **Ver facturas**, **Ver comprobantes**, **Ver retenciones**, **Ver líneas del banco** o **Ver VEP**. Las percepciones y las retenciones sin certificado van aparte (no se restan).\n**Ojo:** no incluye saldo a favor de meses anteriores; es una estimación, no la declaración jurada."
   },
   {
-    "id": "plata-pagar-ordenes-de-pago",
+    "id": "plata-bancos",
     "grupo": "Plata",
-    "titulo": "Pagar → Órdenes de pago",
+    "titulo": "Bancos",
     "ruta": "/finanzas",
     "modulo": "finanzas",
-    "texto": "1) **Nueva OP** → proveedor → tildá facturas (las NC se descuentan). 2) **Ret. Ganancias**: %, monto, acumulado del mes, mínimo (editable). 3) **Agregar medio**: Transferencia, Cheque propio, E-Cheq, Cheque tercero, Efectivo, Tarjeta. 4) **Pagar parcial** o **Crear Orden de pago**. 5) **Generar comprobante**, **Certificado**, **Marcar pagada**, **Enviar**. 6) Varios proveedores: **Plan de pagos**. **Ojo:** solo Lazzari retiene; **Grupo LA no es agente de retención**. Mínimo bienes $224.000 en el mes, servicios/transporte $67.170. No se retiene a monotributistas, facturas C ni excluidos. El parcial recorta la factura más nueva."
+    "texto": "Cuatro pestañas. Arriba, **¿Está todo al día?** dice qué archivo del banco falta subir.\n- **Cuentas y tarjetas**: una tarjeta por cuenta (el saldo del BBVA no se muestra: \"El saldo se mira en el home banking\"; BAVSA con su caución). En cada tarjeta de crédito, **Subir resumen**: la IA lee el PDF y vos revisás.\n- **Préstamos**: **Lo que debo** y **Lo que me deben**, con **Ver cuotas** / **Ver pagos**, **Anotar pago** y marcar cuotas pagadas.\n- **Cheques**: **Todos los cheques** (en fecha para pagar y para cobrar, próxima semana, por estado, **Próximas 4 semanas** y la lista con **Pendientes** / **Ver todos**) y **Martín F.** (**Copiar mensaje para mandarle**, **Ya cubrió**). Los estados cambian solos con cobros, OP y los archivos del banco.\n- **Movimientos**: **Para confirmar** (**Subir archivos del banco**: los Excel \"Movimientos\" una vez por mes y los reportes de eCheq todos los días hábiles; después confirmás cada línea) y **Ver por tipo** (solo lectura).\n**Ojo:** las transferencias se guardan pero no se cruzan: los cobros y pagos los cargás vos en Cobrar y Pagar."
   },
   {
-    "id": "plata-pagar-cc-proveedores",
+    "id": "plata-gastos",
     "grupo": "Plata",
-    "titulo": "Pagar → CC Proveedores",
+    "titulo": "Gastos",
     "ruta": "/finanzas",
     "modulo": "finanzas",
-    "texto": "Deuda por proveedor: **Crear OP**, **Ajuste manual** (no mueve caja), **Exportar CSV**."
+    "texto": "Una sola lista del mes (◀ mes ▶ arriba) con gastos fijos y eventuales, en grupos, todo editable.\n**Nuevo gasto** → detalle, grupo, monto y pago; **Leer VEP (IA)** completa impuesto, período, N° de VEP y monto y adjunta el PDF (no guarda solo).\n**Editar gastos fijos** muestra los fijos (lo que se repite todos los meses; los cambios valen para los próximos). El fijo de Impuestos puede ir con **SICORE auto**: su monto son las retenciones de Ganancias del mes anterior. Los débitos automáticos (🔁) se cargan solos al abrir el mes, con **Deshacer**.\n**Ojo:** borrar un gasto anula su pago en Movimientos (queda el registro). Si ya está cruzado con el banco (**✓ banco**) y cambiás el monto, avisa y deja guardar igual."
   },
   {
-    "id": "plata-pagar-gastos",
+    "id": "plata-movimientos",
     "grupo": "Plata",
-    "titulo": "Pagar → Gastos",
+    "titulo": "Movimientos",
     "ruta": "/finanzas",
     "modulo": "finanzas",
-    "texto": "Gastos sin factura de proveedor (impuestos con VEP, débitos, sueldos). **Nuevo gasto**; **Leer VEP / impuesto (IA)** completa y adjunta (no guarda solo); \"Es el pago del gasto fijo\"; **Crear gasto**."
+    "texto": "Historial de todos los cobros, pagos, retenciones y ajustes, desde el 1° del mes. Filtros: tipo (**Cobro / ingreso**, **Pago / egreso**, **Retención sufrida**, **Ajuste**, **Otro**, **Anulados**), **Conciliados / Sin conciliar**, fechas y buscador. Lo anulado queda tachado.\n**Nuevo movimiento**: tipo (Cobro, Pago, Cheque emitido, Cheque recibido, Transferencia, Efectivo, Depósito, Ajuste), cliente o proveedor, descripción, monto, moneda y fecha → **Guardar**. No lleva retenciones."
   },
   {
-    "id": "plata-pagar-gastos-fijos",
+    "id": "plata-reportes",
     "grupo": "Plata",
-    "titulo": "Pagar → Gastos fijos",
+    "titulo": "Reportes",
     "ruta": "/finanzas",
     "modulo": "finanzas",
-    "texto": "**Nuevo gasto** (descripción, categoría, monto, moneda). \"Proveedor que lo factura\" → avisa \"Falta la factura de [mes]\" (si ya está el pago en Gastos dice \"Pagado · falta la factura\"); sin proveedor espera el pago en Gastos (\"Falta pagar [mes]\"). Gasto en US$ sin dólar propio: se calcula al dólar BNA billete del día. \"Vence el día\". \"Monto automático SICORE\" = retenciones de Ganancias de las OP del mes anterior. Se desactivan sin borrar."
-  },
-  {
-    "id": "plata-pagar-retenciones-sicore",
-    "grupo": "Plata",
-    "titulo": "Pagar → Retenciones (SICORE)",
-    "ruta": "/finanzas",
-    "modulo": "finanzas",
-    "texto": "Desde/Hasta → **CSV**, **Excel** o **SICORE** (archivo para el aplicativo)."
-  },
-  {
-    "id": "plata-cheques-y-creditos-cheques",
-    "grupo": "Plata",
-    "titulo": "Cheques y créditos → Cheques",
-    "ruta": "/finanzas",
-    "modulo": "finanzas",
-    "texto": "Arriba, propios a pagar y recibidos en cartera en tres cajas: **En fecha** (propios: ya llegó la fecha, el banco los puede debitar hoy, tiene que haber plata; recibidos: ya se pueden depositar), **Esta semana** (hasta el domingo) y **Más adelante**. Tocá una caja para ver esos cheques; en la lista cada uno dice \"en fecha\" o \"esta semana\". **Registrar cheque** (Recibido/Emitido, Físico/E-Cheq). En cartera: **Endosar**, **Depositar**, **Cobrado**, **Rechazar** (motivo → **Rechazar cheque**). Depositado que volvió: \"¿Vino rechazado?\". **Ojo:** rechazar anula el cobro (queda registro), la factura vuelve a pendiente y deja un aviso."
-  },
-  {
-    "id": "plata-cheques-y-creditos-cheques-martin-f",
-    "grupo": "Plata",
-    "titulo": "Cheques y créditos → Cheques Martín F.",
-    "ruta": "/finanzas",
-    "modulo": "finanzas",
-    "texto": "Cheques propios que cubre Martín Fernández: **Copiar mensaje para mandarle**, **Cubrió ✓**. La campana avisa 3 días antes."
-  },
-  {
-    "id": "plata-cheques-y-creditos-creditos",
-    "grupo": "Plata",
-    "titulo": "Cheques y créditos → Créditos",
-    "ruta": "/finanzas",
-    "modulo": "finanzas",
-    "texto": "Líneas de crédito: usado, disponible, vencimiento, TNA (consulta)."
+    "texto": "Resultado del mes (◀ mes ▶ arriba): **Venta neta** − **Costo de lo vendido** − **Gastos del mes** (fijos y eventuales) = **Resultado del mes**. Solo lee.\nAdentro está la barra de **Objetivos** del mes sobre el neto facturado: **Mínimo**, **Bueno** y **Muy bueno**, con cuánto falta. Abajo, **Para revisar (no frena nada)**."
   },
   {
     "id": "sistema-configuracion",

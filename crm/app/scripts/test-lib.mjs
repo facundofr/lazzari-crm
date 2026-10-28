@@ -5,8 +5,7 @@
 //   Saltear a propósito (solo una urgencia): SALTEAR_PRUEBAS=1 npm run build   → avisa bien claro y sigue
 // Al agregar una prueba pura nueva (scripts/test-*.ts|mjs|cjs), sumarla a la lista de abajo.
 // Afuera a propósito: las que leen la base o .env (catalogo-busqueda, lectura/*), las de ARCA (test:fce),
-// las que buscan texto dentro de pantallas (test:regressions) y las pendientes del chat de Finanzas
-// (extracto-bbva, saldo-cuentas, movimientos-bbva, revisar-finanzas: fallan, ver docs/ESTADO.md 28/10).
+// y las que buscan texto dentro de pantallas (test:regressions).
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,20 +21,20 @@ const PRUEBAS = [
   "test-condicion-pago.ts", "test-contacto-ventas.ts", "test-control-dia.ts", "test-correo-finanzas.ts",
   "test-cron-auth.ts", "test-cuenta-corriente-cliente.ts", "test-documento-impositivo.ts",
   "test-dolar-presupuesto.ts", "test-echeq-reportes.ts", "test-envio-detectar.ts", "test-envio-factura-texto.ts",
-  "test-envio-reparto.ts", "test-estado-factura-venta.mjs", "test-factura-condicion.ts",
+  "test-envio-reparto.ts", "test-estado-factura-venta.mjs", "test-extracto-bbva.ts", "test-factura-condicion.ts",
   "test-factura-desglose-talles.ts", "test-factura-moneda.ts", "test-factura-sin-ia.ts", "test-factura-tipo.ts",
   "test-factura-vs-oc-guardado.ts", "test-factura-vs-oc.ts", "test-facturado-mes.ts", "test-facturas-lazza.ts",
   "test-fci-custodia.mjs", "test-fecha-cobro.mjs", "test-finanzas-destino.ts", "test-finanzas-grupos.mjs",
   "test-finanzas-lazza.ts", "test-finanzas-notas.ts", "test-finanzas-propuestas.ts", "test-gasto-fijo-factura.ts",
   "test-gastos-lazza.ts", "test-ia-acciones.ts", "test-lista-costos.ts", "test-mayusculas.ts",
-  "test-movimientos-banco.ts", "test-nc-sugerencia.ts", "test-nombres-estados.ts", "test-numero-ar.ts",
+  "test-movimientos-banco.ts", "test-movimientos-bbva.ts", "test-nc-sugerencia.ts", "test-nombres-estados.ts", "test-numero-ar.ts",
   "test-observaciones-cliente.ts", "test-oc-diferencia.mjs", "test-oc-lista.ts", "test-oc-reclamos.mjs",
   "test-oc-sin-proveedor.ts", "test-op-parcial.ts", "test-op-usd-pesos.ts", "test-pago-tarjeta.ts",
   "test-pdf-descuento.ts", "test-pendientes.ts", "test-precio-factura.ts", "test-presupuesto-ayudas.ts",
   "test-presupuesto-ia.ts", "test-presupuesto-margen.ts", "test-presupuesto-seguimiento.ts",
   "test-proveedor-nombre.ts", "test-recibos.ts", "test-reemplazo-oc.ts", "test-remito-entrega.ts",
   "test-remitos-armado.ts", "test-remitos-crear.ts", "test-resto-facturar.ts", "test-resumen-bbva.ts",
-  "test-resumen-cuenta.ts", "test-resumen-economico.mjs", "test-retencion-conceptos.ts", "test-saldo-clientes.ts",
+  "test-resumen-cuenta.ts", "test-resumen-economico.mjs", "test-revisar-finanzas.ts", "test-saldo-cuentas.ts", "test-retencion-conceptos.ts", "test-saldo-clientes.ts",
   "test-saldo-favor-proveedor.ts", "test-saldo-proveedores.ts", "test-sicore-linea.ts", "test-soap-fault.mjs",
   "test-sugerir-concepto.ts", "test-tc-cobro-usd.mjs", "test-texto-mayusculas.ts", "test-tipos-movimiento.ts",
   "test-transportes-anotador.ts", "test-ventas-documentos.ts", "test-ventas-etapas.ts", "test-vep.ts",

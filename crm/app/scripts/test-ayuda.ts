@@ -12,11 +12,11 @@ assert.ok(vendedor.some((s) => s.ruta === "/presupuestos"));
 assert.ok(rolPuedeVer("vendedor", null));
 
 const top = (q: string, secs = admin) => buscarEnGuia(q, secs)[0]?.seccion.titulo;
-assert.equal(top("¿cómo hago una orden de pago?"), "Pagar → Órdenes de pago");
-assert.equal(top("cómo cargo una NC"), "Cobrar → Facturas de venta (Facturación ARCA)");
+assert.equal(top("¿cómo hago una orden de pago?"), "Órdenes de pago");
+assert.equal(top("cómo cargo una NC"), "Facturas"); // Finanzas Lazza: Hacer NC desde la ficha de la factura
 assert.match(top("cargar nota de crédito del proveedor")!, /Compras Lazza: facturas del proveedor/);
 assert.match(top("cargar factura de proveedor con QR")!, /Compras Lazza: facturas del proveedor/);
-assert.equal(top("rechazar un cheque"), "Cheques y créditos → Cheques");
+assert.ok(buscarEnGuia("rechazar un cheque", admin).slice(0, 3).some((x) => x.seccion.titulo === "Bancos"), "cheques: Bancos entre los primeros");
 // La sección Muestras se sacó de la Ayuda (V1.1.560, pedido de Augusto): ya no tiene que aparecer.
 assert.ok(!GUIA_SECCIONES.some((s) => s.titulo === "Muestras"), "Muestras no está en la Ayuda");
 assert.match(top("envío interno del presupuesto")!, /Presupuestos/);
@@ -25,7 +25,7 @@ assert.deepEqual(buscarEnGuia("de la que", admin), [], "solo palabras vacías: n
 assert.ok(palabrasClave("OP").includes("orden de pago"));
 
 const pagos = seccionesDePantalla("/finanzas", admin, "Órdenes de pago");
-assert.equal(pagos[0]?.titulo, "Pagar → Órdenes de pago");
+assert.equal(pagos[0]?.titulo, "Órdenes de pago");
 assert.ok(seccionesDePantalla("/finanzas", admin, null).length > 5);
 assert.equal(seccionesDePantalla("/presupuestos/123", admin)[0]?.titulo, "Presupuestos");
 

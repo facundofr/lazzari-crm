@@ -17,6 +17,9 @@ assert.equal(r.cuentaDigitos, "913124831");
 assert.equal(r.lineas.length, 3);
 assert.deepEqual(r.lineas.map((l) => l.saldo), [600, 1100, 1000]);
 assert.equal(r.saldoFinal, 1000);
-// Si el saldo cargado no coincide → error claro, no se guarda nada
-assert.throws(() => leerMovimientosBbva([hist], { fecha: "2026-10-09", saldo: 700 }), /no cierran/);
+// Si el saldo cargado no coincide → AVISA y carga igual (Augusto 25/10: nada frena)
+const desc = leerMovimientosBbva([hist], { fecha: "2026-10-09", saldo: 700 });
+assert.match(desc.avisoSaldo || "", /no cierra/);
+assert.equal(desc.lineas.length, 3);
+assert.equal(r.avisoSaldo, null);
 console.log("OK movimientos-bbva");
