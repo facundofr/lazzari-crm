@@ -1,5 +1,5 @@
 // Mudanza de Finanzas (23/10/2026): los links viejos de Finanzas (`/finanzas?tab=...`) pasan a Finanzas Lazza (`/finanzas?seccion=...`).
-// Lo que Lazza todavía no tiene (extractos, revisar, correo, etc.) sigue en la pantalla vieja, que ahora vive en `/finanzas-vieja`.
+// 28/10/2026: la pantalla vieja se sacó del todo; lo que no existe en Finanzas abre el inicio de Finanzas.
 // Función pura. Prueba: npx tsx scripts/test-finanzas-destino.ts
 
 /** Secciones de Finanzas Lazza que se pueden abrir por link (ids de `TARJETAS` en components/finanzas-lazza/inicio.tsx). */
@@ -24,8 +24,6 @@ const TAB_A_SECCION: Record<string, SeccionLazza> = {
   echeqs: "cheques", cheques_tercero: "cheques", lineas_credito: "bancos", informes: "cuentas", cuentas: "bancos",
 };
 
-export const RUTA_FINANZAS_VIEJA = "/finanzas-vieja";
-
 /** Link a una factura de venta puntual (cobro o nota de crédito): la pantalla de Facturación de siempre, que abre esa factura. */
 export function linkFactura(facturaId: string, accion?: "cobro" | "nc"): string {
   return `/facturacion?factura=${encodeURIComponent(facturaId)}${accion ? `&accion=${accion}` : ""}`;
@@ -35,7 +33,7 @@ export function linkFactura(facturaId: string, accion?: "cobro" | "nc"): string 
 export function linkFinanzas(tab?: string | null): string {
   if (!tab) return "/finanzas";
   const s = TAB_A_SECCION[tab];
-  return s ? `/finanzas?seccion=${s}` : `${RUTA_FINANZAS_VIEJA}?tab=${encodeURIComponent(tab)}`;
+  return s ? `/finanzas?seccion=${s}` : "/finanzas";
 }
 
 /**
@@ -59,13 +57,13 @@ export const EVENTO_ABRIR_FINANZAS = "finanzas:abrir";
 /**
  * A dónde lleva un aviso de la campana (auditoría UX 27/10/2026, arreglo 8): al ítem, no a Finanzas en general.
  * Cheque rechazado (aviso de un cliente) → la ficha de ese cliente en Cuentas corrientes; aviso de cheque de tercero → Cheques;
- * recordatorio de Revisar → Revisar (solo existe en la pantalla vieja). Cualquier otro aviso de finanzas → el inicio.
+ * aviso de una factura de compra (total cambiado) → Facturas. Cualquier otro aviso de finanzas → el inicio.
  */
 export function linkDeAlertaFinanzas(entityType: string | null | undefined, entityId: string | null | undefined): string {
   switch (entityType) {
     case "cliente": return entityId ? `/finanzas?seccion=cuentas&cliente=${encodeURIComponent(entityId)}` : "/finanzas?seccion=cuentas";
     case "echeq_tercero": return "/finanzas?seccion=cheques";
-    case "finanzas_revisar": return `${RUTA_FINANZAS_VIEJA}?tab=revisar`;
+    case "factura_compra": return "/finanzas?seccion=facturas";
     default: return "/finanzas";
   }
 }

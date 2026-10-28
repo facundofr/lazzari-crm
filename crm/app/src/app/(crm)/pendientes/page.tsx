@@ -14,7 +14,6 @@ import {
 import { ArrowRight, Check, ClipboardCopy, Loader2, Plus, AlertTriangle, MessageSquare, Wrench } from "lucide-react";
 
 type Atraso = { id: string; label: string; count: number; href: string };
-type RevisarAbierto = { id: string; titulo: string; recordar_el: string | null };
 
 const COLS_NUEVAS = "id, texto, area, tipo, link, respuesta, completado, fecha_vencimiento, created_at";
 const COLS_VIEJAS = "id, texto, completado, fecha_vencimiento, created_at";
@@ -40,7 +39,6 @@ export default function PendientesPage() {
   const [guardando, setGuardando] = useState<string | null>(null);
   const [guardadoOk, setGuardadoOk] = useState<string | null>(null);
   const [atrasos, setAtrasos] = useState<Atraso[] | null>(null);
-  const [revisar, setRevisar] = useState<RevisarAbierto[]>([]);
   // Alta rápida
   const [nuevoTexto, setNuevoTexto] = useState("");
   const [nuevoArea, setNuevoArea] = useState<string>(AREAS_PENDIENTES[0]);
@@ -100,14 +98,6 @@ export default function PendientesPage() {
     }
     const res = await Promise.all(tareas.map((t) => t.catch(() => null)));
     setAtrasos(res.filter((a): a is Atraso => !!a));
-
-    if (puede(role, "finanzas")) {
-      const { data } = await db.from("finanzas_revisar").select("id, titulo, recordar_el")
-        .eq("sociedad_id", sociedadId).eq("estado", "pendiente").order("created_at", { ascending: true });
-      setRevisar((data as RevisarAbierto[]) || []);
-    } else {
-      setRevisar([]);
-    }
   }, [sociedadId, role]);
 
   useEffect(() => { cargarPendientes(); }, [cargarPendientes]);
@@ -180,7 +170,7 @@ export default function PendientesPage() {
         )}
 
         {/* Atrasos que cuenta el sistema */}
-        {(atrasosConAlgo.length > 0 || revisar.length > 0) && (
+        {atrasosConAlgo.length > 0 && (
           <section className="rounded-lg border border-zinc-200 dark:border-zinc-800 p-2.5">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 mb-1.5">Atrasos que cuenta el sistema</h2>
             <div className="flex flex-wrap gap-1.5">
@@ -193,17 +183,6 @@ export default function PendientesPage() {
                 </Link>
               ))}
             </div>
-            {revisar.length > 0 && (
-              <div className="mt-2">
-                {/* 26/10/2026: Finanzas vieja (donde estaba Revisar) se cerró; las notas se siguen mostrando acá. */}
-                <p className="text-xs font-medium text-zinc-600 dark:text-zinc-300">Anotado para revisar ({revisar.length})</p>
-                <ul className="mt-1 space-y-0.5">
-                  {revisar.map((r) => (
-                    <li key={r.id} className="text-xs text-zinc-600 dark:text-zinc-400 truncate">• {r.titulo}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
           </section>
         )}
 

@@ -5,10 +5,10 @@ assert.equal(linkFinanzas(), "/finanzas");
 assert.equal(linkFinanzas("gastos_fijos"), "/finanzas?seccion=gastos");
 assert.equal(linkFinanzas("facturas_compra"), "/finanzas?seccion=pagar");
 assert.equal(linkFinanzas("cc_clientes"), "/finanzas?seccion=cuentas");
-// Lo que Lazza no tiene sigue en la vieja
-assert.equal(linkFinanzas("extractos"), "/finanzas-vieja?tab=extractos");
-assert.equal(linkFinanzas("revisar"), "/finanzas-vieja?tab=revisar");
-assert.equal(linkFinanzas("correo"), "/finanzas-vieja?tab=correo");
+// Lo que ya no existe (la pantalla vieja se sacó el 28/10/2026) abre el inicio de Finanzas
+assert.equal(linkFinanzas("extractos"), "/finanzas");
+assert.equal(linkFinanzas("revisar"), "/finanzas");
+assert.equal(linkFinanzas("correo"), "/finanzas");
 assert.equal(linkFactura("abc"), "/facturacion?factura=abc");
 assert.equal(linkFactura("abc", "nc"), "/facturacion?factura=abc&accion=nc");
 
@@ -16,7 +16,7 @@ const p = (s: string) => new URLSearchParams(s);
 assert.equal(traducirLinkViejo(p("tab=objetivos")), "/finanzas?seccion=objetivos");
 assert.equal(traducirLinkViejo(p("tab=facturacion&grupo=cobrar&factura=F1&accion=cobro")), "/facturacion?factura=F1&accion=cobro");
 assert.equal(traducirLinkViejo(p("factura=F2")), "/facturacion?factura=F2");
-assert.equal(traducirLinkViejo(p("tab=extractos")), "/finanzas-vieja?tab=extractos");
+assert.equal(traducirLinkViejo(p("tab=extractos")), "/finanzas");
 assert.equal(traducirLinkViejo(p("")), null);
 assert.equal(traducirLinkViejo(p("seccion=iva")), null);
 assert.equal(esSeccionLazza("iva"), true);
@@ -29,7 +29,8 @@ assert.equal(esSeccionLazza("objetivos"), true);
 assert.equal(linkDeAlertaFinanzas("cliente", "abc-1"), "/finanzas?seccion=cuentas&cliente=abc-1");
 assert.equal(linkDeAlertaFinanzas("cliente", null), "/finanzas?seccion=cuentas");
 assert.equal(linkDeAlertaFinanzas("echeq_tercero", "x"), "/finanzas?seccion=cheques");
-assert.equal(linkDeAlertaFinanzas("finanzas_revisar", "x"), "/finanzas-vieja?tab=revisar");
+assert.equal(linkDeAlertaFinanzas("factura_compra", "x"), "/finanzas?seccion=facturas");
+assert.equal(linkDeAlertaFinanzas("finanzas_revisar", "x"), "/finanzas", "los avisos viejos de Revisar abren el inicio");
 assert.equal(linkDeAlertaFinanzas("otra_cosa", "x"), "/finanzas", "un aviso que no conocemos va al inicio, como antes");
 assert.equal(linkDeAlertaFinanzas(null, null), "/finanzas");
 console.log("test-finanzas-destino OK");

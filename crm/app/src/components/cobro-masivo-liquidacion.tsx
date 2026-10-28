@@ -10,7 +10,6 @@ import { fechaMedioCobro, avisoFechaCobroFutura } from "@/lib/fecha-cobro";
 import { repartirCobro, avisoDiferenciaCobro, facturasParaRegistrar } from "@/lib/cobro-reparto";
 import { fuentesSaldoFavorCliente, repartirSaldoFavorCliente, faltaSegunOrden, cubreConSaldoFavor, type FuenteSaldoFavorCliente } from "@/lib/saldo-favor-cliente";
 import { claveArchivo, mismaRetencion, mismoPago, sinRepetir } from "@/lib/comprobante-medios";
-import { guardarRevisar } from "@/components/dejar-revisar";
 import { ZonaArchivos } from "@/components/ui/zona-archivos";
 import { useToast } from "@/components/ui/toast";
 import { textoCobro } from "@/lib/cartel-guardado";
@@ -209,7 +208,6 @@ export default function CobroMasivoLiquidacion({
     const aplicado = isUSD ? (cotizNum > 0 ? aplicadoARS / cotizNum : 0) : aplicadoARS;
     return repartirCobro(facturasCobro.map((f) => ({ id: f.id, numero: f.numero, fecha: f.fecha, saldo: f.saldo })), aplicado);
   }, [facturasCobro, totalMedios, totalRetenciones, isUSD, cotizNum]);
-  const [dejarEnRevisar, setDejarEnRevisar] = useState(true);
   // Si falta plata: dejar el saldo en la factura más nueva ("factura") o pasar la diferencia a la cuenta corriente ("cc").
   // La opción "cc" es solo para facturas en pesos (en dólares el cobro va en pesos y la cuenta no cierra igual).
   const [destinoDiferencia, setDestinoDiferencia] = useState<"factura" | "cc">("factura");
@@ -462,39 +460,10 @@ export default function CobroMasivoLiquidacion({
           : rpcErr.message);
       }
 
-      let avisoRevisar: { texto: string; falló: boolean } | null = null;
-      if (hayDiferencia && dejarEnRevisar) {
-        const conSaldo = reparto.filas.filter((f) => f.queda > 0);
-        const ultima = conSaldo[conSaldo.length - 1] || reparto.filas[reparto.filas.length - 1];
-        const falta = reparto.falta > 0;
-        const errRevisar = await guardarRevisar(sociedadId, {
-          entidad_tipo: "factura_venta",
-          entidad_id: ultima?.id || null,
-          titulo: usarDiferenciaCC ? `Diferencia de cobro en la cuenta corriente — ${clienteNombre}`
-            : falta ? `Cobro con diferencia — ${clienteNombre}${ultima ? ` (${ultima.numero})` : ""}` : `Cobro de más — ${clienteNombre}`,
-          motivo: "diferencia_cobro",
-          importe: falta ? reparto.falta : reparto.sobra,
-          moneda: m,
-          cliente_id: clienteId,
-          nota: [
-            opReferencia ? `OP del cliente: ${opReferencia}.` : "",
-            `Recibido ${fc(totalMedios, isUSD ? "ARS" : m)}${totalRetenciones > 0 ? ` + retenciones ${fc(totalRetenciones, isUSD ? "ARS" : m)}` : ""}.`,
-            usarDiferenciaCC
-              ? `Faltan ${fc(diferenciaCC, m)} (¿retenciones sin certificado?). Facturas pagadas; la diferencia quedó como deuda en la cuenta corriente.`
-              : falta
-                ? `Faltan ${fc(reparto.falta, m)} (¿retenciones sin certificado?). ${conSaldo.map((f) => `${f.numero} queda con ${fc(f.queda, m)}`).join("; ")}.`
-                : `Sobran ${fc(reparto.sobra, m)}: quedaron como saldo a favor del cliente en su cuenta corriente.`,
-          ].filter(Boolean).join(" "),
-        });
-        avisoRevisar = errRevisar
-          ? { texto: `El cobro quedó guardado, pero no se pudo anotar la diferencia en Revisar: ${errRevisar}`, falló: true }
-          : { texto: "La diferencia quedó anotada en Revisar (se abre en /finanzas-vieja?tab=revisar).", falló: false };
-      }
       // Cartel verde (auditoría UX 27/10, arreglo 2): el N° de recibo lo arma la base al guardar; si no se puede leer, sale sin número.
       const numerosRecibo = await numerosDeRecibo({ movimientoIds: data?.inserted_ids });
       const notaSF = aplicacionesSF.length ? ` · saldo a favor aplicado ${fc(totalSFAplicado, m)}` : "";
       toast.success(`${textoCobro(numerosRecibo, facturas.length)}${notaSF}`);
-      if (avisoRevisar) (avisoRevisar.falló ? toast.warning : toast.info)(avisoRevisar.texto);
       onSuccess();
     } catch (err: any) {
       setError(err.message || "Error al registrar el cobro");
@@ -903,10 +872,6 @@ export default function CobroMasivoLiquidacion({
                     </tbody>
                   </table>
                 )}
-                <label className="mt-2 flex items-center gap-2">
-                  <input type="checkbox" checked={dejarEnRevisar} onChange={(e) => setDejarEnRevisar(e.target.checked)} />
-                  Dejar en Revisar: diferencia a confirmar (¿retenciones?)
-                </label>
               </div>
             )}
           </section>

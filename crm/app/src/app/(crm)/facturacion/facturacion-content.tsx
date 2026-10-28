@@ -2,7 +2,6 @@
 
 import { useToast } from "@/components/ui/toast";
 
-import { BotonDejarRevisar } from "@/components/dejar-revisar";
 import { AvisoBCRA } from "@/components/clientes/bcra-card";
 import { Header } from "@/components/layout/header";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
@@ -1643,7 +1642,6 @@ Salió a: ${real}` : ""}`);
               <div>
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1.5">Acciones</h4>
                 <div className="space-y-2">
-                  <BotonDejarRevisar key={detailFactura.id} className="w-full justify-center py-2" datos={{ entidad_tipo: "factura_venta", entidad_id: detailFactura.id, titulo: `${detailFactura.tipo} ${detailFactura.punto_venta}-${detailFactura.numero}`, importe: detailFactura.total, moneda: detailFactura.moneda === "USD" ? "USD" : "ARS", cliente_id: detailFactura.cliente_id }} />
                   {detailFactura.estado !== "pagada" && detailFactura.estado !== "anulada" && (
                     <>
                       <button onClick={() => openCobroModal(detailFactura)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-emerald-950/30">

@@ -72,44 +72,6 @@ async function avisarChequesTercero(supabase: ReturnType<typeof getSupabase>, to
   }
 }
 
-/** Finanzas > Revisar: avisa en la campana lo que tiene "Recordarme el" hoy o antes. Un aviso por fecha. Nunca rompe el cron. */
-async function avisarRevisar(supabase: ReturnType<typeof getSupabase>, today: string): Promise<{ creadas: number; error?: string }> {
-  try {
-    const { data: items, error } = await (supabase as any)
-      .from("finanzas_revisar")
-      .select("id, titulo, motivo, nota, recordar_el, sociedad_id, created_by")
-      .eq("estado", "pendiente")
-      .not("recordar_el", "is", null)
-      .lte("recordar_el", today)
-      .limit(500);
-    // Sin la migración la tabla no existe: no es un error del cron.
-    if (error) return error.code === "42P01" || /does not exist|schema cache/i.test(error.message) ? { creadas: 0 } : { creadas: 0, error: error.message };
-    if (!items?.length) return { creadas: 0 };
-    const { data: existentes } = await (supabase as any)
-      .from("alertas").select("entity_id, description").eq("entity_type", "finanzas_revisar").in("entity_id", items.map((i: any) => i.id));
-    const ya = new Set((existentes ?? []).map((a: any) => `${a.entity_id}|${a.description}`));
-    const filas = items.map((i: any) => {
-      const [y, m, d] = String(i.recordar_el).slice(0, 10).split("-");
-      return {
-        tipo: "seguimiento",
-        title: `Revisar: ${i.titulo}`,
-        description: `Recordatorio del ${d}/${m}/${y}${i.nota ? ` — ${i.nota}` : ""}`.slice(0, 500),
-        entity_id: i.id,
-        entity_type: "finanzas_revisar",
-        module: "finanzas",
-        user_id: null,
-        sociedad_id: i.sociedad_id,
-        read: false,
-      };
-    }).filter((f: any) => !ya.has(`${f.entity_id}|${f.description}`));
-    if (!filas.length) return { creadas: 0 };
-    const { error: insError } = await (supabase as any).from("alertas").insert(filas);
-    return insError ? { creadas: 0, error: insError.message } : { creadas: filas.length };
-  } catch (err: any) {
-    return { creadas: 0, error: err?.message || String(err) };
-  }
-}
-
 export async function GET(req: NextRequest) {
   const noAutorizado = cronNoAutorizado(req);
   if (noAutorizado) return noAutorizado;
@@ -126,16 +88,12 @@ export async function GET(req: NextRequest) {
     alertas_seguimiento_creadas: 0,
     presupuestos_vencidos: 0,
     alertas_cheques_tercero: 0,
-    alertas_revisar: 0,
     errores: [] as string[],
   };
 
   const chequesTercero = await avisarChequesTercero(supabase, today);
   stats.alertas_cheques_tercero = chequesTercero.creadas;
   if (chequesTercero.error) stats.errores.push(`Cheques de terceros: ${chequesTercero.error}`);
-  const revisar = await avisarRevisar(supabase, today);
-  stats.alertas_revisar = revisar.creadas;
-  if (revisar.error) stats.errores.push(`Revisar: ${revisar.error}`);
 
   try {
     // 1) Buscar PRs con estado pendiente, aprobado, solicitud o postergado
