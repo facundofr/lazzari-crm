@@ -17,7 +17,8 @@ assert.equal(top("cómo cargo una NC"), "Cobrar → Facturas de venta (Facturaci
 assert.match(top("cargar nota de crédito del proveedor")!, /Compras Lazza: facturas del proveedor/);
 assert.match(top("cargar factura de proveedor con QR")!, /Compras Lazza: facturas del proveedor/);
 assert.equal(top("rechazar un cheque"), "Cheques y créditos → Cheques");
-assert.equal(top("dejar muestras a un cliente"), "Muestras");
+// La sección Muestras se sacó de la Ayuda (V1.1.560, pedido de Augusto): ya no tiene que aparecer.
+assert.ok(!GUIA_SECCIONES.some((s) => s.titulo === "Muestras"), "Muestras no está en la Ayuda");
 assert.match(top("envío interno del presupuesto")!, /Presupuestos/);
 assert.ok(!buscarEnGuia("orden de pago retenciones", vendedor).some((r) => r.seccion.ruta === "/finanzas"), "al vendedor no le muestra Finanzas");
 assert.deepEqual(buscarEnGuia("de la que", admin), [], "solo palabras vacías: nada");
