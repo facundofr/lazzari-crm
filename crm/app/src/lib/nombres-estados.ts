@@ -32,7 +32,7 @@ export const nombreEstadoBancoTitulo = (estado: unknown) => mayuscula1(nombreEst
 /** Lo que se anota en el Registro de la bandeja (finanzas_registro.accion). */
 const ACCION_REGISTRO: Record<string, string> = {
   arca_cargado: "Facturas de ARCA cargadas", asistente_leyo_correos: "El asistente leyó los correos", cheque_rechazado: "Cheque rechazado",
-  cheques_cargados: "Cheques cargados", confirmada: "Confirmada", corregida: "Corregida", descartada: "Descartada",
+  cheques_cargados: "Cheques cargados", cheques_confirmados_solos: "Cheques confirmados solos", confirmada: "Confirmada", corregida: "Corregida", descartada: "Descartada",
   extracto_cargado: "Extracto cargado", ia_sugirio: "La IA sugirió", regla_creada: "Regla creada", resumen_cargado: "Resumen cargado",
 };
 export function nombreAccionRegistro(accion: unknown): string {

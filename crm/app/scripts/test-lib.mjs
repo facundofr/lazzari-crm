@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 const PRUEBAS = [
   "test-agente-mail.ts", "test-archivo-link.ts", "test-ayuda.ts", "test-bancos-lazza.ts", "test-buscar-texto.ts",
   "test-caja-proyectada.ts", "test-carga-diaria.ts", "test-cargar-factura.ts", "test-cartel-guardado.ts",
-  "test-certificado-retencion.ts", "test-certificado-sufrido.ts", "test-cheque-comprobante-op.ts",
+  "test-certificado-retencion.ts", "test-certificado-sufrido.ts", "test-cheque-comprobante-op.ts", "test-cheques-solos.ts",
   "test-cheques-banco.ts", "test-cheques-estado-banco.ts", "test-cheques-filtro.mjs", "test-cheques-lazza.ts",
   "test-cheques-plazo.ts", "test-cobertura-cheques.ts", "test-cobertura-fijos.ts", "test-cobro-orden-pago.ts",
   "test-cobro-reparto.mjs", "test-compras-armado.ts", "test-compras-lazza.ts", "test-compras-recepcion.ts",

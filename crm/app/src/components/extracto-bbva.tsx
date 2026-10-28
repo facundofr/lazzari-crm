@@ -12,8 +12,8 @@ import { formatCurrency, formatDate } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import {
   leerExtractoBbva, leerMovimientosBbva, lineasNuevas, leerListadoCheques, chequesParaCompletar, unirListados, cruzarExtracto, totalesBancoPorMes, numeroCheque,
-  CLASIFICACION_LABEL, SUBTIPO_LABEL,
-  type ExtractoLeido, type ChequeListado, type ClasificacionLinea, type MovCruce, type ChequeCruce, type ReglaCruce, type Propuesta,
+  chequesQueSeConfirmanSolos, CLASIFICACION_LABEL, SUBTIPO_LABEL,
+  type ExtractoLeido, type ChequeListado, type ClasificacionLinea, type MovCruce, type ChequeCruce, type ReglaCruce, type Propuesta, type ChequeConfirmadoSolo,
   digitosCuenta,
 } from "@/lib/extracto-bbva";
 import { controlPorDia, limitarPorGuardadas, textosDefinitivos, type GuardadaTexto, type ResultadoControl } from "@/lib/control-dia";
@@ -141,6 +141,44 @@ export async function leerArchivoExtracto(f: File, cuentas: CuentaRow[], clavesP
     : [];
   return { nombre: f.name, leido, cuenta, desdeCorte, aGuardar, nuevas: aGuardar.length, control, corregir };
 }
+
+/**
+ * 28/10/2026 (Augusto): después de guardar el extracto, los débitos de cheques propios con el mismo N° e importe que un cheque del CRM
+ * se confirman solos (el cheque pasa a "cobrado"). Lo demás sigue en Para confirmar. Devuelve los cheques confirmados.
+ */
+export async function confirmarChequesDelExtracto(sociedadId: string): Promise<ChequeConfirmadoSolo[]> {
+  const db = supabase as any;
+  const { data: cs, error: e1 } = await db.from("cuentas_financieras").select("id, nombre, tipo, numero, moneda, activa").eq("sociedad_id", sociedadId);
+  if (e1) throw e1;
+  const ids = (cs || []).map((c: { id: string }) => c.id);
+  if (!ids.length) return [];
+  const [pend, atadas, chs, rg] = await Promise.all([
+    traerTodo<LineaRow>(() => db.from("extracto_movimientos").select("id, cuenta_id, fecha, descripcion, monto, tipo, clasificacion")
+      .in("cuenta_id", ids).eq("estado", "pendiente").order("fecha").order("id")),
+    traerTodo<{ clasificacion: string; cheque_id: string }>(() => db.from("extracto_movimientos").select("clasificacion, cheque_id")
+      .in("cuenta_id", ids).not("cheque_id", "is", null).not("clasificacion", "is", null).order("id")),
+    traerTodo<ChequeCruce>(() => db.from("echeqs").select("id, numero, monto, direccion, estado, fecha_pago, tipo_cheque").eq("sociedad_id", sociedadId).order("id")),
+    db.from("extracto_reglas").select("texto, sentido, clasificacion, subtipo, contra_cuenta_id, nota").eq("sociedad_id", sociedadId).eq("activa", true),
+  ]);
+  if (rg.error) throw rg.error;
+  const solos = chequesQueSeConfirmanSolos(
+    pend.map((l) => ({ id: l.id, fecha: l.fecha, concepto: l.descripcion, importe: importeDe(l), cuenta_id: l.cuenta_id, clasificacion: l.clasificacion })),
+    chs, cs || [], (rg.data || []) as ReglaCruce[], new Set(atadas.map((a) => `${a.clasificacion}:${a.cheque_id}`)),
+  );
+  if (!solos.length) return [];
+  const { data, error: e2 } = await db.rpc("aplicar_cruces_extracto", {
+    p_sociedad_id: sociedadId,
+    p_cruces: solos.map((s) => ({ linea_id: s.linea_id, clasificacion: "cheque_emitido", cheque_id: s.cheque_id, nota: s.nota, solo_pendiente: true })),
+  });
+  if (e2) throw e2;
+  const salteadas = new Set((Array.isArray(data?.salteadas) ? data.salteadas : []).map(String));
+  return solos.filter((s) => !salteadas.has(s.linea_id));
+}
+
+/** Texto corto para el aviso: "2 cheques propios confirmados solos (N° 90017337 $ 590.967,49 · …)". */
+export const textoChequesSolos = (xs: ChequeConfirmadoSolo[]) => xs.length
+  ? `${xs.length} cheque${xs.length > 1 ? "s" : ""} propio${xs.length > 1 ? "s" : ""} debitado${xs.length > 1 ? "s" : ""} confirmado${xs.length > 1 ? "s" : ""} solo${xs.length > 1 ? "s" : ""} (mismo N° e importe): ${xs.map((x) => `N° ${x.numero} ${formatCurrency(x.monto)}`).join(" · ")}`
+  : "";
 
 /** Corrige la descripción de las líneas provisorias con el texto definitivo del banco (solo si nadie la cambió mientras tanto). Devuelve cuántas. */
 export async function corregirTextosExtracto(corregir: Array<{ id: string; viejo: string; nuevo: string }> | undefined): Promise<number> {
@@ -344,7 +382,8 @@ export default function ExtractoBbva({ onIrACheques }: { onIrACheques?: () => vo
     setGuardando(a.nombre);
     try {
       const data = await guardarArchivoExtracto(sociedadId, a);
-      setArchivos((prev) => prev.map((x) => x.nombre === a.nombre ? { ...x, guardado: `Guardado: ${data.insertadas} líneas nuevas${data.repetidas ? `, ${data.repetidas} ya estaban` : ""}.` } : x));
+      const solos = await confirmarChequesDelExtracto(sociedadId).then(textoChequesSolos, (e) => `⚠️ Los cheques no se confirmaron solos: ${errorTexto(e)}`);
+      setArchivos((prev) => prev.map((x) => x.nombre === a.nombre ? { ...x, guardado: `Guardado: ${data.insertadas} líneas nuevas${data.repetidas ? `, ${data.repetidas} ya estaban` : ""}.${solos ? ` ${solos}.` : ""}` } : x));
       await cargar();
     } catch (e) {
       alert(`No se pudo guardar el extracto: ${errorTexto(e)}`);

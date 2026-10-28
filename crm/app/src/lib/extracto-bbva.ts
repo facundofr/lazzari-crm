@@ -737,6 +737,42 @@ export function cruzarExtracto(
   return ordenadas.map((l) => out.get(l.id)!).filter(Boolean);
 }
 
+/** Cheque propio que el banco debitó y se confirma solo al guardar el extracto. */
+export interface ChequeConfirmadoSolo {
+  linea_id: string;
+  cheque_id: string;
+  numero: string;
+  monto: number;
+  fecha: string;
+  nota: string;
+}
+
+/**
+ * 28/10/2026 (Augusto: "cuando el extracto del banco actualiza un estado de un cheque, que se actualice solo"):
+ * el débito de un cheque propio con el MISMO N° y el MISMO importe que un cheque emitido del CRM se confirma solo al guardar el extracto.
+ * Solo esos: el depósito acreditado se cruza por importe (la línea no trae el N°) y el rechazo anula cobros, así que siguen en Para confirmar.
+ * Se cruza con las mismas reglas que la bandeja (cruzarExtracto); los movimientos no hacen falta para los cheques.
+ */
+export function chequesQueSeConfirmanSolos(
+  lineasPendientes: LineaCruce[],
+  cheques: ChequeCruce[],
+  cuentas: CuentaCruce[],
+  reglas: ReglaCruce[] = [],
+  chequesUsados: Set<string> = new Set(),
+): ChequeConfirmadoSolo[] {
+  const porId = new Map(cheques.map((c) => [c.id, c]));
+  const fechaDe = new Map(lineasPendientes.map((l) => [l.id, l.fecha]));
+  return cruzarExtracto(lineasPendientes, [], cheques, cuentas, reglas, chequesUsados).flatMap((p) => {
+    const ch = p.cheque_id ? porId.get(p.cheque_id) : undefined;
+    if (p.clasificacion !== "cheque_emitido" || !p.auto || !ch || ch.direccion !== "emitido") return [];
+    const monto = Number(ch.monto);
+    return [{
+      linea_id: p.linea_id, cheque_id: ch.id, numero: ch.numero, monto, fecha: fechaDe.get(p.linea_id) || "",
+      nota: `Confirmado solo al guardar el extracto: cheque N° ${ch.numero}, mismo número e importe (${monto.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}).`,
+    }];
+  });
+}
+
 // ─── Totales de gastos e impuestos del banco (opción 1a) ────────────────────
 
 export interface LineaClasificada {

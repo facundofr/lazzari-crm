@@ -33,7 +33,7 @@ import { leerArcaRecibidos, facturaDelPago, numeroFactura } from "@/lib/arca-rec
 import { gastosFijosParaDebito, cuitEnTexto } from "@/lib/finanzas-propuestas";
 import { grupoDe } from "@/lib/gastos-lazza";
 import { comprobanteVentaRC } from "@/lib/resumen-cuenta";
-import { leerArchivoExtracto, guardarArchivoExtracto, corregirTextosExtracto, leerHojas, type CuentaRow, type ArchivoPreview } from "@/components/extracto-bbva";
+import { leerArchivoExtracto, guardarArchivoExtracto, corregirTextosExtracto, confirmarChequesDelExtracto, textoChequesSolos, leerHojas, type CuentaRow, type ArchivoPreview } from "@/components/extracto-bbva";
 import { leerReporteEcheq, type EcheqReporte } from "@/lib/echeq-reportes";
 import { abiertosFueraDelReporte, cambiosDeLaCarga, type ChequeAbiertoMin, type ChequeCrmMin } from "@/lib/cheques-estado-banco";
 import { elegirExcelMasNuevos } from "@/lib/carga-diaria";
@@ -830,6 +830,18 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
           `Reportes de cheques (${reportesEcheq.length}): ${r.vinculados} identificados, ${r.actualizados} con estado nuevo`);
       } catch (e) {
         msgs.push(`⚠️ Cheques: ${errorTexto(e)}`);
+      }
+    }
+    // 28/10/2026 (Augusto): los débitos de cheques propios con el mismo N° e importe se confirman solos (al final, con los textos ya corregidos).
+    if (archivos.some((x) => x.cuenta)) {
+      try {
+        const solos = await confirmarChequesDelExtracto(sociedadId);
+        if (solos.length) {
+          msgs.push(textoChequesSolos(solos));
+          await anotar(null, "cheques_confirmados_solos", { cheques: solos.map((s) => ({ numero: s.numero, monto: s.monto, fecha: s.fecha, linea_id: s.linea_id })) }, textoChequesSolos(solos));
+        }
+      } catch (e) {
+        msgs.push(`⚠️ Los cheques no se confirmaron solos (quedan en Para confirmar): ${errorTexto(e)}`);
       }
     }
     setArchivos([]);

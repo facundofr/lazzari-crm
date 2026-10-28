@@ -8,7 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { leerArchivoExtracto, guardarArchivoExtracto, type CuentaRow, type ArchivoPreview } from "@/components/extracto-bbva";
+import { leerArchivoExtracto, guardarArchivoExtracto, confirmarChequesDelExtracto, textoChequesSolos, type CuentaRow, type ArchivoPreview } from "@/components/extracto-bbva";
 import { Bot, Loader2, Paperclip, Send, Trash2, X } from "lucide-react";
 
 /** 26/10/2026 (Augusto): una sola puerta para el banco; el asistente (hoy oculto) no carga Excel. */
@@ -162,9 +162,18 @@ export default function AsistenteFinanzas({ onIrATab }: { onIrATab?: (tab: strin
     try {
       const r = await guardarArchivoExtracto(sociedadId, a);
       await anotar("extracto_cargado", `Extracto ${a.nombre} → ${a.cuenta?.nombre}: ${r.insertadas} líneas nuevas, saldo ${formatCurrency(a.leido.saldoFinal || 0)} al ${formatDate(a.leido.saldoFecha || "")} (desde el asistente)`, { archivo: a.nombre, ...r });
+      // 28/10/2026 (Augusto): los débitos de cheques propios con el mismo N° e importe se confirman solos.
+      let solos = "";
+      try {
+        const xs = await confirmarChequesDelExtracto(sociedadId);
+        solos = textoChequesSolos(xs);
+        if (xs.length) await anotar("cheques_confirmados_solos", solos, { cheques: xs.map((s) => ({ numero: s.numero, monto: s.monto, fecha: s.fecha, linea_id: s.linea_id })) });
+      } catch (e) {
+        solos = `⚠️ Los cheques no se confirmaron solos (quedan en Para confirmar): ${errorTexto(e)}`;
+      }
       setMensajes((m) => m.map((x, k) => (k === i ? { ...x, archivo: undefined } : x)).concat({
         role: "assistant",
-        content: `Listo: guardé **${r.insertadas} líneas** en ${a.cuenta?.nombre}${r.repetidas ? ` (${r.repetidas} ya estaban, no se duplicaron)` : ""}. El sistema ya armó los cruces: confirmalos en Para confirmar.`,
+        content: `Listo: guardé **${r.insertadas} líneas** en ${a.cuenta?.nombre}${r.repetidas ? ` (${r.repetidas} ya estaban, no se duplicaron)` : ""}.${solos ? ` ${solos}.` : ""} El sistema ya armó los cruces: confirmalos en Para confirmar.`,
         botones: [{ pestana: "para_confirmar", texto: "Abrir Para confirmar" }],
       }));
     } catch (e) {
