@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { cronNoAutorizado } from "@/lib/cron-auth";
 import { createClient } from "@supabase/supabase-js";
 import { correrAgenteMail } from "@/lib/agente-mail-server";
 
@@ -11,10 +12,8 @@ import { correrAgenteMail } from "@/lib/agente-mail-server";
 export const maxDuration = 60;
 
 export async function GET(req: NextRequest) {
-  const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret && req.headers.get("authorization") !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const noAutorizado = cronNoAutorizado(req);
+  if (noAutorizado) return noAutorizado;
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
     return NextResponse.json({ error: "Falta SUPABASE_SERVICE_ROLE_KEY" }, { status: 500 });
   }

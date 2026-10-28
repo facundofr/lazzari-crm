@@ -24,6 +24,7 @@ import { useUser } from "@/lib/auth-context";
 import { formatDate, formatCurrency, todayAR } from "@/lib/utils";
 import { useToast } from "@/components/ui/toast";
 import { traerTodo } from "@/lib/paginar";
+import { linkArchivo } from "@/lib/archivo-link";
 import {
   claveViaje, montoInicial, viajesDelMes, sinLiquidar, viajeParaQuitar, fechaParaSumar, resumenMes, totalMontos,
   sumarMeses, leerMonto, esDeRemito, vigente, type ResumenTransportista,
@@ -482,7 +483,7 @@ export default function TransportesPage() {
           .upload(uploadedPath, facturaFile, { upsert: true });
         if (uploadError) throw uploadError;
 
-        const { data: urlData } = supabase.storage.from("facturas-compra").getPublicUrl(uploadedPath);
+        const urlData = { publicUrl: linkArchivo("facturas-compra", uploadedPath) };
         const { error: archivoError } = await (supabase as any)
           .from("facturas_compra")
           .update({ archivo_url: urlData.publicUrl, archivo_nombre: facturaFile.name })

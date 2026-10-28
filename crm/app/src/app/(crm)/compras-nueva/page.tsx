@@ -33,6 +33,7 @@ import { armarRecepcion, estadoPorRecibido, ocDelRemito, seguroParaCargar, type 
 import { prepararArchivo } from "@/lib/preparar-foto";
 import { coincideTodas, palabrasBusqueda } from "@/lib/buscar-texto";
 import { AlertTriangle, Camera, Check, ExternalLink, FileUp, Loader2, Mail, MessageCircle, MoreHorizontal, PackageX, RefreshCw, Search, Send, Sparkles, Undo2, X } from "lucide-react";
+import { linkArchivo } from "@/lib/archivo-link";
 
 const db = supabase as any;
 
@@ -581,7 +582,7 @@ export default function ComprasNuevaPage() {
         const prep = await prepararArchivo(file);
         const ruta = `remitos-proveedor/${sociedadId}/${key}.${prep.ext}`;
         const { error: eS } = await supabase.storage.from("comprobantes").upload(ruta, prep.blob, { contentType: prep.mediaType, upsert: false });
-        const url = eS ? null : supabase.storage.from("comprobantes").getPublicUrl(ruta).data.publicUrl;
+        const url = eS ? null : linkArchivo("comprobantes", ruta);
         const res = await fetch("/api/compras/leer-remito", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

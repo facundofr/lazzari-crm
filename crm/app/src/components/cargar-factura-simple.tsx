@@ -20,6 +20,7 @@ import { traerTarjetas, tarjetaSugerida, registrarPagoTarjeta, movimientoPagoTar
 import { matchPurchaseLines, heuristicEquivalences, citaOc, parseVariant, puntajeParecido, type InvoiceLineInput } from "@/lib/purchase-matching";
 import { armarRenglones, repartirEnvio, importePorOc, faltantesPorOc, cant, type RenglonVista } from "@/lib/cargar-factura";
 import { AlertTriangle, Check, CreditCard, FileUp, Loader2, Sparkles, Truck, UserPlus, X } from "lucide-react";
+import { linkArchivo } from "@/lib/archivo-link";
 
 const db = supabase as any;
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -368,7 +369,7 @@ Proveedor real ${proveedor.razon_social} (FC ${factura.numero.trim()})`.trim() }
         const path = `${sociedadId}/${facturaId}/factura.${ext}`;
         const { error: upErr } = await supabase.storage.from("facturas-compra").upload(path, factura.file, { upsert: true });
         if (!upErr) {
-          const { data: u } = supabase.storage.from("facturas-compra").getPublicUrl(path);
+          const u = { publicUrl: linkArchivo("facturas-compra", path) };
           if (u?.publicUrl) await db.from("facturas_compra").update({ archivo_url: u.publicUrl, archivo_nombre: factura.file.name }).eq("id", facturaId);
         }
       }

@@ -30,6 +30,7 @@ import {
 } from "@/lib/conciliacion-compras-analisis";
 import { armarPreguntas, type AccionPregunta } from "@/lib/conciliacion-preguntas";
 import { facturaDesdeDatos, precioNeto, lineKey, type FacturaCarga, type ItemFactura } from "@/lib/factura-compra-leida";
+import { linkArchivo } from "@/lib/archivo-link";
 
 const db = supabase as any;
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -669,7 +670,7 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
           const path = `${sociedadId}/${facturaId}/factura.${ext}`;
           const { error: upErr } = await supabase.storage.from("facturas-compra").upload(path, f.file, { upsert: true });
           if (!upErr) {
-            const { data: u } = supabase.storage.from("facturas-compra").getPublicUrl(path);
+            const u = { publicUrl: linkArchivo("facturas-compra", path) };
             if (u?.publicUrl) await db.from("facturas_compra").update({ archivo_url: u.publicUrl, archivo_nombre: f.file.name }).eq("id", facturaId);
           }
         }

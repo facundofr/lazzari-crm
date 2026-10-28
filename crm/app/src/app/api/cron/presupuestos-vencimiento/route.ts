@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { cronNoAutorizado } from "@/lib/cron-auth";
 import { createClient } from "@supabase/supabase-js";
 
 /**
@@ -16,16 +17,11 @@ import { createClient } from "@supabase/supabase-js";
  * Protegido por CRON_SECRET en produccion.
  */
 
+// Solo con la clave de servicio (el GET corta antes si falta). Ya no cae a la clave anónima.
 function getSupabase() {
-  if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    return createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY
-    );
-  }
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 }
 
@@ -115,13 +111,10 @@ async function avisarRevisar(supabase: ReturnType<typeof getSupabase>, today: st
 }
 
 export async function GET(req: NextRequest) {
-  // Verificar CRON_SECRET en produccion
-  const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret) {
-    const authHeader = req.headers.get("authorization");
-    if (authHeader !== `Bearer ${cronSecret}`) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  const noAutorizado = cronNoAutorizado(req);
+  if (noAutorizado) return noAutorizado;
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return NextResponse.json({ error: "Falta SUPABASE_SERVICE_ROLE_KEY" }, { status: 500 });
   }
 
   const supabase = getSupabase();

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { cronNoAutorizado } from "@/lib/cron-auth";
 import { createClient } from "@supabase/supabase-js";
 import { parseBnaHistorical, BNA_VERIFIED_SOURCE } from "@/lib/bna-historical";
 import { esDiaHabil } from "@/lib/dias-habiles";
@@ -67,10 +68,8 @@ async function fetchDolarApi(): Promise<{ compra: number; venta: number } | null
 type Resultado = { tipo: string; ok: boolean; fecha?: string; fuente?: string; omitida?: string; error?: string };
 
 export async function GET(req: NextRequest) {
-  const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret || req.headers.get("authorization") !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const noAutorizado = cronNoAutorizado(req);
+  if (noAutorizado) return noAutorizado;
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY || !process.env.NEXT_PUBLIC_SUPABASE_URL) {
     return NextResponse.json({ error: "Falta SUPABASE_SERVICE_ROLE_KEY" }, { status: 500 });
   }

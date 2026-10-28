@@ -22,6 +22,7 @@ import { esRenglonEnvio } from "@/lib/envio-detectar";
 import { repartirEnvio, repartoPorPR } from "@/lib/envio-reparto";
 import { convertirCostoPR } from "@/lib/dolar-presupuesto";
 import { TIPOS_FACTURA_COMPRA, CATEGORIAS_GASTO, tipoSugerido, type TipoFacturaCompra } from "@/lib/factura-tipo";
+import { linkArchivo } from "@/lib/archivo-link";
 
 // ── Types ────────────────────────────────────────────────
 export interface OCParaVincular {
@@ -1573,9 +1574,7 @@ export default function CargarFacturaOC({
 
         if (upErr) throw new Error(`No se pudo adjuntar el archivo: ${upErr.message}`);
         if (!upErr) {
-          const { data: urlData } = supabase.storage
-            .from("facturas-compra")
-            .getPublicUrl(filePath);
+          const urlData = { publicUrl: linkArchivo("facturas-compra", filePath) };
           if (urlData?.publicUrl) {
             const { error: attachmentError } = await (supabase as any).from("facturas_compra")
               .update({ archivo_url: urlData.publicUrl, archivo_nombre: file.name })

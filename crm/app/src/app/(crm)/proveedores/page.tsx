@@ -601,7 +601,7 @@ export default function ProveedoresPage() {
         rubro: aiNewProvForm.rubro.trim() || "General",
         activo: true,
       };
-      if (aiNewProvForm.cuit.trim()) insertData.cuit = aiNewProvForm.cuit.trim();
+      if (aiNewProvForm.cuit.replace(/\D/g, "")) insertData.cuit = aiNewProvForm.cuit.replace(/\D/g, ""); // solo números (auditoría 28/10/2026, H24)
       insertData.sociedad_id = sociedadId;
       const { data, error } = await supabase.from("proveedores").insert(insertData as any).select("id").single();
       if (error) throw error;

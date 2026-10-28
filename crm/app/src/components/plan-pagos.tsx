@@ -24,6 +24,7 @@ import {
   type RetencionConfig, type ResultadoRetencion,
 } from "@/lib/plan-pagos";
 import { proponerCheques, textoCondicionPago, vencimientoFactura, type FechasChequeMes, type PlanPago } from "@/lib/condicion-pago";
+import { linkArchivo } from "@/lib/archivo-link";
 
 const db = supabase as any;
 
@@ -398,7 +399,7 @@ export default function PlanPagos({ sociedadId, onClose, onPagosRegistrados }: P
         const path = `${sociedadId}/op-${opId}/comprobante-0.${ext}`;
         const { error: upErr } = await supabase.storage.from("comprobantes").upload(path, datos.file, { upsert: true });
         if (!upErr) {
-          url = supabase.storage.from("comprobantes").getPublicUrl(path).data.publicUrl;
+          url = linkArchivo("comprobantes", path);
           await db.from("ordenes_pago").update({ archivos: JSON.stringify([{ url, nombre: datos.file.name }]) }).eq("id", opId).eq("sociedad_id", sociedadId);
         }
       }

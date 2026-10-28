@@ -308,16 +308,30 @@ export function ProveedorFormModal({
       setFormError("La condición IVA no es válida");
       return;
     }
+    // CUIT/DNI siempre solo con números (auditoría 28/10/2026, H24: con guiones se colaban proveedores duplicados).
+    const cuit = form.cuit.replace(/\D/g, "");
+    if (!cuit) {
+      setFormError("El CUIT o DNI tiene que tener números");
+      return;
+    }
+    // Aviso (no frena) si ya hay otro proveedor de la sociedad con el mismo CUIT, escrito con o sin guiones.
+    const conGuiones = cuit.length === 11 ? `${cuit.slice(0, 2)}-${cuit.slice(2, 10)}-${cuit.slice(10)}` : cuit;
+    let repetidos = (supabase as any).from("proveedores").select("id, razon_social")
+      .eq("sociedad_id", sociedadId).in("cuit", [cuit, conGuiones]);
+    if (editingId) repetidos = repetidos.neq("id", editingId);
+    const { data: yaExisten } = await repetidos;
+    if (yaExisten?.length && !confirm(`Ya existe ${yaExisten.map((p: any) => `«${p.razon_social}»`).join(", ")} con el CUIT ${conGuiones}.\n\n¿Guardar igual?`)) return;
     // Para pagos y eCheq la identidad fiscal siempre es la del proveedor.
     // Conservamos la columna histórica por compatibilidad, pero nunca pedimos
     // ni guardamos un CUIT bancario distinto.
     const proveedorPayload = {
       ...form,
+      cuit,
       // La forma de pago y los días viejos (los usan Finanzas y la OP) se mantienen al día con "Cómo se le paga".
       ...legacyDesdePlan(form, { forma_pago: form.forma_pago, dias_cuenta_corriente: form.dias_cuenta_corriente }),
       administracion_nombre: form.administracion_nombre.trim() || null,
       condicion_iva: condicionIva,
-      cuit_titular_cuenta: form.cuit.trim(),
+      cuit_titular_cuenta: cuit,
       tipo_personalizacion: form.es_personalizador ? (form.tipo_personalizacion || "ambos") : null,
     };
     setSaving(true);

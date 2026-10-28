@@ -36,6 +36,7 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
   );
 }
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
+import { linkArchivo } from "@/lib/archivo-link";
 
 const transporteEstadoConfig: Record<string, { label: string; variant: "success" | "warning" | "info" | "danger" }> = {
   solicitado: { label: "Solicitado", variant: "warning" },
@@ -364,7 +365,7 @@ export default function RemitosPage() {
       const ruta = `remitos/${sociedadActiva.id}/${r.id}-${Date.now()}.${prep.ext}`;
       const { error: eS } = await supabase.storage.from("comprobantes").upload(ruta, prep.blob, { contentType: prep.mediaType, upsert: false });
       if (eS) throw eS;
-      const url = supabase.storage.from("comprobantes").getPublicUrl(ruta).data.publicUrl;
+      const url = linkArchivo("comprobantes", ruta);
       const cambios: Record<string, unknown> = { foto_url: url };
       const primera = !r.foto_url;
       const { error } = await (supabase as any).from("remitos").update(cambios).eq("id", r.id).eq("sociedad_id", sociedadActiva.id);

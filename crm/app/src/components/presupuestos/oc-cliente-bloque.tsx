@@ -10,6 +10,7 @@ import { FileText, Loader2, Pencil, Sparkles, Trash2, Upload } from "lucide-reac
 import { supabase } from "@/lib/supabase/client";
 import { useToast } from "@/components/ui/toast";
 import { formatDate, todayAR } from "@/lib/utils";
+import { linkArchivo } from "@/lib/archivo-link";
 
 export interface OcClienteDatos {
   id: string;
@@ -73,7 +74,7 @@ export function OcClienteBloque({ pr, sociedadId, usuario, onGuardado }: {
         const path = `pr/${pr.id}/${archivo.name}`;
         const { error: upErr } = await supabase.storage.from("presupuestos").upload(path, archivo, { upsert: true });
         if (upErr) { toast.error("Error al subir el archivo"); return; }
-        url = supabase.storage.from("presupuestos").getPublicUrl(path).data.publicUrl;
+        url = linkArchivo("presupuestos", path);
         nombre = archivo.name;
         cambios.archivo_url = url; cambios.archivo_nombre = nombre;
       }

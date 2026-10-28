@@ -27,7 +27,8 @@ import { LeerDocumentoImpositivo } from "@/components/leer-documento-impositivo"
 import { EliminarConMotivoModal } from "@/components/eliminar-con-motivo";
 import { TIPO_DOCUMENTO_LABEL, type DatosImpositivos } from "@/lib/documento-impositivo";
 import { traerTodo } from "@/lib/paginar";
-import { traerSaldosClientes, saldoClienteEn, type SaldoCliente } from "@/lib/saldo-clientes";
+import { traerSaldosClientes, saldoClienteEn, cobradoPorFactura, saldoFacturaVenta, type SaldoCliente } from "@/lib/saldo-clientes";
+import { totalesCuentaCorriente } from "@/lib/cuenta-corriente-cliente";
 
 const condicionLabels: Record<string, string> = {
   RI: "Resp. Inscripto",
@@ -242,6 +243,8 @@ interface CCFactura {
   fecha: string;
   fecha_vencimiento: string | null;
   total: number;
+  /** Lo que falta cobrar: total − NC aplicadas − cobrado (misma regla que Finanzas, lib/saldo-clientes). */
+  saldo: number;
   moneda: string;
 }
 
@@ -822,13 +825,15 @@ export default function ClientesPage() {
     const clienteId = selectedCliente.id;
     setCcLoading(true);
 
+    // Auditoría 28/10/2026 (H08): antes sumaba las NC como deuda y mostraba el total aunque hubiera cobros
+    // parciales. Ahora: facturas emitidas o con cobro parcial (sin NC), con su saldo según lib/saldo-clientes.
     async function fetchCC() {
       try {
         let query = (supabase as any)
           .from("facturas")
-          .select("id, tipo, punto_venta, numero, fecha, fecha_vencimiento, total, moneda")
+          .select("id, tipo, punto_venta, numero, fecha, fecha_vencimiento, total, total_acreditado, moneda, estado")
           .eq("cliente_id", clienteId)
-          .eq("estado", "emitida")
+          .in("estado", ["emitida", "parcial"])
           .order("fecha");
 
         if (sociedadActiva?.id) {
@@ -836,12 +841,21 @@ export default function ClientesPage() {
         }
 
         const { data, error } = await query;
-        if (error) {
-          console.error("Error fetching CC facturas:", error);
-          setCcFacturas([]);
-        } else {
-          setCcFacturas(
-            (data || []).map((f: any) => ({
+        if (error) throw error;
+        const facturas = ((data || []) as any[]).filter((f) => !String(f.tipo || "").toUpperCase().startsWith("NC"));
+        const ids = facturas.map((f) => f.id);
+        const [movs, apls] = ids.length
+          ? await Promise.all([
+              (supabase as any).from("movimientos").select("id, factura_id, monto, moneda, anulado").in("factura_id", ids),
+              (supabase as any).from("cobro_aplicaciones").select("movimiento_id, factura_id, monto, movimientos(anulado)").in("factura_id", ids),
+            ])
+          : [{ data: [], error: null }, { data: [], error: null }];
+        if (movs.error) throw movs.error;
+        if (apls.error) throw apls.error;
+        const cobrado = cobradoPorFactura(facturas, movs.data || [], apls.data || []);
+        setCcFacturas(
+          facturas
+            .map((f: any) => ({
               id: f.id,
               tipo: f.tipo || "FC A",
               punto_venta: f.punto_venta || "0001",
@@ -849,13 +863,15 @@ export default function ClientesPage() {
               fecha: f.fecha || "",
               fecha_vencimiento: f.fecha_vencimiento || null,
               total: Number(f.total) || 0,
+              saldo: saldoFacturaVenta(f, cobrado[f.id] || 0),
               moneda: f.moneda || "ARS",
             }))
-          );
-        }
+            .filter((f) => f.saldo > 0.009)
+        );
       } catch (err) {
         console.error("Error fetching CC:", err);
         setCcFacturas([]);
+        toast.error("No se pudo cargar la cuenta corriente del cliente. Recargá la página.");
       } finally {
         setCcLoading(false);
       }
@@ -872,8 +888,8 @@ export default function ClientesPage() {
       try {
         let query = (supabase as any)
           .from("facturas")
-          .select("cliente_id")
-          .eq("estado", "emitida");
+          .select("cliente_id, tipo")
+          .in("estado", ["emitida", "parcial"]);
 
         if (sociedadActiva?.id) {
           query = query.eq("sociedad_id", sociedadActiva.id);
@@ -883,7 +899,8 @@ export default function ClientesPage() {
         if (error || !data) return;
 
         const counts: Record<string, number> = {};
-        for (const row of data as { cliente_id: string }[]) {
+        for (const row of data as { cliente_id: string; tipo: string | null }[]) {
+          if (String(row.tipo || "").toUpperCase().startsWith("NC")) continue; // las NC no son facturas pendientes
           counts[row.cliente_id] = (counts[row.cliente_id] || 0) + 1;
         }
         setPendingCountMap(counts);
@@ -1409,6 +1426,11 @@ export default function ClientesPage() {
     return diff > 0 ? diff : 0;
   }
 
+  // Total de la Cta. Cte. igual al saldo de Finanzas (saldo neto ya calculado en la lista de clientes).
+  function totalesCC(cliente: ClienteExt, facturas: CCFactura[]) {
+    return totalesCuentaCorriente(facturas, saldosError ? null : { ARS: cliente.saldoCuentaCorriente, USD: cliente.saldoUSD || 0 });
+  }
+
   function generateCCText(cliente: ClienteExt, facturas: CCFactura[]): string {
     const today = new Date().toLocaleDateString("es-AR");
     const lines: string[] = [];
@@ -1422,13 +1444,18 @@ export default function ClientesPage() {
       const comprobante = `${f.tipo} ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}`;
       const venc = f.fecha_vencimiento ? formatDate(f.fecha_vencimiento) : "—";
       const mora = calcDiasMora(f.fecha_vencimiento || f.fecha);
-      lines.push(`${comprobante} | ${formatDate(f.fecha)} | ${venc} | ${formatCurrency(f.total, f.moneda as "ARS" | "USD")} | ${mora > 0 ? mora + " dias" : "Al dia"}`);
+      const monto = f.saldo < f.total - 0.009
+        ? `${formatCurrency(f.saldo, f.moneda as "ARS" | "USD")} (saldo de ${formatCurrency(f.total, f.moneda as "ARS" | "USD")})`
+        : formatCurrency(f.saldo, f.moneda as "ARS" | "USD");
+      lines.push(`${comprobante} | ${formatDate(f.fecha)} | ${venc} | ${monto} | ${mora > 0 ? mora + " dias" : "Al dia"}`);
     }
     lines.push("");
-    const totalsByMoneda: Record<string, number> = {};
-    facturas.forEach((f) => { totalsByMoneda[f.moneda || "ARS"] = (totalsByMoneda[f.moneda || "ARS"] || 0) + f.total; });
-    const totalParts = Object.entries(totalsByMoneda).map(([mon, total]) => formatCurrency(total, mon as "ARS" | "USD"));
-    lines.push(`Total pendiente: ${totalParts.join(" + ")}`);
+    const totales = totalesCC(cliente, facturas);
+    for (const t of totales) {
+      if (t.aFavor > 0.009) lines.push(`Saldo a favor de ustedes (${t.moneda}): -${formatCurrency(t.aFavor, t.moneda)}`);
+      if (t.otrosCargos > 0.009) lines.push(`Ajustes de cuenta (${t.moneda}): ${formatCurrency(t.otrosCargos, t.moneda)}`);
+    }
+    lines.push(`Total pendiente: ${totales.map((t) => formatCurrency(t.saldoCuenta, t.moneda)).join(" + ")}`);
     lines.push("");
     lines.push("Quedamos a disposicion para cualquier consulta.");
     lines.push("Saludos cordiales,");
@@ -2472,7 +2499,10 @@ export default function ClientesPage() {
                                     <td className="px-3 py-2.5 text-zinc-500 whitespace-nowrap">{formatDate(f.fecha)}</td>
                                     <td className="px-3 py-2.5 text-zinc-500 whitespace-nowrap">{f.fecha_vencimiento ? formatDate(f.fecha_vencimiento) : "—"}</td>
                                     <td className="px-3 py-2.5 text-right font-mono font-medium text-zinc-700 dark:text-zinc-300 whitespace-nowrap">
-                                      {formatCurrency(f.total, f.moneda as "ARS" | "USD")}
+                                      {formatCurrency(f.saldo, f.moneda as "ARS" | "USD")}
+                                      {f.saldo < f.total - 0.009 && (
+                                        <span className="block text-[10px] font-normal text-zinc-400">de {formatCurrency(f.total, f.moneda as "ARS" | "USD")}</span>
+                                      )}
                                     </td>
                                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
                                       {mora > 0 ? (
@@ -2494,15 +2524,23 @@ export default function ClientesPage() {
                         <div className="border-t-2 border-zinc-300 dark:border-zinc-600 bg-zinc-50 dark:bg-zinc-800/50 px-3 py-3 flex items-center justify-between">
                           <span className="text-sm font-semibold text-zinc-700 dark:text-zinc-200">Total adeudado</span>
                           <div className="flex flex-col items-end gap-0.5">
-                            {(() => {
-                              const totals: Record<string, number> = {};
-                              ccFacturas.forEach((f) => { totals[f.moneda || "ARS"] = (totals[f.moneda || "ARS"] || 0) + f.total; });
-                              return Object.entries(totals).map(([mon, total]) => (
-                                <span key={mon} className="text-sm font-bold font-mono text-red-600 dark:text-red-400">
-                                  {formatCurrency(total, mon as "ARS" | "USD")}
+                            {totalesCC(selectedCliente, ccFacturas).map((t) => (
+                              <span key={t.moneda} className="flex flex-col items-end">
+                                <span className="text-sm font-bold font-mono text-red-600 dark:text-red-400">
+                                  {formatCurrency(t.saldoCuenta, t.moneda)}
                                 </span>
-                              ));
-                            })()}
+                                {t.aFavor > 0.009 && (
+                                  <span className="text-[10px] text-zinc-500">
+                                    facturas {formatCurrency(t.facturas, t.moneda)} − a favor del cliente {formatCurrency(t.aFavor, t.moneda)}
+                                  </span>
+                                )}
+                                {t.otrosCargos > 0.009 && (
+                                  <span className="text-[10px] text-zinc-500">
+                                    facturas {formatCurrency(t.facturas, t.moneda)} + ajustes de cuenta {formatCurrency(t.otrosCargos, t.moneda)}
+                                  </span>
+                                )}
+                              </span>
+                            ))}
                           </div>
                         </div>
                       </div>

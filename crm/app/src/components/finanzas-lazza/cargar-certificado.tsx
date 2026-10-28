@@ -14,6 +14,7 @@ import { supabase } from "@/lib/supabase/client";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { claveCertificado, corregirPartes, proponerRetenciones, soloDigitos, TOLERANCIA_CERTIFICADO, type CertificadoLeido, type Propuesta, type RetencionSufrida } from "@/lib/certificado-sufrido";
 import type { FilaRetencion } from "@/lib/finanzas-lazza";
+import { linkArchivo } from "@/lib/archivo-link";
 
 const db = supabase as any;
 const TIPOS_OK = ["application/pdf", "image/png", "image/jpeg", "image/webp"];
@@ -135,7 +136,7 @@ export function CargarCertificado({ sociedadId, sufridas, sociedad, onGuardado }
         const ruta = `sufridas/${sociedadId}/${todayAR()}-${crypto.randomUUID()}.${ext}`;
         const { error: eS } = await db.storage.from("certificados").upload(ruta, l.archivo, { upsert: false, contentType: l.archivo.type || undefined });
         if (eS) console.warn("Certificado: no se pudo subir el archivo", eS);
-        url = eS ? null : (db.storage.from("certificados").getPublicUrl(ruta).data?.publicUrl ?? null);
+        url = eS ? null : (linkArchivo("certificados", ruta) ?? null);
         subidos.current.set(l.archivo, url ?? null);
       }
       const { error } = await db.from("certificados_retencion").insert({

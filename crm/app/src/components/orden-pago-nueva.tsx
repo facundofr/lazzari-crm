@@ -27,6 +27,7 @@ import { claveArchivo, mismoPago, sinRepetir } from "@/lib/comprobante-medios";
 import { useToast } from "@/components/ui/toast";
 import { textoOP } from "@/lib/cartel-guardado";
 import { FileText, Minimize2, Maximize2, X, Search, Loader2, Sparkles, ShieldCheck, Landmark, Plus, Trash2, Paperclip } from "lucide-react";
+import { linkArchivo } from "@/lib/archivo-link";
 
 export interface ProveedorOption {
   id: string;
@@ -901,7 +902,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
           const filePath = `${sociedadId}/op-${opId}/comprobante-${fi}.${ext}`;
           const { error: upErr } = await supabase.storage.from("comprobantes").upload(filePath, file, { upsert: true });
           if (!upErr) {
-            const { data: urlData } = supabase.storage.from("comprobantes").getPublicUrl(filePath);
+            const urlData = { publicUrl: linkArchivo("comprobantes", filePath) };
             archivosArr.push({ url: urlData.publicUrl, nombre: file.name });
           } else attachmentWarnings.push(`${file.name}: ${upErr.message}`);
         }

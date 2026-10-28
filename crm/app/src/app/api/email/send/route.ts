@@ -8,6 +8,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { Resend } from "resend";
+import { createSupabaseServer } from "@/lib/supabase/server";
+import { rutaDeLinkArchivo } from "@/lib/archivo-link";
 
 // ── Main handler ──
 export async function POST(req: NextRequest) {
@@ -77,8 +79,17 @@ export async function POST(req: NextRequest) {
 
     // Download extra attachments from URLs (e.g. comprobantes uploaded to Supabase Storage)
     if (extraAttachments?.length) {
+      const supabase = await createSupabaseServer();
       await Promise.all(extraAttachments.map(async (att) => {
         try {
+          // Archivos nuestros (buckets privados desde la auditoría 28/10/2026): se bajan con la sesión del usuario.
+          const archivo = rutaDeLinkArchivo(att.url);
+          if (archivo) {
+            const { data } = await supabase.storage.from(archivo.bucket).download(archivo.ruta);
+            const buf = data ? Buffer.from(await data.arrayBuffer()) : null;
+            if (buf && buf.length > 0) attachments.push({ filename: att.filename, content: buf });
+            return;
+          }
           const res = await fetch(att.url, { signal: AbortSignal.timeout(15000) });
           if (res.ok) {
             const buf = Buffer.from(await res.arrayBuffer());

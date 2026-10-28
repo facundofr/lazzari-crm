@@ -51,6 +51,7 @@ import { etiquetaCategoriaGasto } from "@/lib/factura-tipo";
 import { pesosDeUsd } from "@/lib/op-usd-pesos";
 import ResumenEconomico from "@/components/resumen-economico";
 import { netoCuentaCorriente, sumarPorMoneda } from "@/lib/resumen-economico";
+import { linkArchivo } from "@/lib/archivo-link";
 
 const FacturacionEmbed = lazy(() => import("@/app/(crm)/facturacion/facturacion-content").then(m => ({ default: m.FacturacionContent })));
 
@@ -1954,7 +1955,7 @@ function FinanzasViejaPage() {
       const path = `op/${opId}/certificado_retencion.${ext}`;
       const { error: uploadError } = await supabase.storage.from("certificados").upload(path, file, { upsert: true });
       if (uploadError) throw uploadError;
-      const { data: urlData } = supabase.storage.from("certificados").getPublicUrl(path);
+      const urlData = { publicUrl: linkArchivo("certificados", path) };
       const publicUrl = urlData?.publicUrl;
       if (publicUrl) {
         let certUpdate = (supabase as any).from("ordenes_pago").update({ certificado_retencion_url: publicUrl }).eq("id", opId);
@@ -2057,7 +2058,7 @@ function FinanzasViejaPage() {
         const { error: upErr } = await supabase.storage.from("comprobantes").upload(filePath, gmFile);
         setGmUploading(false);
         if (upErr) throw new Error("Error subiendo comprobante: " + upErr.message);
-        const { data: urlData } = supabase.storage.from("comprobantes").getPublicUrl(filePath);
+        const urlData = { publicUrl: linkArchivo("comprobantes", filePath) };
         comprobanteUrl = urlData.publicUrl;
       }
 
@@ -2339,7 +2340,7 @@ function FinanzasViejaPage() {
         const filePath = `${sociedadActiva?.id || "default"}/${fcData.id}/factura.${ext}`;
         const { error: upErr } = await supabase.storage.from("facturas-compra").upload(filePath, fcFile, { upsert: true });
         if (!upErr) {
-          const { data: urlData } = supabase.storage.from("facturas-compra").getPublicUrl(filePath);
+          const urlData = { publicUrl: linkArchivo("facturas-compra", filePath) };
           let fcFileUpdate = (supabase as any).from("facturas_compra").update({ archivo_url: urlData.publicUrl, archivo_nombre: fcFile.name }).eq("id", fcData.id);
           if (sociedadActiva?.id) fcFileUpdate = fcFileUpdate.eq("sociedad_id", sociedadActiva.id);
           const { error: fcFileErr } = await fcFileUpdate;

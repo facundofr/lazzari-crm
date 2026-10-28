@@ -1,65 +1,87 @@
-# Traspaso — chat "Resto del CRM" (16/10/2026)
+# Traspaso — chat "Resto del CRM" (actualizado 27/10/2026)
 
-Chat general del CRM (lo que no es Compras, Remitos, Transportes, Web ni Finanzas, que tienen chat propio).
-Antes de seguir, leé `CLAUDE.md` y `docs/ESTADO.md` (las primeras entradas son de hoy).
+Chat general del CRM: todo lo que no es Compras, Remitos, Transportes, Web ni Finanzas, que tienen chat propio.
+Antes de seguir, leé `CLAUDE.md` y las primeras entradas de `docs/ESTADO.md`.
 
-## Objetivo
-Que Augusto y los chicos trabajen sin trabas: arreglar lo que falla, simplificar pasos y dejar todo publicado y probado.
+## Cómo publica este chat (importante)
+La carpeta `C:\Users\lazza\lazzari` tiene cambios a medio hacer de otros chats y suele estar atrasada respecto de `origin/main`.
+Por eso este chat **no publica desde la carpeta**: arma una copia limpia y publica solo lo suyo.
+1. `git fetch` y `git worktree add --detach <scratchpad>/pubN origin/main`.
+2. Aplicar ahí solo los cambios de este chat (`git diff HEAD -- archivo | git apply`, o editar directo en la copia).
+3. Subir la versión en `crm/app/src/lib/app-version.ts` y anotar en `docs/ESTADO.md`.
+4. Para `tsc`: junction `crm/app/node_modules` → la de la carpeta principal; sacarla (`rmdir`) antes del deploy.
+5. Commit, `git push origin HEAD:main` (si lo rechaza, NO se publica), copiar `crm/app/.vercel`, `vercel.cmd --prod --yes`, esperar Ready.
+6. `git worktree remove --force` y prune.
+Solo cuando Augusto lo pide.
 
-## Terminado y PUBLICADO
+## Publicado en esta etapa (23–26/10)
 | Qué | Versión / commit |
 |---|---|
-| Compras nueva: buscador (OC, PR, cliente, proveedor, artículo) + filtros Atrasadas / Llegó una parte | V1.1.497 (a6ff3e7) |
-| Foto del remito del proveedor (Compras nueva > Esperando): IA lee, carga lo recibido, avisa al vendedor, Deshacer. Tabla `oc_remitos` (migración `20261016150000_oc_remitos` CORRIDA) | V1.1.497 |
-| Carga de factura: junta el desglose por talle (`lib/factura-desglose-talles.ts`) | V1.1.497 |
-| Cualquier vendedor edita cualquier PR: migración `20261016180000_presupuestos_editar_todos` CORRIDA (rollback en `supabase/rollback/`) | 76bd304 (solo base) |
-| Enviar Factura: el solicitante del PR viene marcado en "Para" y `email_enviado_a` guarda lo que salió de verdad (Facturación y Ventas) | V1.1.498 (58d8fb1) |
-| Cargar factura: "Compré otra cosa" ya no falla con "null value in column codigo" | V1.1.505 (b3c013d) |
-| Facturas: línea chica gris "✉ 16/10 · mail" en Facturación y en Facturas de venta; "Verificar" corrige `email_enviado_a` con Resend (`lib/envio-factura-texto.ts` + prueba) | V1.1.510 (b35758b), en producción desde V1.1.512 |
+| Ficha 360 sin "Ir a Muestras"; Ayuda sin Dashboard/Muestras/Ventas/Reportes (35 secciones, editado en `docs/GUIA-USO.md` + `node scripts/guia-a-ts.mjs`); textos "Ventas" → "Finanzas Lazza → Facturar" | V1.1.560 (d73d953) |
+| Editar un PR en cualquier estado (también facturado). Al guardar, las OC se actualizan en su lugar: conserva lo recibido, queda "Recibida parcial" si falta (10→11 = falta 1), renglón nuevo se agrega, el sacado se borra solo si no llegó nada | V1.1.560 |
+| Configuración > Usuarios: llave por usuario para cambiar mail y/o contraseña; Invitar usuario con contraseña opcional (se crea activo, sin mail). Solo super admin (`/api/users` PATCH, `/api/invite` POST) | V1.1.563 (a8e2a6f) |
+| Nuevo proveedor: botones CUIT / DNI (`proveedor-form-modal.tsx`) | V1.1.563 |
+| Solicitud solo con texto ya no da "Datos incompletos para crear el presupuesto": el texto queda como renglón a cotizar | V1.1.576 (3472068) |
 
-## Datos cargados o corregidos (con OK de Augusto)
-- Factura Nexo A 0003-00005284 ($685.828) → OC-2026-1229, por aprobar. OC con 2 cajas porta toma; envío $90.000 como costo interno del PR-2026-1176. **Falta: Augusto aprueba y hace la OP.**
-- Factura Montagne 00123-00008159 ($445.137,50) → OC-2026-1263, por aprobar. Ya está bien: **no volver a cargarla.**
-- VAL ARG FC A 0007-00000083 ($309.151,92, Mercado Libre) → pagada con BBVA Visa ·1582.
-- 20 facturas de Corteva: `email_enviado_a` corregido con lo real de Resend.
-- OC-2026-1259 (Mollon): se volvió atrás la prueba del remito (0/1000, enviada).
-- Mollon: OC-2026-1258 (stock propio) y OC-2026-1259 (cliente) son a propósito, no duplicadas.
+## PUBLICADO 27/10 en V1.1.589 (commit 44d3767, Vercel Ready): Resto a facturar (factura parcial de un PR)
+- Ojo: en la carpeta principal siguen como cambios locales (idénticos a lo publicado) `emitir-factura-modal.tsx`, `facturar.tsx`, `lib/resto-facturar.ts`, el test y las migraciones del resto; si un `git merge origin/main` se queja por esos archivos, son iguales a main y se pueden descartar (con OK de Augusto).
+- Visto en producción 27/10 (sin guardar): fila "PR-2026-1218 · resto" de Synertech, US$ 1.671,84 / 2.022,93, "Resto a facturar", con Facturar y No facturar. Detalle menor: el pie cuenta el resto como "3 PR".
+- Si al facturar un PR se sacan renglones o se baja la cantidad, la ventana pregunta abajo: **Dejar a facturar** (marcado) / **No facturar**. No frena.
+- Lo que queda sale en Finanzas > Facturas > Facturar como fila "PR-… · resto" con Facturar (solo lo que falta) y No facturar.
+- Archivos SOLO de este chat: `crm/app/src/lib/resto-facturar.ts` (nuevo), `crm/app/scripts/test-resto-facturar.ts` (nuevo, OK),
+  `crm/app/src/components/facturacion/emitir-factura-modal.tsx`, `crm/app/src/components/finanzas-lazza/facturar.tsx`,
+  migraciones `20261026200000_presupuesto_restos_facturar.sql` y `20261026201000_resto_synertech_pr1218.sql` (+ rollback).
+- Migraciones **YA CORRIDAS** (26/10, OK de Augusto). Synertech PR-2026-1218: resto pendiente 800 N95 + 12 suspensiones H700 = USD 2.022,93.
+- tsc 0, hooks OK, prueba `test-resto-facturar.ts` OK.
+- Falta: cartel "Resto a facturar" dentro del PR (`presupuestos-lista.tsx`: trabajar sobre origin/main, la copia local está vieja) y restos en la bandeja "Para facturar" de Ventas. Opcional: que el pie de Facturar diga "2 PR · 1 resto".
 
-## Menú (PUBLICADO en V1.1.513, commit b3bf5b4)
-- Oportunidades, Stock y Personalización ocultos; "Importaciones" nuevo, con avión, oculto (`sidebar.tsx` campo `oculto`; `app/(crm)/importaciones/page.tsx` "Próximamente").
-- **Falta verlo en producción** (hoy va por V1.1.517) con el usuario de Augusto, sin guardar: que esos 4 no estén en el menú, que /importaciones diga "Próximamente" y la versión de abajo. El 17/10 se abrió el login en el navegador de la app pero no llegó a entrar (cambio de cuenta).
+## PUBLICADO 27/10 en V1.1.590 (commit 538aedb, Vercel Ready, versión vista en producción): PDF del PR salía sin los cambios después de editar (aviso de Seba)
+- Falta que Seba pruebe: editar un precio, guardar y descargar el PDF (no se probó porque implica guardar).
+- Causa: al guardar la edición se recarga la lista, pero el panel abierto (`selected`) seguía con los datos viejos y el botón PDF usa esos.
+- Arreglo: efecto en `presupuestos-lista.tsx` que, al recargar la lista, actualiza el PR abierto (ya en main; el parche quedó de referencia en `docs/traspaso/parches/pdf-pr-despues-de-editar.patch`). tsc 0, hooks OK.
+- OJO: el `presupuestos-lista.tsx` de la carpeta principal está VIEJO (le falta el arreglo de V1.1.576 y el de V1.1.590). No publicar ese archivo desde la carpeta.
 
-## Sin publicar
-- Nada. Retenciones TXT SICORE + Excel salió en V1.1.541 (20/10). Pendiente: cargar concepto "servicios" a los proveedores que corresponda (hoy todo sale 78 bienes; Augusto lo deja para más adelante).
-Nada. "Se sacan 3 IA" salió en V1.1.532; "Sin datos inventados" sale en la tanda V1.1.534 (19/10, junto con Remitos y Transportes).
-- El cambio local en `crm/app/tsconfig.json` NO es de este chat (no se publica).
+## Aviso pasado al chat de Compras (27/10, no es de este chat)
+En Compras Lazza > Cargar factura, a los de Compras les aparece "Aplicar saldo a favor: $ … (OP-…)" (`compras-lazza-factura.tsx` ~495) y no les tiene que aparecer. Se le dio a Augusto este prompt para el chat de Compras:
+```
+Aviso de Augusto: en Compras Lazza > Cargar factura, a los de Compras les aparece el recuadro "Aplicar saldo a favor: $ … (OP-…)" (compras-lazza-factura.tsx, línea ~495). A ellos no les tiene que aparecer. Que lo sigan viendo solo los que manejan Finanzas (admin / super admin / quien tenga Finanzas Lazza); confirmame con qué permiso lo separás antes de tocar. Si no se muestra, la factura va a Pagos como siempre y el saldo a favor queda para que Finanzas lo aplique después. Probá en local sin guardar, tsc y hooks, y no publiques hasta que te diga.
+```
+Recomendación dada: que el saldo a favor lo aplique Finanzas al pagar. Augusto no confirmó todavía.
 
-## Pendiente / próximo paso (17/10)
-1. ~~Corteva: reenviar a seedspayables~~ → Augusto 17/10: "ya está ok, no hay que cambiar nada". CERRADO.
-2. **Asistente dentro del CRM que hace cosas — Etapa 1 PUBLICADA en V1.1.520 (17/10), migración corrida, Hacer + Deshacer probados en producción con la nota de Nexo (quedó como estaba). Lo único que falta: Etapa 2.** Antes: (detalle y archivos en ESTADO, entrada "ASISTENTE QUE HACE COSAS — ETAPA 1"). Falta: (a) Augusto corre `supabase/migrations/20261017100000_ia_acciones.sql` en el SQL Editor; (b) publicar cuando lo pida; (c) primera prueba real de "Hacer" + "Deshacer" con él en producción; (d) Etapa 2.
-3. ~~OP de Nexo~~ → HECHA por Augusto: OP-000066 (16/10), eCheq BBVA 90017386 $678.972 al 31/10 (ret. Ganancias 2 %), mail enviado; FC 0003-00005284 pagada. Ojo: OC-2026-1229 sigue "enviada" con 0/1 llegó (si la mesa ya llegó, marcar Llegó).
-4. Informe para el equipo ACTUALIZADO: `Claude outputs/informe-equipo-novedades-17-10-2026.md` (12 puntos, al día con V1.1.517). Falta que Augusto lo lea y lo mande él.
-4b. **Mayúsculas solo cuando hace falta** (A + B + C) PUBLICADO en V1.1.520 y visto en producción (Proveedores) (ver ESTADO, entrada "MAYÚSCULAS"). Falta publicar y mirarlo en producción; la corrección de datos viejos en la base (opción D) quedó descartada por ahora.
-5. Probar la foto del remito del proveedor con un remito REAL. Ojo (19/10): esa foto vive solo en Compras nueva (`compras-nueva/page.tsx`, tabla `oc_remitos`); Compras Lazza no la tiene. Preguntarle a Augusto si la prueba sigue valiendo o si la quiere en Compras Lazza (eso sería del chat de Compras).
-6. ~~Ver el menú en producción~~ → visto 17/10 en V1.1.520 con el usuario de Augusto: OK.
+## Consultas resueltas 26/10 (solo lectura)
+- Cobro de la OP 18722 de Del Sol: todavía no cargado. FA 65/67/68 emitidas; la FA 68 ya tiene atado el saldo a favor y debe 1.836.717,86.
+- X 0000-00000011 del PR-2026-1022 ($ 5.284.860, fecha 21/10): guardada bien.
+- Saldo a favor con NC sueltas: no hace falta, hoy no hay ninguna NC suelta.
+
+## Hecho en datos (con OK de Augusto)
+- Natalia Inga (ningalazzari@gmail.com, administrativo, ve las dos sociedades): activada con contraseña el 23/10 y ya entró. Augusto le va a cambiar la contraseña desde la llave (la actual es débil).
+
+## Otros temas resueltos
+- Anthropic API sin crédito: Augusto activó los 140 US$/mes del plan Team (Claude Console > Facturación). Ese crédito caduca el 12/11/2026: ese día mirar que se renueve. La recarga automática quedó desactivada (decisión de Augusto).
+- Mockup de usabilidad (4 pantallas, navegable): https://claude.ai/artifact/52FyWtMbDzthkqKKtdprBT — Inicio "Mi día", Presupuestos con avance de la venta, Nuevo proveedor en pasos, Orden de pago con resumen fijo. Solo diseño, nada implementado. Augusto todavía no eligió cuál implementar (sugerido: empezar por "Mi día").
+- Contabilidad (libro mayor, diario, estado de resultados, cashflow) y plan de cuentas: se pasó al chat de **Finanzas Lazza**. No se toca acá.
+
+## Auditoría integral (28/10, solo documentación)
+Informes en `docs/auditoria-integral/` (empezar por `01-resumen-ejecutivo.md`). Plan en tandas en `09-plan-de-correccion.md` (0 pruebas, 1 seguridad en la base, 2 plata que da mal, 3 fuentes de verdad, 4 PR↔Compras, 5 RPC, 6 mudanza de pantallas viejas). Nada implementado: Augusto elige la tanda.
+
+## Pendiente
+00. Auditoría: Tanda 1 Parte A HECHA (migración 20261028120000_seguridad_cerrar_anonimo corrida 28/10 y verificada en producción). Parte B hecha en la carpeta, sin publicar (ver ESTADO): migración 20261028130000 ya corrida (3/3 true); falta publicar el código cuando Augusto lo pida. Parte C (RLS por sociedad) DESCARTADA por ahora: Augusto 28/10 "cualquier usuario puede ver las dos sociedades, cada uno con su categoría". Tampoco cerrar facturas_compra/transportes por rol: los vendedores cargan la mayoría. Parte D y Tanda 2 (Cta. Cte. del cliente y CUIT de proveedores) HECHAS EN LA CARPETA, SIN PUBLICAR: ver la primera entrada de ESTADO del 28/10. 20261028140000 (CUIT) ya corrida 28/10. Orden: publicar; recién después correr 20261028150000 (archivos privados) y probar abrir una factura de compra, un adjunto de OP, un archivo de PR y un certificado. Lo de Finanzas de la Tanda 2 (H15, H19, H20, H22, H23) se le pasó a Augusto como prompt para el chat de Finanzas Lazza. Avisado: Manu (admin, ya no trabaja) sigue activo; José solo tiene Lazzari en user_sociedades.
+0. Resto a facturar ya publicado (V1.1.589): sumar el cartel en el PR y la bandeja de Ventas. Que Seba pruebe el PDF del PR (V1.1.590).
+1. **Clientes con DNI** (Augusto: "hacelo después"): mismo botón CUIT / DNI en la carga de clientes. Antes, revisar qué depende del CUIT del cliente (ficha, BCRA, CUIT repetido, factura con ARCA) y avisarle qué cambia.
+2. Elegir del mockup qué pantalla implementar.
+3. Probar en producción la edición de un PR facturado (el de la moneda de costo mal cargada) y mirar que la OC quede bien.
+4. Viejos: leer y mandar `Claude outputs/informe-equipo-novedades-17-10-2026.md`; foto del remito del proveedor (hoy solo en Compras nueva, no en Compras Lazza); concepto "servicios" en proveedores para retenciones; Etapa 2 del asistente en pausa.
 
 ## Decisiones de Augusto
-- Cada tema en su chat. En este no se relayan preguntas ni avisos de los otros.
-- Publicar de a un chat por vez. Ahora se publica todo junto, en una sola tanda y desde un solo chat.
-- Cualquiera puede abrir y editar cualquier presupuesto ("nadie se va a equivocar").
-- Oportunidades, Stock, Personalización e Importaciones se desarrollan más adelante: ocultos.
-- Factura de cliente ya emitida: no se toca. Lo de más se ajusta en la OC.
-
-## Errores y avisos conocidos
-- La lectura "sin IA" del PDF en Cargar factura trae los renglones de la OC y no cuadra: hay que usar "Leer con IA". Lo está rediseñando el chat de Compras.
-- El servidor local da 500 cuando varios chats lo usan a la vez (cache `.next` rota en Windows). Se prueba en producción sin guardar.
-- La clave de Resend de `.env.local` no es válida (la buena está solo en Vercel). Para consultar envíos se usa `/api/email/status` desde el CRM en producción.
-- Cuidado con publicar: si el `git push` es rechazado, no hay que publicar en Vercel (ya pasó: se pisaron versiones).
+- Cada tema en su chat; acá no se relayan avisos de otros chats.
+- Publicar solo cuando él lo pide, y solo lo de este chat.
+- "Mi contraseña" para cada usuario: NO (está bien como está).
+- Cualquiera puede editar cualquier presupuesto, en cualquier estado.
 
 ## Scripts útiles (solo lectura)
-`crm/app/scripts/lectura/oc-esperando.cjs`, `oc-una.cjs OC-XXXX`, `sql.cjs "select …"`.
+`crm/app/scripts/lectura/sql.cjs "select …"`, `oc-esperando.cjs`, `oc-una.cjs OC-XXXX`.
 
 ## Prompt para seguir en un chat nuevo
 ```
-Sos el chat de Resto del CRM. Leé CLAUDE.md, docs/traspaso/resto-crm.md y las primeras entradas de docs/ESTADO.md. Todo está publicado hasta V1.1.534 (Sin datos inventados, Se sacan 3 IA, Asistente Etapa 1). Etapa 2 del asistente en pausa. Pendiente: que yo lea Claude outputs/informe-equipo-novedades-17-10-2026.md y probar la foto del remito del proveedor con uno real (ojo: hoy está solo en Compras nueva, no en Compras Lazza). Saludame corto y preguntame qué seguimos. No publiques ni toques la base sin mi OK.
+Sos el chat de Resto del CRM. Leé CLAUDE.md, docs/traspaso/resto-crm.md y las primeras entradas de docs/ESTADO.md. El Resto a facturar salió en V1.1.589 y el arreglo del PDF del PR en V1.1.590 (27/10). Pendiente: que Seba pruebe el PDF, cartel en el PR y bandeja de Ventas, clientes con DNI (cuando yo diga), elegir pantalla del mockup y los viejos de la lista. Saludame corto y preguntame qué seguimos. No publiques ni toques la base sin mi OK.
 ```

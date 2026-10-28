@@ -20,6 +20,7 @@ import { supabase } from "@/lib/supabase/client";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { Autocompletar } from "@/components/ui/autocompletar";
 import { Loader2, Plus, X, Trash2, Printer, Check, Scissors, Image as ImageIcon, FileText, Eye, Sparkles } from "lucide-react";
+import { linkArchivo } from "@/lib/archivo-link";
 
 const db = supabase as any;
 
@@ -612,7 +613,7 @@ function LogosTab({ sociedadId, clientes, talleres, logos, onCambio, toast }: { 
         const path = `${sociedadId}/personalizacion/logos/${data.id}.${ext}`;
         const { error: up } = await supabase.storage.from("comprobantes").upload(path, archivo, { upsert: true });
         if (!up) {
-          const url = supabase.storage.from("comprobantes").getPublicUrl(path).data.publicUrl;
+          const url = linkArchivo("comprobantes", path);
           await db.from("personalizacion_logos").update({ archivo_url: url, archivo_nombre: archivo.name }).eq("id", data.id);
         } else toast.error(`El logo se guardó, pero no el archivo: ${up.message}`);
       }

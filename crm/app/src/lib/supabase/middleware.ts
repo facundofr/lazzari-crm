@@ -33,7 +33,8 @@ export async function updateSession(request: NextRequest) {
   const isLoginPage = request.nextUrl.pathname === "/login";
   const pathname = request.nextUrl.pathname;
   const isPublicAuthFlow = pathname === "/auth/confirm";
-  const isPublicApi = pathname.startsWith("/api/cron/") || pathname === "/api/cotizacion-bna";
+  // /api/cotizacion-bna ya no es pública (auditoría 28/10/2026): todas las pantallas que la llaman tienen sesión.
+  const isPublicApi = pathname.startsWith("/api/cron/");
   const redirectWithSessionCookies = (url: URL) => {
     const redirect = NextResponse.redirect(url);
     for (const cookie of supabaseResponse.cookies.getAll()) redirect.cookies.set(cookie);

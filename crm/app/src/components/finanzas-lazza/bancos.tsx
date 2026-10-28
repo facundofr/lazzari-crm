@@ -20,6 +20,7 @@ import { CargarEstadoCheques } from "./cheques-reportes";
 import { MovimientosPorTipo } from "./movimientos-por-tipo";
 import { CargaDiaria } from "./carga-diaria";
 import FinanzasParaConfirmar from "@/components/finanzas-para-confirmar";
+import { linkArchivo } from "@/lib/archivo-link";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -471,7 +472,7 @@ function SubirResumen({ sociedadId, tarjeta, onClose, onGuardado }: { sociedadId
         const ext = archivo.name.split(".").pop() || "pdf";
         const ruta = `${sociedadId}/tarjetas/${tarjeta.id}/${f.cierre}.${ext}`;
         const up = await supabase.storage.from("comprobantes").upload(ruta, archivo, { upsert: true });
-        if (!up.error) archivo_url = supabase.storage.from("comprobantes").getPublicUrl(ruta).data.publicUrl;
+        if (!up.error) archivo_url = linkArchivo("comprobantes", ruta);
       }
       const { error } = await db.from("tarjeta_resumenes").upsert({
         sociedad_id: sociedadId, cuenta_id: tarjeta.id, cierre: f.cierre, vencimiento: f.vencimiento || null,

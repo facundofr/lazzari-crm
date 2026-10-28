@@ -25,6 +25,7 @@ import { montoSicore, sugerirGastoFijo } from "@/lib/gasto-fijo-factura";
 import { gastoConVep, type DatosVep } from "@/lib/vep";
 import { sumarMeses } from "@/lib/reportes-comprobantes";
 import { rangoMes } from "./datos";
+import { linkArchivo } from "@/lib/archivo-link";
 
 const db = supabase as any;
 const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
@@ -165,7 +166,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
         const ruta = `${sociedadId}/gastos/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${(b.archivo.name.split(".").pop() || "pdf").toLowerCase()}`;
         const { error: eS } = await supabase.storage.from("comprobantes").upload(ruta, b.archivo, { upsert: false });
         if (eS) toast.warning(`El gasto se guarda sin el VEP adjunto: ${eS.message}`);
-        else datos.comprobante_url = supabase.storage.from("comprobantes").getPublicUrl(ruta).data.publicUrl;
+        else datos.comprobante_url = linkArchivo("comprobantes", ruta);
       }
       if (b.id) {
         const antes = (gastos || []).find((g) => g.id === b.id);

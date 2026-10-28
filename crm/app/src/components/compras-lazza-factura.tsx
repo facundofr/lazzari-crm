@@ -30,6 +30,7 @@ import { cant } from "@/lib/cargar-factura";
 import { ivaYPercepciones, netoFactura, tipoNotaCredito, vencimientoPorDias } from "@/lib/compras-lazza";
 import { Autocompletar } from "@/components/ui/autocompletar";
 import { AlertTriangle, Check, CreditCard, FileUp, Loader2, Sparkles, UserPlus, X } from "lucide-react";
+import { linkArchivo } from "@/lib/archivo-link";
 
 const db = supabase as any;
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -263,7 +264,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
     const path = `${sociedadId}/${facturaId}/factura.${archivo.name.split(".").pop() || "pdf"}`;
     const { error: upErr } = await supabase.storage.from("facturas-compra").upload(path, archivo, { upsert: true });
     if (upErr) return;
-    const { data: u } = supabase.storage.from("facturas-compra").getPublicUrl(path);
+    const u = { publicUrl: linkArchivo("facturas-compra", path) };
     if (u?.publicUrl) await db.from("facturas_compra").update({ archivo_url: u.publicUrl, archivo_nombre: archivo.name }).eq("id", facturaId);
   }
 
