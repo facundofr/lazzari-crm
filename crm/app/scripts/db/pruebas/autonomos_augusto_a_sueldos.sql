@@ -1,0 +1,1 @@
+select g.categoria, g.grupo, g.descripcion, g.monto, (select m.descripcion from movimientos m where m.id='4df2d89c-2232-4374-b67e-e1e3dd4796c9') pago from gastos_manuales g where g.id='8ddf6090-ebb8-4662-9bb4-4b095bb38e6b'

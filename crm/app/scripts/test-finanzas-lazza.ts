@@ -361,4 +361,40 @@ assert.deepEqual(porProveedor.map((p) => [p.proveedorId, p.facturas, p.saldo, p.
   ["q", 1, { ARS: 10, USD: 0 }, { ARS: 0, USD: 0 }, 11],
 ]);
 
+// ── Costo de lo realmente facturado (28/10/2026): factura parcial de un PR (caso Synertech PR-2026-1218) ──
+{
+  const prItems = [
+    { presupuesto_id: "ps", descripcion: "RESPIRADOR N95", cantidad: 1000, precio_costo: 1.5, costo_moneda: "USD", iva_porcentaje: 21 },
+    { presupuesto_id: "ps", descripcion: "ROLLO DE FIBRA VERDE", cantidad: 4, precio_costo: 50000, costo_moneda: "ARS", iva_porcentaje: 21 },
+    { presupuesto_id: "ps", descripcion: "SUSPENSION 3M P/ CASCO", cantidad: 12, precio_costo: 9, costo_moneda: "USD", iva_porcentaje: 21 },
+  ];
+  const parcial = fv({ id: "par", fecha: "2026-10-14", moneda: "USD", subtotal: 500, iva: 105, total: 605, tipo_cambio: 1500, presupuesto_id: "ps" });
+  // Se facturó: 200 de los 1000 respiradores y el rollo; la suspensión no. Las descripciones llegan con otras mayúsculas y acentos.
+  const itemsFactura = [
+    { factura_id: "par", descripcion: "Respirador n95", cantidad: 200 },
+    { factura_id: "par", descripcion: "Rollo de fibra verde ", cantidad: 4 },
+  ];
+  const conRenglones = reporteBasico({ periodo: "2026-10", facturas: [parcial], origenes: [], idsAnulados: [], items: prItems, itemsFactura, prNumero: {}, gastos: [], tcDia });
+  // 200 × US$ 1,5 × 1500 = 450.000 + 4 × 50.000 = 200.000 → 650.000 (no los 2.250.000 + 200.000 + 162.000 del PR entero)
+  assert.equal(conRenglones.costo.neto, 650000);
+  assert.equal(conRenglones.avisos.length, 0);
+  // Sin renglones de la factura: costo del PR entero, como antes (sin aviso: no hay con qué cruzar)
+  const sinRenglones = reporteBasico({ periodo: "2026-10", facturas: [parcial], origenes: [], idsAnulados: [], items: prItems, prNumero: {}, gastos: [], tcDia });
+  assert.equal(sinRenglones.costo.neto, 1000 * 1.5 * 1500 + 200000 + 12 * 9 * 1500);
+  // Un renglón de la factura que no está en el PR: se toma el PR entero y avisa
+  const noCruza = reporteBasico({ periodo: "2026-10", facturas: [parcial], origenes: [], idsAnulados: [], items: prItems, itemsFactura: [{ factura_id: "par", descripcion: "Flete", cantidad: 1 }], prNumero: {}, gastos: [], tcDia });
+  assert.equal(noCruza.costo.neto, sinRenglones.costo.neto);
+  assert.match(noCruza.avisos[0]?.motivo || "", /no coinciden/);
+  // Dos facturas del mismo PR (resto): cada una lleva el costo de lo suyo, no el PR entero dos veces
+  const resto = fv({ id: "res", fecha: "2026-10-20", moneda: "USD", subtotal: 800, iva: 168, total: 968, tipo_cambio: 1500, presupuesto_id: "ps" });
+  const dos = reporteBasico({ periodo: "2026-10", facturas: [parcial, resto], origenes: [], idsAnulados: [], items: prItems,
+    itemsFactura: [...itemsFactura, { factura_id: "res", descripcion: "RESPIRADOR N95", cantidad: 800 }, { factura_id: "res", descripcion: "Suspension 3M p/ casco", cantidad: 12 }],
+    prNumero: {}, gastos: [], tcDia });
+  assert.equal(dos.costo.neto, 650000 + 800 * 1.5 * 1500 + 12 * 9 * 1500);
+  // NC de una factura parcial: resta la parte proporcional del costo de lo que se facturó (no del PR entero)
+  const nc = fv({ id: "ncp", fecha: "2026-10-22", tipo: "NCA", moneda: "USD", subtotal: 250, iva: 52.5, total: 302.5, tipo_cambio: 1500, factura_origen_id: "par" });
+  const conNc = reporteBasico({ periodo: "2026-10", facturas: [nc], origenes: [parcial], idsAnulados: [], items: prItems, itemsFactura, prNumero: {}, gastos: [], tcDia });
+  assert.equal(conNc.costo.neto, -325000); // mitad de 650.000
+}
+
 console.log("test-finanzas-lazza OK");

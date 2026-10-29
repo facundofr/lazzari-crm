@@ -75,10 +75,19 @@ export interface FacturaVentaFL {
 
 export interface ItemCostoFL {
   presupuesto_id: string;
+  /** Para cruzar con los renglones de la factura (costo de lo realmente facturado). */
+  descripcion?: string | null;
   cantidad: number | string | null;
   precio_costo: number | string | null;
   costo_moneda?: string | null;
   iva_porcentaje?: number | string | null;
+}
+
+/** Renglón de una factura de venta (tabla factura_items): sirve para tomar el costo solo de lo que se facturó. */
+export interface ItemFacturaFL {
+  factura_id: string;
+  descripcion: string | null;
+  cantidad: number | string | null;
 }
 
 export interface GastoFL {
@@ -169,6 +178,32 @@ export function costoDelPr(items: ItemCostoFL[], factura: Pick<FacturaVentaFL, "
   return { costo: redondearNI(costo), sinCosto, sinTc };
 }
 
+const normalizarDescripcion = (s: string | null | undefined) =>
+  String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/s+/g, " ").trim();
+
+/**
+ * Costo de UNA factura de venta (28/10/2026, Augusto): el de los renglones que se facturaron, no el del PR entero.
+ * Una factura parcial (el PR se factura en partes, o se sacan renglones) ya no se lleva el costo de todo el PR.
+ * Se cruza cada renglón de la factura con su renglón del PR por la descripción (sin mayúsculas ni acentos) y se usa la cantidad facturada.
+ * Si la factura no tiene renglones, o alguno no se puede cruzar, se usa el costo del PR entero (como antes) y `aproximado` queda en true.
+ */
+export function costoDeFactura(
+  itemsPr: ItemCostoFL[], itemsFactura: ItemFacturaFL[] | undefined, factura: Pick<FacturaVentaFL, "moneda" | "tipo_cambio" | "fecha">, tcDia: TcDelDia,
+): { costo: NetoIva; sinCosto: number; sinTc: boolean; aproximado: boolean } {
+  const entero = () => ({ ...costoDelPr(itemsPr, factura, tcDia), aproximado: true });
+  if (!itemsFactura || !itemsFactura.length || !itemsPr.length) return entero();
+  const libres = itemsPr.slice();
+  const usados: ItemCostoFL[] = [];
+  for (const fi of itemsFactura) {
+    const clave = normalizarDescripcion(fi.descripcion);
+    const i = clave ? libres.findIndex((p) => normalizarDescripcion(p.descripcion) === clave) : -1;
+    if (i < 0) return entero();
+    const [p] = libres.splice(i, 1);
+    usados.push({ ...p, cantidad: num(fi.cantidad) });
+  }
+  return { ...costoDelPr(usados, factura, tcDia), aproximado: false };
+}
+
 export function nivelObjetivo(neto: number): ReporteBasico["objetivo"] {
   const escalones = [
     { nivel: "minimo" as const, nombre: "Mínimo", monto: OBJETIVOS_MES.minimo },
@@ -194,6 +229,8 @@ export function reporteBasico(input: {
   origenes: FacturaVentaFL[];
   idsAnulados: Iterable<string>;
   items: ItemCostoFL[];
+  /** Renglones de las facturas del mes y de las facturas de origen de las NC (opcional: sin ellos, costo del PR entero). */
+  itemsFactura?: ItemFacturaFL[];
   prNumero: Record<string, string>;
   gastos: GastoFL[];
   tcDia: TcDelDia;
@@ -203,6 +240,11 @@ export function reporteBasico(input: {
   for (const it of input.items) {
     if (!itemsPorPr.has(it.presupuesto_id)) itemsPorPr.set(it.presupuesto_id, []);
     itemsPorPr.get(it.presupuesto_id)!.push(it);
+  }
+  const itemsFacturaPorId = new Map<string, ItemFacturaFL[]>();
+  for (const it of input.itemsFactura || []) {
+    if (!itemsFacturaPorId.has(it.factura_id)) itemsFacturaPorId.set(it.factura_id, []);
+    itemsFacturaPorId.get(it.factura_id)!.push(it);
   }
   const origenPorId = new Map<string, FacturaVentaFL>();
   for (const f of [...input.origenes, ...input.facturas]) origenPorId.set(f.id, f);
@@ -243,7 +285,7 @@ export function reporteBasico(input: {
       aviso = nc ? "La factura de origen no tiene PR: no resta costo" : "Factura sin PR: no tiene costo";
     } else {
       const items = itemsPorPr.get(prId) || [];
-      const c = costoDelPr(items, facturaCosto!, tcDia);
+      const c = costoDeFactura(items, itemsFacturaPorId.get(facturaCosto!.id), facturaCosto!, tcDia);
       let prop = 1;
       if (nc) {
         const netoOrigen = netoIvaFactura(facturaCosto!).neto;
@@ -253,6 +295,7 @@ export function reporteBasico(input: {
       if (!items.length) aviso = "El PR no tiene artículos con costo";
       else if (c.sinCosto) aviso = `${c.sinCosto} artículo${c.sinCosto === 1 ? "" : "s"} del PR sin costo`;
       else if (c.sinTc) aviso = "Costo en US$ sin cotización del día";
+      else if (c.aproximado && (itemsFacturaPorId.get(facturaCosto!.id) || []).length > 0) aviso = "Los renglones de la factura no coinciden con los del PR: se tomó el costo del PR entero";
     }
     sumarNI(costoTot, costo);
     const prNumero = prId ? input.prNumero[prId] ?? null : null;

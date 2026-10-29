@@ -1,7 +1,7 @@
 // Finanzas Lazza: lecturas de la base (solo SELECT, nada se guarda). Las cuentas están en lib/finanzas-lazza.
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
-import { armarTcDelDia, armarVencimientos, comprobanteVenta, saldoFacturaCompra, type FacturaCompraFL, type FacturaVentaFL, type FilaVencimiento, type GastoFL, type GastoVepFL, type ItemCostoFL, type PagoDirectoFC, type RetencionIvaFL, type TcDelDia } from "@/lib/finanzas-lazza";
+import { armarTcDelDia, armarVencimientos, comprobanteVenta, saldoFacturaCompra, type FacturaCompraFL, type FacturaVentaFL, type FilaVencimiento, type GastoFL, type GastoVepFL, type ItemCostoFL, type ItemFacturaFL, type PagoDirectoFC, type RetencionIvaFL, type TcDelDia } from "@/lib/finanzas-lazza";
 import type { LineaMov } from "@/lib/movimientos-banco";
 import { calcularSaldosClientes, cobradoPorFactura, saldoFacturaVenta, traerDatosSaldoClientes, type SaldoCliente } from "@/lib/saldo-clientes";
 import { calcularSaldosProveedores, traerCreditosProveedores, type SaldoProveedor } from "@/lib/saldo-proveedores";
@@ -70,16 +70,23 @@ export async function traerDatosReporte(sociedadId: string, periodo: string) {
   const prNumero: Record<string, string> = {};
   for (const ids of trozos(prIds)) {
     const [it, pr] = await Promise.all([
-      db.from("presupuesto_items").select("presupuesto_id, cantidad, precio_costo, costo_moneda, iva_porcentaje").in("presupuesto_id", ids),
+      db.from("presupuesto_items").select("presupuesto_id, descripcion, cantidad, precio_costo, costo_moneda, iva_porcentaje").in("presupuesto_id", ids),
       db.from("presupuestos").select("id, numero").in("id", ids),
     ]);
     if (it.error) throw it.error;
     items.push(...(it.data || []));
     for (const p of pr.data || []) prNumero[p.id] = String(p.numero ?? "");
   }
+  // Renglones de las facturas (y de las de origen de las NC): el costo es el de lo realmente facturado. Si no se pueden leer, costo del PR entero.
+  const itemsFactura: ItemFacturaFL[] = [];
+  for (const ids of trozos([...new Set([...facturas, ...origenes].map((f) => f.id))])) {
+    const { data, error } = await db.from("factura_items").select("factura_id, descripcion, cantidad").in("factura_id", ids);
+    if (error) { console.error("Reportes · renglones de facturas:", error); itemsFactura.length = 0; break; }
+    itemsFactura.push(...(data || []));
+  }
   const idsAnulados = [...facturas, ...origenes].filter((f) => f.estado === "anulada").map((f) => f.id);
   const gastos: GastoFL[] = gastosRaw.map((g) => ({ ...g, fecha: String(g.fecha).slice(0, 10) }));
-  return { facturas, origenes, idsAnulados, items, prNumero, gastos, tcDia };
+  return { facturas, origenes, idsAnulados, items, itemsFactura, prNumero, gastos, tcDia };
 }
 
 export async function traerComprasDelMes(sociedadId: string, periodo: string): Promise<FacturaCompraFL[]> {
