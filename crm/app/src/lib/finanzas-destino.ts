@@ -5,7 +5,7 @@
 /** Secciones de Finanzas Lazza que se pueden abrir por link (ids de `TARJETAS` en components/finanzas-lazza/inicio.tsx). */
 export const SECCIONES_LAZZA = [
   "cobrar", "pagar", "facturas", "cuentas", "ordenes_pago", "recibos", "retenciones", "iva",
-  "bancos", "cheques", "gastos", "movimientos", "objetivos", "reportes", "vencimientos",
+  "bancos", "cheques", "gastos", "movimientos", "objetivos", "reportes", "vencimientos", "contabilidad",
   // 27/10/2026 (auditoría UX, arreglo 8): atajos que no son tarjeta. "facturar" abre Facturas en su pestaña Facturar;
   // "movimientos_banco" abre Bancos en la pestaña Movimientos (donde se suben los archivos del banco).
   "facturar", "movimientos_banco",

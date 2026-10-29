@@ -23,6 +23,7 @@ import { periodoDeFecha, sumarMeses } from "@/lib/reportes-comprobantes";
 import { FinanzasLazzaInicio, TARJETAS, type SeccionFL } from "@/components/finanzas-lazza/inicio";
 import { FinanzasLazzaObjetivos, FinanzasLazzaReportes } from "@/components/finanzas-lazza/reportes";
 import { FinanzasLazzaIva } from "@/components/finanzas-lazza/iva";
+import { FinanzasLazzaContabilidad } from "@/components/finanzas-lazza/contabilidad";
 import { FinanzasLazzaVencimientos } from "@/components/finanzas-lazza/vencimientos";
 import { FinanzasLazzaCuentasCorrientes } from "@/components/finanzas-lazza/cuentas-corrientes";
 import { FinanzasLazzaFacturas } from "@/components/finanzas-lazza/facturas";
@@ -90,7 +91,7 @@ export default function FinanzasLazzaPage() {
   const sociedadId = sociedadActiva?.id;
   // Cheques y Movimientos del banco viven en Bancos; Facturar es una pestaña de Facturas.
   const tarjeta = vista ? TARJETAS.find((t) => t.id === (vista === "cheques" || vista === "movimientos_banco" ? "bancos" : vista === "facturar" ? "facturas" : vista)) : null;
-  const conMes = vista === "reportes" || vista === "iva" || vista === "objetivos" || vista === "gastos";
+  const conMes = vista === "reportes" || vista === "iva" || vista === "objetivos" || vista === "gastos" || vista === "contabilidad";
 
   const contenido = () => {
     if (!sociedadId) return <p className="py-6 text-sm text-zinc-500">Elegí una sociedad.</p>;
@@ -123,6 +124,7 @@ export default function FinanzasLazzaPage() {
       case "objetivos": return <FinanzasLazzaObjetivos sociedadId={sociedadId} periodo={periodo} />;
       case "reportes": return <FinanzasLazzaReportes sociedadId={sociedadId} periodo={periodo} />;
       case "gastos": return <FinanzasLazzaGastos sociedadId={sociedadId} periodo={periodo} />;
+      case "contabilidad": return <FinanzasLazzaContabilidad sociedadId={sociedadId} periodo={periodo} />;
       default: return null;
     }
   };

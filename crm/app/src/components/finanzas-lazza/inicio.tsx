@@ -5,7 +5,7 @@
 // Cada dato se calcula aparte (si uno falla, esa tarjeta queda con "—" y el resto anda). Solo lectura.
 import { useEffect, useState } from "react";
 import {
-  BarChart3, FilePlus, HandCoins, Wallet, Building2, FileSpreadsheet, Files, List, Percent, Receipt, ReceiptText, ShoppingBag, Users,
+  BarChart3, BookOpenCheck, FilePlus, HandCoins, Wallet, Building2, FileSpreadsheet, Files, List, Percent, Receipt, ReceiptText, ShoppingBag, Users,
   type LucideIcon,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
@@ -25,7 +25,7 @@ export type SeccionFL =
   | "facturas" | "cuentas" | "vencimientos"
   | "ordenes_pago" | "recibos" | "retenciones" | "iva"
   | "bancos" | "cheques" | "gastos" | "movimientos"
-  | "objetivos" | "reportes"
+  | "objetivos" | "reportes" | "contabilidad"
   // Atajos que no son tarjeta (auditoría UX 27/10, arreglo 8): Objetivos está adentro de Reportes y sigue abriendo por link;
   // "movimientos_banco" = Bancos en la pestaña Movimientos.
   | "facturar" | "movimientos_banco";
@@ -47,6 +47,7 @@ export const TARJETAS: TarjetaDef[] = [
   { id: "gastos", nombre: "Gastos", que: "Fijos y eventuales", icono: ShoppingBag, grupo: "tesoreria" },
   { id: "movimientos", nombre: "Movimientos", que: "Historial de todo", icono: List, grupo: "tesoreria" },
   { id: "reportes", nombre: "Reportes", que: "Venta − costo − gastos", icono: BarChart3, grupo: "informes" },
+  { id: "contabilidad", nombre: "Contabilidad", que: "Estado de resultados y Cashflow (para Nati)", icono: BookOpenCheck, grupo: "informes" },
 ];
 
 const GRUPOS: { id: Grupo; nombre: string; icono: string; borde: string }[] = [
@@ -73,7 +74,7 @@ const mas = (ars: number, usd: number) => `${millones(ars)}${Math.abs(usd) >= 1 
 
 /** Tarjetas que llena cada loader (mismo orden que `loaders`): si uno falla, esas quedan con "—". */
 const TARJETAS_DE_LOADER: SeccionFL[][] = [
-  ["reportes", "gastos"], ["vencimientos", "cuentas", "cobrar", "pagar"], ["iva", "facturas"],
+  ["reportes", "gastos", "contabilidad"], ["vencimientos", "cuentas", "cobrar", "pagar"], ["iva", "facturas"],
   ["ordenes_pago", "retenciones"], ["recibos", "movimientos"], ["bancos"], ["facturar"],
 ];
 
@@ -87,6 +88,7 @@ function loaders(sociedadId: string, periodo: string, hoy: string): (() => Promi
       return {
         reportes: { valor: formatCurrency(Math.round(r.resultado)).replace(/,00$/, ""), sub: "resultado del mes (neto)", tono: r.resultado >= 0 ? "verde" : "rojo" },
         gastos: { valor: millones(r.gastos.total), sub: "del mes" },
+        contabilidad: { valor: "Resultados y caja", sub: "mensual y semanal, con Excel" },
       };
     },
     // Vencimientos y cuentas corrientes.

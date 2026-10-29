@@ -1,0 +1,376 @@
+/**
+ * Contabilidad de gestión → Cashflow SEMANAL (Nati y Augusto, 28-29/10/2026). Etapa 1, tanda 2.
+ * Por fecha de cobro o de pago (lo devengado es el Estado de resultados, lib/contabilidad). Cada sociedad por separado.
+ *
+ * - Semanas de lunes a domingo. Las pasadas son lo REAL: las líneas del extracto de los bancos en $ (la plata que entró y salió).
+ *   El saldo inicial sale del saldo del extracto (Augusto 29/10), y cada semana suma lo que entró y resta lo que salió.
+ * - Desde la semana de hoy, 12 semanas PROYECTADAS con doble columna (Nati 29/10): "Proy." (la foto del inicio del mes) y "Real".
+ *   La foto se guarda sola la primera vez que se abre el Cashflow en el mes; si el mes todavía no tiene foto, "Proy." es lo de hoy.
+ * - Proyectado: facturas de venta por vencimiento (lo vencido sin cobrar NO se cuenta, se avisa: no se sabe cuándo entra, como en
+ *   Caja), cheques en cartera por fecha de pago, facturas de compra por vencimiento y cheques propios por fecha de pago (lo atrasado
+ *   se cuenta hoy), gastos fijos del mes sin pagar, y (Lazzari) los premios del mes, que se pagan con el sueldo del mes siguiente.
+ * - Cada línea del banco va a una fila: por el gasto al que está atada (mismo criterio que el Estado de resultados) o por su
+ *   clasificación en Bancos. Los pases entre cuentas propias y al FCI van aparte (no es plata que se gasta).
+ * Funciones puras. Prueba: npx tsx scripts/test-cashflow.ts
+ */
+import { clasificarGasto, type GastoCont } from "./contabilidad";
+import { clasificarMovimiento } from "./movimientos-banco";
+import { gastosFijosEnVentana, lunesDe, sumarDias, type GastoFijoCaja } from "./caja-proyectada";
+import { chequePendiente } from "./cheques-plazo";
+
+export type FilaCF = "cobros" | "otros_ingresos" | "proveedores" | "sueldos" | "gastos" | "impuestos" | "bancos" | "otros_pagos" | "retiros" | "pases";
+
+export const FILAS_CF: { id: FilaCF; nombre: string; que: string; lado: "entra" | "sale" | "aparte" }[] = [
+  { id: "cobros", nombre: "Cobros de clientes", que: "Transferencias y cheques depositados (menos los rechazados)", lado: "entra" },
+  { id: "otros_ingresos", nombre: "Otros ingresos", que: "Reintegros, intereses ganados, devoluciones", lado: "entra" },
+  { id: "proveedores", nombre: "Pagos a proveedores", que: "Mercadería y transportes: transferencias y cheques propios debitados", lado: "sale" },
+  { id: "sueldos", nombre: "Sueldos, premios y comisiones", que: "Colaboradores L-S-J y M, premios y comisión de José", lado: "sale" },
+  { id: "gastos", nombre: "Gastos de estructura", que: "Local y servicios, profesionales, operativos, débitos automáticos", lado: "sale" },
+  { id: "impuestos", nombre: "Impuestos y retenciones", que: "VEP de ARCA, IIBB, SIRCREB, Ley 25.413 e IVA del banco", lado: "sale" },
+  { id: "bancos", nombre: "Bancos, préstamos y tarjetas", que: "Comisiones, intereses y pagos del resumen de las tarjetas", lado: "sale" },
+  { id: "otros_pagos", nombre: "Otros pagos", que: "Transferencias y extracciones que no están clasificadas en Bancos", lado: "sale" },
+  { id: "retiros", nombre: "Retiros de accionistas", que: "Gastos personales de Augusto que paga la empresa (y su plan de ARBA)", lado: "aparte" },
+  { id: "pases", nombre: "Pases a FCI y entre cuentas", que: "La plata cambia de lugar: no es un gasto", lado: "aparte" },
+];
+export const SEMANAS_PROYECTADAS = 12;
+/** Los sueldos sin día de vencimiento se pagan el 10 (como en Caja); los premios van con el sueldo del mes siguiente (Augusto 29/10). */
+export const DIA_SUELDOS = 10;
+
+export type OrigenCF = "banco" | "factura_venta" | "factura_compra" | "cheque_recibido" | "cheque_emitido" | "gasto_fijo" | "premio";
+export interface ItemCF {
+  fecha: string;
+  detalle: string;
+  /** Con signo: + entra, − sale. */
+  monto: number;
+  fila: FilaCF;
+  origen: OrigenCF;
+  /** Salida con fecha anterior a hoy: se cuenta hoy. */
+  atrasado?: boolean;
+}
+export type ValoresCF = Record<FilaCF, number>;
+
+/** Línea del extracto de una cuenta en $ (extracto_movimientos), con el gasto al que está atada si lo hay. */
+export interface LineaBancoCF {
+  id: string; cuenta_id: string; fecha: string; descripcion: string | null; monto: number | string | null;
+  tipo: string | null; clasificacion: string | null; subtipo: string | null;
+  saldo: number | string | null;
+  gasto?: Pick<GastoCont, "grupo" | "categoria" | "descripcion"> | null;
+  /** Marcada "ignorar" en Bancos (ya estaba cargada en Gastos sin atar): igual es plata que salió; la nota dice qué era. */
+  ignorada?: boolean;
+  nota?: string | null;
+}
+
+const num = (v: unknown) => Number(v || 0) || 0;
+const r2 = (v: number) => Math.round((v + Number.EPSILON) * 100) / 100;
+export const ceroCF = (): ValoresCF => Object.fromEntries(FILAS_CF.map((f) => [f.id, 0])) as ValoresCF;
+const conSigno = (l: Pick<LineaBancoCF, "tipo" | "monto">) => (l.tipo === "credito" ? 1 : -1) * Math.abs(num(l.monto));
+
+/** A qué fila va un gasto (cargado o fijo): el mismo criterio que el Estado de resultados. */
+export function filaDeGasto(g: Pick<GastoCont, "grupo" | "categoria" | "descripcion">): FilaCF {
+  switch (clasificarGasto(g)) {
+    case "retiros": return "retiros";
+    case "colaboradores_lsj": case "colaborador_m": case "comisiones": return "sueldos";
+    case "impuestos_pago": case "credito_fiscal_iva": return "impuestos";
+    case "bancarios": case "intereses": return "bancos";
+    case "transportes": case "compras_sin_factura": return "proveedores";
+    default: return "gastos";
+  }
+}
+
+/** A qué fila va una línea del banco: por su gasto si está atada a uno; si no, por su clasificación en Bancos (o su código y texto). */
+export function filaDeLineaBanco(l: LineaBancoCF): FilaCF {
+  if (l.gasto) return filaDeGasto(l.gasto);
+  if (l.ignorada) {
+    const n = String(l.nota || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+    if (/premio|sueldo|comision/.test(n)) return "sueldos";
+    if (/mercaderia|proveedor/.test(n)) return "proveedores";
+  }
+  const entra = l.tipo === "credito";
+  switch (l.clasificacion) {
+    case "cobro": case "cheque_acreditado": case "cheque_devuelto": return "cobros";
+    case "pago": case "cheque_emitido": return "proveedores";
+    case "impuesto": return "impuestos";
+    case "intereses": return entra ? "otros_ingresos" : "bancos";
+    case "gasto_bancario": case "tarjeta": return "bancos";
+    case "fci": case "entre_cuentas": return "pases";
+    case "personal": return "retiros";
+    case "otro": return entra ? "otros_ingresos" : "otros_pagos";
+  }
+  // Sin clasificar todavía (las del último extracto): por el código del banco o el texto, como "Ver por tipo".
+  const m = clasificarMovimiento({ id: l.id, fecha: l.fecha, descripcion: l.descripcion || "", monto: Math.abs(num(l.monto)), tipo: entra ? "credito" : "debito", clasificacion: null, subtipo: null });
+  switch (m.tipo) {
+    case "impuestos_comisiones": return m.categoria === "Comisiones" ? "bancos" : "impuestos";
+    case "cheques": case "transferencias": return entra ? "cobros" : m.tipo === "cheques" ? "proveedores" : "otros_pagos";
+    case "debitos_automaticos": return "gastos";
+    case "tarjeta": return "bancos";
+    case "propios": return "pases";
+    default: return entra ? "otros_ingresos" : "otros_pagos";
+  }
+}
+
+/**
+ * Saldo de una cuenta al cierre de un día, con las líneas de ese día. El orden dentro del día no se guarda: el cierre es el saldo de
+ * la línea que, restándole todo lo del día, da el saldo antes de alguna de las líneas (el arranque del día). null si no cuadra.
+ */
+export function cierreDelDia(lineas: Pick<LineaBancoCF, "tipo" | "monto" | "saldo">[]): number | null {
+  const conSaldo = lineas.filter((l) => l.saldo !== null && l.saldo !== undefined && l.saldo !== "");
+  if (!conSaldo.length) return null;
+  if (lineas.length === 1) return num(lineas[0].saldo);
+  const total = lineas.reduce((s, l) => s + conSigno(l), 0);
+  const arranques = conSaldo.map((l) => num(l.saldo) - conSigno(l));
+  for (const l of conSaldo) {
+    const c = num(l.saldo);
+    if (arranques.some((a) => Math.abs(c - total - a) < 0.02)) return r2(c);
+  }
+  return null;
+}
+
+/** Saldo de una cuenta al arrancar `fecha` (antes de sus movimientos): el cierre del último día anterior o, si no hay, el arranque del primero. */
+export function saldoAlArrancar(lineas: Pick<LineaBancoCF, "fecha" | "tipo" | "monto" | "saldo">[], fecha: string): number | null {
+  const porDia = new Map<string, typeof lineas>();
+  for (const l of lineas) { const d = l.fecha.slice(0, 10); porDia.set(d, [...(porDia.get(d) || []), l]); }
+  const dias = [...porDia.keys()].sort();
+  const antes = dias.filter((d) => d < fecha);
+  if (antes.length) return cierreDelDia(porDia.get(antes[antes.length - 1])!);
+  if (!dias.length) return null;
+  const primero = porDia.get(dias[0])!;
+  const cierre = cierreDelDia(primero);
+  return cierre === null ? null : r2(cierre - primero.reduce((s, l) => s + conSigno(l), 0));
+}
+
+// ── Proyección ──────────────────────────────────────────────────────
+
+export interface VencimientoCF { lado: "venta" | "compra"; vence: string; saldo: number; moneda: "ARS" | "USD"; comprobante: string; nombre: string }
+export interface ChequeCF {
+  numero: string; direccion: string | null; estado: string; estadoBanco?: string | null; fecha_pago: string | null;
+  monto: number | string | null; moneda?: string | null; cubreTercero?: string | null; quien?: string | null;
+}
+export interface FijoCF extends GastoFijoCaja { grupo?: string | null; categoria?: string | null }
+export interface PremioCF { persona: string; monto: number; mes: string }
+
+const sinCeros = (n: string) => String(n || "").trim().replace(/^0+/, "");
+const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+const sumarMes = (m: string) => { const [y, mm] = m.split("-").map(Number); return mm === 12 ? `${y + 1}-01` : `${y}-${String(mm + 1).padStart(2, "0")}`; };
+
+/** Lo que se espera cobrar y pagar desde hoy hasta `hasta` (inclusive). Nunca inventa fechas: usa vencimientos, fechas de pago y días de los gastos fijos. */
+export function proyeccionCF(x: {
+  hoy: string; hasta: string;
+  vencimientos: VencimientoCF[];
+  cheques: ChequeCF[];
+  /** Números de cheques propios que el banco ya debitó (cobertura-cheques: numerosDebitados). */
+  debitados?: Set<string>;
+  fijos: FijoCF[];
+  pagosFijos: { gasto_fijo_id?: string | null; fecha: string }[];
+  facturasCompra?: { proveedor_id: string | null; fecha: string }[];
+  premios?: PremioCF[];
+  dolar: number | null;
+}): { items: ItemCF[]; vencidoSinCobrar: { total: number; cantidad: number }; chequesDeTerceros: { total: number; cantidad: number }; sinDolar: string[] } {
+  const items: ItemCF[] = [];
+  const sinDolar: string[] = [];
+  const vencido = { total: 0, cantidad: 0 };
+  const terceros = { total: 0, cantidad: 0 };
+  const enPesos = (monto: number, moneda: string | null | undefined, que: string): number | null => {
+    if (moneda !== "USD") return monto;
+    if (!x.dolar) { sinDolar.push(que); return null; }
+    return r2(monto * x.dolar);
+  };
+  /**
+   * Las salidas con fecha pasada se cuentan hoy (hay que pagarlas); las que caen después de `hasta` no entran.
+   * Un cheque propio sin debitar no está "atrasado": el banco lo puede debitar hasta 30 días después (Augusto).
+   */
+  const salida = (fecha: string, monto: number, fila: FilaCF, origen: OrigenCF, detalle: string) => {
+    if (!(monto > 0) || fecha > x.hasta) return;
+    const pasada = fecha < x.hoy;
+    items.push({ fecha: pasada ? x.hoy : fecha, monto: -r2(monto), fila, origen, detalle, atrasado: (pasada && origen !== "cheque_emitido") || undefined });
+  };
+
+  for (const v of x.vencimientos) {
+    if (!(v.saldo > 0.005)) continue;
+    const detalle = `${v.comprobante} — ${v.nombre}${v.moneda === "USD" ? ` (US$ ${v.saldo.toLocaleString("es-AR")})` : ""}`;
+    const monto = enPesos(v.saldo, v.moneda, detalle);
+    if (monto === null) continue;
+    const f = v.vence.slice(0, 10);
+    if (v.lado === "venta") {
+      if (f < x.hoy) { vencido.total += monto; vencido.cantidad++; continue; }
+      if (f <= x.hasta) items.push({ fecha: f, monto: r2(monto), fila: "cobros", origen: "factura_venta", detalle });
+    } else salida(f, monto, "proveedores", "factura_compra", detalle);
+  }
+
+  for (const ch of x.cheques) {
+    if (!chequePendiente(ch) || !ch.fecha_pago) continue;
+    const f = ch.fecha_pago.slice(0, 10);
+    const detalle = `Cheque ${sinCeros(ch.numero)}${ch.quien ? ` — ${ch.quien}` : ""}`;
+    const monto = enPesos(num(ch.monto), ch.moneda, detalle);
+    if (monto === null) continue;
+    if (ch.direccion === "emitido") {
+      if (x.debitados?.has(sinCeros(ch.numero)) || String(ch.estadoBanco || "").toUpperCase() === "PAGADO") continue;
+      // Los que cubre un tercero (préstamos que paga otro) no salen de la caja de la empresa: se avisan aparte, como en Caja.
+      if (ch.cubreTercero) { if (f <= x.hasta) { terceros.total += monto; terceros.cantidad++; } continue; }
+      salida(f, monto, "proveedores", "cheque_emitido", detalle);
+    } else if (f <= x.hasta) {
+      // Un cheque en cartera ya en fecha se puede depositar hoy.
+      items.push({ fecha: f < x.hoy ? x.hoy : f, monto: r2(monto), fila: "cobros", origen: "cheque_recibido", detalle });
+    }
+  }
+
+  const dias = Math.round((Date.parse(`${x.hasta}T12:00:00Z`) - Date.parse(`${x.hoy}T12:00:00Z`)) / 86_400_000) + 1;
+  for (const g of x.fijos) {
+    const r = gastosFijosEnVentana({ hoy: x.hoy, dias, fijos: [g], pagos: x.pagosFijos, facturasCompra: x.facturasCompra, dolar: x.dolar });
+    sinDolar.push(...r.sinDolar);
+    const fila = filaDeGasto({ grupo: g.grupo ?? null, categoria: g.categoria ?? null, descripcion: g.descripcion });
+    for (const s of r.salidas) {
+      const mes = MESES[Number(s.fecha.slice(5, 7)) - 1];
+      salida(s.fecha, s.monto, fila, "gasto_fijo", `${s.detalle} — ${mes}${s.usd ? ` (US$ ${s.usd.toLocaleString("es-AR")})` : ""}`);
+    }
+  }
+
+  for (const p of x.premios || []) {
+    const fecha = `${sumarMes(p.mes)}-${String(DIA_SUELDOS).padStart(2, "0")}`;
+    salida(fecha, p.monto, "sueldos", "premio", `Premio ${MESES[Number(p.mes.slice(5, 7)) - 1]} — ${p.persona} (estimado, con el sueldo)`);
+  }
+
+  items.sort((a, b) => a.fecha.localeCompare(b.fecha) || a.monto - b.monto);
+  return { items, vencidoSinCobrar: { total: r2(vencido.total), cantidad: vencido.cantidad }, chequesDeTerceros: { total: r2(terceros.total), cantidad: terceros.cantidad }, sinDolar: [...new Set(sinDolar)] };
+}
+
+// ── Cashflow semanal ────────────────────────────────────────────────
+
+/** Foto del proyectado al inicio de un mes (fila `cashflow_foto_AAAA-MM` de configuracion): lo de cada semana que arranca en ese mes. */
+export interface FotoCF { tomada: string; semanas: Record<string, Partial<ValoresCF>> }
+export const claveFoto = (mes: string) => `cashflow_foto_${mes}`;
+
+export interface SemanaCF {
+  desde: string; hasta: string;
+  tipo: "real" | "proyectada";
+  /** Lo que pasó en el banco (null si la semana todavía no empezó). */
+  real: ValoresCF | null;
+  /** Lo proyectado (null en las semanas pasadas). */
+  proy: ValoresCF | null;
+  /** De dónde sale "Proy.": la foto del inicio del mes o lo que se proyecta hoy. */
+  proyDe: "foto" | "hoy" | null;
+  saldoReal: { inicial: number; final: number } | null;
+  saldoProy: { inicial: number; final: number } | null;
+  detalleReal: ItemCF[];
+  detalleProy: ItemCF[];
+}
+export interface Cashflow {
+  hoy: string;
+  semanas: SemanaCF[];
+  /** Saldo de los bancos en $ al arrancar la primera semana (del extracto). */
+  saldoInicial: number;
+  /** Cuentas cuyo saldo no se pudo leer del extracto (no suman al saldo inicial). */
+  cuentasSinSaldo: string[];
+  avisos: string[];
+}
+
+export const totalEntra = (v: ValoresCF) => r2(FILAS_CF.filter((f) => f.lado === "entra").reduce((s, f) => s + v[f.id], 0));
+export const totalSale = (v: ValoresCF) => r2(FILAS_CF.filter((f) => f.lado === "sale").reduce((s, f) => s + v[f.id], 0));
+export const flujo = (v: ValoresCF) => r2(FILAS_CF.reduce((s, f) => s + v[f.id], 0));
+
+const sumar = (items: ItemCF[]): ValoresCF => {
+  const v = ceroCF();
+  for (const it of items) v[it.fila] = r2(v[it.fila] + it.monto);
+  return v;
+};
+
+/**
+ * Arma las semanas: las pasadas (desde la primera línea del banco) con lo real, y desde la de hoy 12 con Proy. y Real.
+ * La semana de hoy, proyectada "hoy", es lo real hasta ayer más lo que se espera de hoy al domingo.
+ */
+export function armarCashflow(x: {
+  hoy: string;
+  lineas: LineaBancoCF[];
+  /** Nombre de cada cuenta (para avisar si no se puede leer su saldo). */
+  cuentas: Record<string, string>;
+  proyeccion: ItemCF[];
+  fotos?: Record<string, FotoCF>;
+  semanasProyectadas?: number;
+  /** Saldo que dice el banco (Bancos → cuentas): para avisar si faltan o sobran líneas cargadas. No cambia las cuentas. */
+  saldosBanco?: { cuenta_id: string; saldo: number | null; fecha: string | null }[];
+}): Cashflow {
+  const lunesHoy = lunesDe(x.hoy);
+  const n = x.semanasProyectadas ?? SEMANAS_PROYECTADAS;
+  const fechas = x.lineas.map((l) => l.fecha.slice(0, 10)).sort();
+  const primero = lunesDe(fechas[0] || x.hoy) < lunesHoy ? lunesDe(fechas[0] || x.hoy) : lunesHoy;
+  const avisos: string[] = [];
+
+  const porCuenta = new Map<string, LineaBancoCF[]>();
+  for (const l of x.lineas) porCuenta.set(l.cuenta_id, [...(porCuenta.get(l.cuenta_id) || []), l]);
+  let saldoInicial = 0;
+  const cuentasSinSaldo: string[] = [];
+  for (const [id, ls] of porCuenta) {
+    const s = saldoAlArrancar(ls, primero);
+    if (s === null) cuentasSinSaldo.push(x.cuentas[id] || id); else saldoInicial = r2(saldoInicial + s);
+  }
+  if (cuentasSinSaldo.length) avisos.push(`No se pudo leer el saldo del extracto de ${cuentasSinSaldo.join(", ")}: el saldo inicial no lo incluye.`);
+  // Control: saldo al arrancar + todas las líneas hasta la fecha del saldo del banco = ese saldo. Si no da, faltan o sobran líneas en Bancos.
+  for (const b of x.saldosBanco || []) {
+    const ls = porCuenta.get(b.cuenta_id);
+    if (!ls || b.saldo === null || !b.fecha) continue;
+    const arranque = saldoAlArrancar(ls, primero);
+    if (arranque === null) continue;
+    const f = b.fecha.slice(0, 10);
+    const dif = r2(num(b.saldo) - arranque - ls.filter((l) => l.fecha.slice(0, 10) <= f).reduce((s, l) => s + conSigno(l), 0));
+    if (Math.abs(dif) >= 1) avisos.push(`${x.cuentas[b.cuenta_id] || "Una cuenta"}: las líneas cargadas en Bancos dan $ ${Math.abs(dif).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${dif > 0 ? "menos" : "más"} que el saldo del banco al ${f.slice(8, 10)}/${f.slice(5, 7)}: ${dif > 0 ? "falta" : "sobra"} alguna línea del extracto. El Cashflow va con las líneas cargadas.`);
+  }
+
+  const itemsBanco: ItemCF[] = x.lineas.map((l) => ({ fecha: l.fecha.slice(0, 10), detalle: String(l.descripcion || "").trim() || "(sin texto)", monto: r2(conSigno(l)), fila: filaDeLineaBanco(l), origen: "banco" }));
+  const enSemana = (items: ItemCF[], desde: string, hasta: string) => items.filter((i) => i.fecha >= desde && i.fecha <= hasta);
+
+  const semanas: SemanaCF[] = [];
+  let saldoReal = saldoInicial;
+  let saldoProy: number | null = null;
+  for (let desde = primero; desde < sumarDias(lunesHoy, n * 7); desde = sumarDias(desde, 7)) {
+    const hasta = sumarDias(desde, 6);
+    const proyectada = desde >= lunesHoy;
+    const detalleReal = desde <= x.hoy ? enSemana(itemsBanco, desde, hasta) : [];
+    const real = desde <= x.hoy ? sumar(detalleReal) : null;
+    const sem: SemanaCF = { desde, hasta, tipo: proyectada ? "proyectada" : "real", real, proy: null, proyDe: null, saldoReal: null, saldoProy: null, detalleReal, detalleProy: [] };
+    if (real) { sem.saldoReal = { inicial: saldoReal, final: r2(saldoReal + flujo(real)) }; saldoReal = sem.saldoReal.final; }
+    if (proyectada) {
+      if (saldoProy === null) saldoProy = sem.saldoReal?.inicial ?? saldoReal;
+      const foto = x.fotos?.[desde.slice(0, 7)]?.semanas[desde];
+      if (foto) {
+        sem.proy = { ...ceroCF(), ...foto };
+        sem.proyDe = "foto";
+      } else {
+        sem.detalleProy = [...enSemana(itemsBanco, desde, sumarDias(x.hoy, -1)), ...enSemana(x.proyeccion, desde < x.hoy ? x.hoy : desde, hasta)];
+        sem.proy = sumar(sem.detalleProy);
+        sem.proyDe = "hoy";
+      }
+      sem.saldoProy = { inicial: saldoProy, final: r2(saldoProy + flujo(sem.proy)) };
+      saldoProy = sem.saldoProy.final;
+    }
+    semanas.push(sem);
+  }
+  return { hoy: x.hoy, semanas, saldoInicial, cuentasSinSaldo, avisos };
+}
+
+/** Foto para guardar al abrir el Cashflow por primera vez en el mes: lo proyectado hoy de las semanas que arrancan en este mes. */
+export function fotoDelMes(cf: Cashflow): FotoCF {
+  const mes = cf.hoy.slice(0, 7);
+  const semanas: FotoCF["semanas"] = {};
+  for (const s of cf.semanas) if (s.tipo === "proyectada" && s.proyDe === "hoy" && s.proy && s.desde.slice(0, 7) === mes) semanas[s.desde] = s.proy;
+  return { tomada: cf.hoy, semanas };
+}
+
+/** Planilla para Excel: una columna por semana real y dos (Proy. y Real) por semana proyectada. */
+export function planillaCF(cf: Cashflow, semanaCorta: (desde: string) => string): (string | number | null)[][] {
+  const cols: { s: SemanaCF; cual: "real" | "proy" }[] = cf.semanas.flatMap((s) => (s.tipo === "real" ? [{ s, cual: "real" as const }] : [{ s, cual: "proy" as const }, { s, cual: "real" as const }]));
+  const v = (c: (typeof cols)[number]) => (c.cual === "real" ? c.s.real : c.s.proy);
+  const sal = (c: (typeof cols)[number]) => (c.cual === "real" ? c.s.saldoReal : c.s.saldoProy);
+  const out: (string | number | null)[][] = [
+    ["Semana (lunes)", ...cols.map((c) => semanaCorta(c.s.desde))],
+    ["", ...cols.map((c) => (c.s.tipo === "real" ? "Real" : c.cual === "proy" ? (c.s.proyDe === "foto" ? "Proy. (inicio de mes)" : "Proy. (hoy)") : "Real"))],
+    ["Saldo inicial", ...cols.map((c) => sal(c)?.inicial ?? null)],
+  ];
+  const fila = (nombre: string, f: (x: ValoresCF) => number) => out.push([nombre, ...cols.map((c) => { const x = v(c); return x ? f(x) : null; })]);
+  for (const f of FILAS_CF.filter((f) => f.lado === "entra")) fila(f.nombre, (x) => x[f.id]);
+  fila("Total entró", totalEntra);
+  for (const f of FILAS_CF.filter((f) => f.lado === "sale")) fila(f.nombre, (x) => x[f.id]);
+  fila("Total salió", totalSale);
+  for (const f of FILAS_CF.filter((f) => f.lado === "aparte")) fila(f.nombre, (x) => x[f.id]);
+  fila("Flujo de la semana", flujo);
+  out.push(["Saldo final", ...cols.map((c) => sal(c)?.final ?? null)]);
+  return out;
+}

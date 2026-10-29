@@ -1,7 +1,7 @@
 // Finanzas Lazza: lecturas de la base (solo SELECT, nada se guarda). Las cuentas están en lib/finanzas-lazza.
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
-import { armarTcDelDia, armarVencimientos, comprobanteVenta, saldoFacturaCompra, type FacturaCompraFL, type FacturaVentaFL, type FilaVencimiento, type GastoFL, type GastoVepFL, type ItemCostoFL, type ItemFacturaFL, type TransporteFL, type PagoDirectoFC, type RetencionIvaFL, type TcDelDia } from "@/lib/finanzas-lazza";
+import { armarTcDelDia, armarVencimientos, comprobanteVenta, reporteBasico, saldoFacturaCompra, type FacturaCompraFL, type FacturaVentaFL, type FilaVencimiento, type GastoFL, type GastoVepFL, type ItemCostoFL, type ItemFacturaFL, type TransporteFL, type PagoDirectoFC, type RetencionIvaFL, type TcDelDia } from "@/lib/finanzas-lazza";
 import type { LineaMov } from "@/lib/movimientos-banco";
 import { calcularSaldosClientes, cobradoPorFactura, saldoFacturaVenta, traerDatosSaldoClientes, type SaldoCliente } from "@/lib/saldo-clientes";
 import { calcularSaldosProveedores, traerCreditosProveedores, type SaldoProveedor } from "@/lib/saldo-proveedores";
@@ -10,6 +10,11 @@ import { esNotaCredito, sumarMeses } from "@/lib/reportes-comprobantes";
 import { opsPorFactura, type OPResumen } from "@/lib/orden-pago-pdf";
 import { armarFilasFacturas, chequesSinAcreditarPorFactura, recibosPorFactura, type ComprobanteMes, type DocPago, type FilaFactura, type LadoFactura } from "@/lib/facturas-lazza";
 import { traerRecibos } from "./recibo-doc";
+import { DESDE_ESTIMADOS, IIBB_PCT_NATI, type BaseMes, type EstimadoMes, type GastoCont, type LineaBancoCont } from "@/lib/contabilidad";
+import { premiosPorCargar } from "@/lib/premios-lazza";
+import { claveFoto, type ChequeCF, type FijoCF, type FotoCF, type LineaBancoCF, type PremioCF, type VencimientoCF } from "@/lib/cashflow";
+import { numerosDebitados } from "@/lib/cobertura-cheques";
+import { JOSE_ALVAREZ, comisionDelMes, detalleComision } from "@/lib/jose-alvarez";
 import type { Recibo } from "@/lib/recibos";
 
 const db = supabase as any;
@@ -268,4 +273,155 @@ export async function traerComprobantesMes(sociedadId: string, periodo: string):
   const { desde, hasta } = rangoMes(periodo);
   return traerTodo<ComprobanteMes>(() => db.from("facturas").select("id, tipo, subtotal, iva, total, moneda, tipo_cambio, cae")
     .eq("sociedad_id", sociedadId).gte("fecha", desde).lt("fecha", hasta).order("id"));
+}
+
+/** Fila de `configuracion` (por sociedad) con lo que se carga a mano en Contabilidad: el % de IIBB y tasas. */
+export const CLAVE_CONTABILIDAD = "contabilidad";
+
+/**
+ * Contabilidad → Estado de resultados (29/10/2026): lo que necesita estadoDeResultados para `periodos`.
+ * Ventas, costo y transportes de cada mes salen de Reportes (la misma cuenta). Los gastos se traen desde un mes antes
+ * hasta 3 después, porque cada uno cuenta en el mes que dice su detalle (el premio de octubre se paga en noviembre).
+ * `conEstimados` (solo Lazzari): premios y comisión de José que corresponden al mes y todavía no se cargaron.
+ */
+export async function traerDatosContabilidad(sociedadId: string, periodos: string[], conEstimados: boolean) {
+  const primero = periodos[0], ultimo = periodos[periodos.length - 1];
+  const desdeGastos = `${sumarMeses(primero, -1)}-01`;
+  const [reportes, gastosRaw, cuentas, tcDia, config] = await Promise.all([
+    Promise.all(periodos.map(async (p) => ({ p, r: reporteBasico({ periodo: p, ...(await traerDatosReporte(sociedadId, p)) }) }))),
+    traerTodo<any>(() => db.from("gastos_manuales").select("id, fecha, descripcion, categoria, grupo, monto, moneda")
+      .eq("sociedad_id", sociedadId).gte("fecha", desdeGastos).lt("fecha", `${sumarMeses(ultimo, 4)}-01`).order("id")),
+    db.from("cuentas_financieras").select("id").eq("sociedad_id", sociedadId),
+    traerTcDelDia(sumarMeses(ultimo, 3), desdeGastos),
+    db.from("configuracion").select("value").eq("sociedad_id", sociedadId).eq("key", CLAVE_CONTABILIDAD).maybeSingle(),
+  ]);
+  if (cuentas.error) throw cuentas.error;
+  const ids: string[] = (cuentas.data || []).map((c: { id: string }) => c.id);
+  const lineas = ids.length
+    ? await traerTodo<any>(() => db.from("extracto_movimientos").select("id, fecha, descripcion, monto, tipo, clasificacion, subtipo, match_movimiento_id, estado")
+        .in("cuenta_id", ids).gte("fecha", `${primero}-01`).lt("fecha", `${sumarMeses(ultimo, 1)}-01`).order("id"))
+    : [];
+  const dia = (f: unknown) => String(f).slice(0, 10);
+  const gastos: GastoCont[] = gastosRaw.map((g) => ({ ...g, fecha: dia(g.fecha) }));
+  const lineasBanco: LineaBancoCont[] = lineas.filter((l) => l.estado !== "ignorado").map((l) => ({ ...l, fecha: dia(l.fecha) }));
+
+  const base: Record<string, BaseMes> = {};
+  for (const { p, r } of reportes) base[p] = { ventas: r.facturado.neto, costo: r.costo.neto, transportes: r.transportes.neto, avisosCosto: r.avisos.length };
+
+  const estimados: Record<string, EstimadoMes> = {};
+  if (conEstimados) {
+    const cargados = gastos.map((g) => String(g.descripcion || ""));
+    const cargadosMin = new Set(cargados.map((d) => d.trim().toLowerCase()));
+    for (const { p, r } of reportes) {
+      if (p < DESDE_ESTIMADOS) continue;
+      const premios = premiosPorCargar(p, r.objetivo.neto, cargados).map((x) => ({ persona: x.persona, monto: x.monto }));
+      let comisionJose: number | null = null;
+      if (!cargadosMin.has(detalleComision(p).toLowerCase())) {
+        const prIds = [...new Set(r.filas.map((f) => f.presupuestoId).filter((x): x is string => !!x))];
+        const suyos = new Set<string>();
+        for (const lote of trozos(prIds, 150)) {
+          const { data, error } = await db.from("presupuestos").select("id").eq("vendedor_id", JOSE_ALVAREZ.vendedorId).in("id", lote);
+          if (error) throw error;
+          for (const x of data || []) suyos.add(x.id);
+        }
+        comisionJose = comisionDelMes(r.filas, suyos).comision || null;
+      }
+      estimados[p] = { premios, comisionJose };
+    }
+  }
+  const pct = Number(config.data?.value?.iibbPct);
+  return { base, gastos, lineasBanco, tcDia, estimados, iibbPct: config.data?.value?.iibbPct === undefined || !Number.isFinite(pct) ? IIBB_PCT_NATI : pct };
+}
+
+/**
+ * Contabilidad → Cashflow semanal (29/10/2026): lo real (todas las líneas del extracto de las cuentas en $, con el gasto al que
+ * está atada cada una) y lo que hace falta para proyectar (lib/cashflow: proyeccionCF y armarCashflow). Solo lee.
+ * Las líneas "ignoradas" en Bancos también van: son plata que se movió (ya estaban cargadas en Gastos sin atar).
+ */
+export async function traerDatosCashflow(sociedadId: string, hoy: string, conPremios: boolean) {
+  const mes = hoy.slice(0, 7);
+  const [cuentasR, deudas, chequesR, fijosR, pagosFijos, comprasMes, dolarR, fotosR] = await Promise.all([
+    db.from("cuentas_financieras").select("id, nombre, tipo, moneda, saldo_banco, saldo_banco_fecha").eq("sociedad_id", sociedadId).eq("activa", true),
+    traerDeudas(sociedadId, hoy),
+    traerTodo<any>(() => db.from("echeqs").select("id, numero, direccion, estado, estado_banco, fecha_pago, monto, moneda, cubre_tercero, origen_nombre, destino_nombre")
+      .eq("sociedad_id", sociedadId).in("estado", ["entregado", "pendiente", "en_cartera"]).order("id")),
+    db.from("gastos_fijos").select("id, descripcion, grupo, categoria, monto, moneda, activo, dia_vencimiento, dolar_referencia, proveedor_id").eq("sociedad_id", sociedadId).eq("activo", true),
+    traerTodo<{ gasto_fijo_id: string; fecha: string }>(() => db.from("gastos_manuales").select("id, gasto_fijo_id, fecha")
+      .eq("sociedad_id", sociedadId).not("gasto_fijo_id", "is", null).gte("fecha", `${mes}-01`).order("id")),
+    traerTodo<{ proveedor_id: string | null; fecha: string }>(() => db.from("facturas_compra").select("id, proveedor_id, fecha")
+      .eq("sociedad_id", sociedadId).gte("fecha", `${mes}-01`).order("id")),
+    db.from("cotizaciones_dolar").select("valor_venta").eq("tipo", "oficial_divisas").lte("fecha", hoy).order("fecha", { ascending: false }).limit(1).maybeSingle(),
+    db.from("configuracion").select("key, value").eq("sociedad_id", sociedadId).like("key", "cashflow_foto_%"),
+  ]);
+  if (cuentasR.error) throw cuentasR.error;
+  if (fijosR.error) throw fijosR.error;
+  // Solo las cuentas en $ con extracto (corrientes y cajas de ahorro): el FCI, la caución, la de US$ y el efectivo no tienen líneas.
+  const cuentas: Record<string, string> = {};
+  const saldosBanco: { cuenta_id: string; saldo: number | null; fecha: string | null }[] = [];
+  for (const c of cuentasR.data || []) {
+    if (c.moneda === "USD" || !["cuenta_corriente", "caja_ahorro"].includes(c.tipo)) continue;
+    cuentas[c.id] = c.nombre;
+    // Solo para el control "faltan líneas en Bancos" (no se muestra: Augusto 26/10 no quiere ver el saldo del banco).
+    saldosBanco.push({ cuenta_id: c.id, saldo: c.saldo_banco === null ? null : Number(c.saldo_banco), fecha: c.saldo_banco_fecha ? String(c.saldo_banco_fecha).slice(0, 10) : null });
+  }
+  const ids = Object.keys(cuentas);
+  const crudas = ids.length
+    ? await traerTodo<any>(() => db.from("extracto_movimientos").select("id, cuenta_id, fecha, descripcion, monto, tipo, clasificacion, subtipo, saldo, match_movimiento_id, estado, nota")
+        .in("cuenta_id", ids).order("id"))
+    : [];
+  // Línea → movimiento → gasto cargado (para ponerla en la misma fila que el Estado de resultados).
+  const movIds = [...new Set(crudas.map((l) => l.match_movimiento_id).filter(Boolean))] as string[];
+  const gastoDeMov = new Map<string, string>();
+  for (const lote of trozos(movIds)) {
+    const { data, error } = await db.from("movimientos").select("id, gasto_manual_id").in("id", lote).not("gasto_manual_id", "is", null);
+    if (error) throw error;
+    for (const m of data || []) gastoDeMov.set(m.id, m.gasto_manual_id);
+  }
+  const gastos = new Map<string, LineaBancoCF["gasto"]>();
+  for (const lote of trozos([...new Set(gastoDeMov.values())])) {
+    const { data, error } = await db.from("gastos_manuales").select("id, grupo, categoria, descripcion").in("id", lote);
+    if (error) throw error;
+    for (const g of data || []) gastos.set(g.id, { grupo: g.grupo, categoria: g.categoria, descripcion: g.descripcion });
+  }
+  const dia = (f: unknown) => String(f).slice(0, 10);
+  const lineas: LineaBancoCF[] = crudas.map((l) => {
+    const gid = l.match_movimiento_id ? gastoDeMov.get(l.match_movimiento_id) : undefined;
+    return { ...l, fecha: dia(l.fecha), gasto: gid ? gastos.get(gid) ?? null : null, ignorada: l.estado === "ignorado" };
+  });
+  const desde90 = new Date(Date.parse(`${hoy}T12:00:00Z`) - 90 * 86_400_000).toISOString().slice(0, 10);
+  const debitados = numerosDebitados(lineas.filter((l) => l.fecha >= desde90).map((l) => ({ descripcion: l.descripcion, tipo: l.tipo })));
+
+  const vencimientos: VencimientoCF[] = deudas.vencimientos.map((v) => ({ lado: v.lado, vence: v.vence, saldo: v.saldo, moneda: v.moneda, comprobante: v.comprobante, nombre: v.nombre }));
+  const cheques: ChequeCF[] = chequesR.map((c) => ({
+    numero: String(c.numero ?? ""), direccion: c.direccion, estado: c.estado, estadoBanco: c.estado_banco, fecha_pago: c.fecha_pago ? dia(c.fecha_pago) : null,
+    monto: c.monto, moneda: c.moneda, cubreTercero: c.cubre_tercero, quien: c.direccion === "emitido" ? c.destino_nombre : c.origen_nombre,
+  }));
+  const fijos: FijoCF[] = (fijosR.data || []).map((g: any) => ({
+    id: g.id, descripcion: g.descripcion || "", grupo: g.grupo, categoria: g.categoria, monto: Number(g.monto) || 0, moneda: g.moneda === "USD" ? "USD" : "ARS",
+    activo: !!g.activo, diaVencimiento: g.dia_vencimiento, dolarReferencia: g.dolar_referencia === null ? null : Number(g.dolar_referencia), proveedorId: g.proveedor_id,
+  }));
+
+  // Premios del mes (Lazzari) que todavía no se cargaron: se pagan con el sueldo del mes siguiente (Augusto 29/10).
+  let premios: PremioCF[] = [];
+  if (conPremios) {
+    const r = reporteBasico({ periodo: mes, ...(await traerDatosReporte(sociedadId, mes)) });
+    const { data } = await db.from("gastos_manuales").select("descripcion").eq("sociedad_id", sociedadId).gte("fecha", `${mes}-01`).lt("fecha", `${sumarMeses(mes, 2)}-01`);
+    premios = premiosPorCargar(mes, r.objetivo.neto, (data || []).map((g: { descripcion: string | null }) => String(g.descripcion || ""))).map((x) => ({ persona: x.persona, monto: x.monto, mes }));
+  }
+  const fotos: Record<string, FotoCF> = {};
+  for (const f of fotosR.data || []) fotos[String(f.key).replace("cashflow_foto_", "")] = f.value as FotoCF;
+
+  return {
+    cuentas, saldosBanco, lineas, debitados, vencimientos, cheques, fijos, premios, fotos,
+    pagosFijos: pagosFijos.map((g) => ({ gasto_fijo_id: g.gasto_fijo_id, fecha: dia(g.fecha) })),
+    facturasCompra: comprasMes.map((f) => ({ proveedor_id: f.proveedor_id, fecha: dia(f.fecha) })),
+    dolar: dolarR.data?.valor_venta ? Number(dolarR.data.valor_venta) : null,
+  };
+}
+
+/** Guarda la foto del proyectado del mes (Contabilidad → Cashflow), una sola vez: si ya hay una, no la pisa. */
+export async function guardarFotoCashflow(sociedadId: string, mes: string, foto: FotoCF): Promise<boolean> {
+  const { error } = await db.from("configuracion").upsert({ key: claveFoto(mes), value: foto, sociedad_id: sociedadId }, { onConflict: "sociedad_id,key", ignoreDuplicates: true });
+  if (error) { console.error("Contabilidad · foto del Cashflow:", error); return false; }
+  return true;
 }
