@@ -32,6 +32,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { observacionesParaCliente } from "@/lib/observaciones-cliente";
 import { detalleResto, restoSinFacturar, totalesResto } from "@/lib/resto-facturar";
+import { esDni, AVISO_DNI_SIN_ARCA } from "@/lib/documento-cliente";
 
 export interface EmitItem {
   descripcion: string;
@@ -112,10 +113,12 @@ export function EmitirFacturaModal({
   const intentScope = pr ? `presupuesto:${sociedadActiva?.id}:${pr.id}` : `facturacion:${sociedadActiva?.id}:emit`;
   const sourceIsManual = pr?.modalidad_emision === "manual";
   const forceManual = arcaCertOk === false;
+  // Cliente con DNI: no se factura con ARCA, va manual (Augusto 28/10/2026, lib/documento-cliente).
+  const prClienteDni = !!pr && esDni(pr.cliente?.cuit);
   const tipoCliente = pr ? tipoFacturaPorCondicionIva(pr.cliente?.condicion_iva) : "FB";
   const ocFecha = pr?.oc_cliente_fecha ? String(pr.oc_cliente_fecha).slice(0, 10) : null;
 
-  const [emitManual, setEmitManual] = useState(forceManual || sourceIsManual);
+  const [emitManual, setEmitManual] = useState(forceManual || sourceIsManual || prClienteDni);
   const [rateOverride, setRateOverride] = useState(false);
   const [emitFullscreen, setEmitFullscreen] = useState(false);
   const [emitStep, setEmitStep] = useState<"form" | "emitting" | "success" | "error">("form");
@@ -137,7 +140,7 @@ export function EmitirFacturaModal({
   const [restoDecision, setRestoDecision] = useState<"pendiente" | "no_facturar">("pendiente");
   const [restoAviso, setRestoAviso] = useState("");
   const [emitData, setEmitData] = useState(() => {
-    const manual = forceManual || sourceIsManual;
+    const manual = forceManual || sourceIsManual || prClienteDni;
     const tipo = manual ? "X" : tipoCliente;
     const hoy = todayAR();
     const condicion = pr ? condicionVentaCliente(pr.cliente?.dias_cuenta_corriente, pr.cliente?.forma_pago) : "Cta. Cte.";
@@ -544,6 +547,8 @@ export function EmitirFacturaModal({
     : cotizBnaLoading ? "se está consultando la cotización del BNA."
     : "falta la cotización del dólar: traela del BNA o escribila.";
 
+  const clienteDni = pr ? prClienteDni : esDni(clientes.find((c) => c.id === emitData.cliente_id)?.cuit);
+
   const toggleArca = (
     <div className="flex items-center gap-0.5 rounded-lg border border-zinc-200 dark:border-zinc-700 p-0.5">
       <button
@@ -554,7 +559,8 @@ export function EmitirFacturaModal({
           cambiarTipo(tipoArca, { punto_venta: pvOpciones[0] });
           void fetchNumero(tipoArca, pvOpciones[0]);
         }}
-        disabled={forceManual}
+        disabled={forceManual || clienteDni}
+        title={clienteDni ? AVISO_DNI_SIN_ARCA : undefined}
         className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${!emitManual ? "bg-orange-500 text-white" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"} disabled:opacity-40 disabled:cursor-not-allowed`}
       >
         <ShieldCheck className="h-3.5 w-3.5" /> ARCA
@@ -671,7 +677,11 @@ export function EmitirFacturaModal({
                         <button key={c.id} onClick={() => {
                           const condicion = condicionVentaCliente(c.dias_cuenta_corriente, c.forma_pago);
                           const extra = { cliente_id: c.id, condicion_venta: condicion, fecha_vencimiento: calcFechaVencimiento(condicion, emitData.fecha, c.dias_cuenta_corriente) };
-                          if (emitManual || !["FA", "FB", "FCEA", "FCEB"].includes(emitData.tipo)) setEmitData(p => ({ ...p, ...extra }));
+                          if (!emitManual && esDni(c.cuit)) {
+                            setEmitManual(true);
+                            cambiarTipo("X", { ...extra, punto_venta: 0 });
+                            void fetchNumero("X", 0);
+                          } else if (emitManual || !["FA", "FB", "FCEA", "FCEB"].includes(emitData.tipo)) setEmitData(p => ({ ...p, ...extra }));
                           else cambiarTipo(tipoFacturaPorCondicionIva(c.condicion_iva), extra);
                           setModalidad(modalidadFactura(c.moneda_predeterminada, null));
                           setEmitClienteSearch("");
@@ -732,7 +742,7 @@ export function EmitirFacturaModal({
                 )}
               </div>
             </div>
-            {emitManual && <p className="-mt-1.5 text-[11px] text-amber-600 dark:text-amber-400">No se autoriza con ARCA: no tendrá CAE.</p>}
+            {emitManual && <p className="-mt-1.5 text-[11px] text-amber-600 dark:text-amber-400">{clienteDni ? `${AVISO_DNI_SIN_ARCA}: no tendrá CAE.` : "No se autoriza con ARCA: no tendrá CAE."}</p>}
 
             {/* Datos del presupuesto: OC del cliente (siempre a la vista) y observaciones. Las OC a proveedores no van acá. */}
             {pr && (

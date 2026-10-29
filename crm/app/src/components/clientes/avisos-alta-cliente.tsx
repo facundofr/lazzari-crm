@@ -1,13 +1,15 @@
 "use client";
 
 // Avisos del alta / edición de cliente. Son SOLO avisos: nunca bloquean el guardado.
-//  - Posibles duplicados por CUIT o por razón social parecida, en todas las sociedades que el usuario puede leer.
+//  - Posibles duplicados por CUIT, DNI o razón social parecida, en todas las sociedades que el usuario puede leer.
+//    Un DNI que está adentro de un CUIT ya cargado (o al revés) avisa "puede ser la misma persona".
 //  - Último informe BCRA guardado para ese CUIT (si existe en cualquier sociedad). Solo lectura.
 
 import { useEffect, useState } from "react";
 import { AlertTriangle, ExternalLink, Loader2 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { SEMAFORO_LABEL, SITUACION_LABEL, type Semaforo } from "@/lib/bcra";
+import { digitosDocumento, dniDentroDeCuit } from "@/lib/documento-cliente";
 
 export interface ClienteParecido {
   id: string;
@@ -15,11 +17,8 @@ export interface ClienteParecido {
   cuit: string | null;
   sociedad_id: string | null;
   porCuit: boolean;
-}
-
-/** "20379309128" → "20-37930912-8" */
-function cuitConGuiones(d: string): string {
-  return d.length === 11 ? `${d.slice(0, 2)}-${d.slice(2, 10)}-${d.slice(10)}` : d;
+  /** CUIT que tiene adentro el DNI cargado (o al revés). */
+  mismaPersona?: boolean;
 }
 
 export function AvisoDuplicadosCliente({
@@ -42,18 +41,20 @@ export function AvisoDuplicadosCliente({
 
   useEffect(() => {
     const buscarCuit = cuitDig.length === 11;
+    const dni = buscarCuit ? dniDentroDeCuit(cuitDig) : (cuitDig.length === 7 || cuitDig.length === 8 ? cuitDig.replace(/^0+/, "") : null);
     const buscarNombre = nombre.length >= 4;
-    if (!buscarCuit && !buscarNombre) { setParecidos([]); return; }
+    if (!buscarCuit && !dni && !buscarNombre) { setParecidos([]); return; }
     let cancelado = false;
     const t = setTimeout(async () => {
       setBuscando(true);
       try {
         const db = supabase as any;
         const consultas: Promise<{ data: any[] | null }>[] = [];
-        if (buscarCuit) {
+        if (buscarCuit || dni) {
+          // Mismo CUIT, mismo DNI o un CUIT con ese DNI adentro (se filtra abajo).
           consultas.push(
             db.from("clientes").select("id, razon_social, cuit, sociedad_id")
-              .in("cuit", [cuitDig, cuitConGuiones(cuitDig)]).limit(5),
+              .ilike("cuit", `%${dni || cuitDig}%`).limit(10),
           );
         }
         if (buscarNombre) {
@@ -67,15 +68,20 @@ export function AvisoDuplicadosCliente({
         if (cancelado) return;
         const vistos = new Map<string, ClienteParecido>();
         res.forEach((r, i) => {
-          const porCuit = buscarCuit && i === 0;
+          const porDocumento = (buscarCuit || !!dni) && i === 0;
           for (const c of r.data || []) {
             if (!c?.id || c.id === excluirId) continue;
-            const mismoCuit = buscarCuit && String(c.cuit || "").replace(/\D/g, "") === cuitDig;
+            const suyo = digitosDocumento(c.cuit);
+            const mismoCuit = suyo === cuitDig || (!buscarCuit && !!dni && suyo.replace(/^0+/, "") === dni);
+            const mismaPersona = !mismoCuit && !!dni && (dniDentroDeCuit(suyo) === dni || (buscarCuit && suyo.replace(/^0+/, "") === dni));
+            // De la búsqueda por documento solo quedan los que coinciden de verdad (el "contiene" trae de más).
+            if (porDocumento && !mismoCuit && !mismaPersona) continue;
             const prev = vistos.get(c.id);
-            vistos.set(c.id, { id: c.id, razon_social: c.razon_social || "", cuit: c.cuit, sociedad_id: c.sociedad_id, porCuit: porCuit || mismoCuit || !!prev?.porCuit });
+            vistos.set(c.id, { id: c.id, razon_social: c.razon_social || "", cuit: c.cuit, sociedad_id: c.sociedad_id, porCuit: mismoCuit || !!prev?.porCuit, mismaPersona: mismaPersona || !!prev?.mismaPersona });
           }
         });
-        setParecidos([...vistos.values()].sort((a, b) => Number(b.porCuit) - Number(a.porCuit)).slice(0, 6));
+        const orden = (p: ClienteParecido) => (p.porCuit ? 2 : p.mismaPersona ? 1 : 0);
+        setParecidos([...vistos.values()].sort((a, b) => orden(b) - orden(a)).slice(0, 6));
       } catch {
         if (!cancelado) setParecidos([]);
       } finally {
@@ -97,7 +103,7 @@ export function AvisoDuplicadosCliente({
     <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
       <p className="flex items-center gap-1.5 font-medium">
         <AlertTriangle className="h-4 w-4 shrink-0" />
-        {parecidos.some((p) => p.porCuit) ? "Ya existe un cliente con este CUIT" : "Hay clientes con un nombre parecido"}
+        {parecidos.some((p) => p.porCuit) ? "Ya existe un cliente con este CUIT/DNI" : parecidos.some((p) => p.mismaPersona) ? "Puede ser la misma persona (CUIT y DNI coinciden)" : "Hay clientes con un nombre parecido"}
         <span className="font-normal text-xs text-amber-700/80 dark:text-amber-400/80">(es solo un aviso, podés guardar igual)</span>
       </p>
       <ul className="mt-1 space-y-0.5">

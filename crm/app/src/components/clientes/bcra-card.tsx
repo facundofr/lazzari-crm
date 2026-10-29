@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { SEMAFORO_LABEL, SITUACION_LABEL, mesActual, type Semaforo } from "@/lib/bcra";
 import { formatDate } from "@/lib/utils";
+import { esDni } from "@/lib/documento-cliente";
 import { AlertTriangle, Landmark, Loader2, RefreshCw } from "lucide-react";
 
 const db = supabase as any;
@@ -122,7 +123,7 @@ export function BCRACard({ sociedadId, clienteId, cuit }: { sociedadId: string |
           <div>
             <p className="text-sm font-semibold dark:text-white">Central de Deudores (BCRA)</p>
             <p className="text-[11px] text-zinc-500">
-              {informe ? <>Consultado el {formatDate(informe.consultado_at.slice(0, 10))} · datos de {periodoTexto(informe.periodo_bcra)}{viejo ? " · de otro mes" : ""}</> : cuitOk ? "Todavía no se consultó" : "El cliente no tiene CUIT de 11 números"}
+              {informe ? <>Consultado el {formatDate(informe.consultado_at.slice(0, 10))} · datos de {periodoTexto(informe.periodo_bcra)}{viejo ? " · de otro mes" : ""}</> : cuitOk ? "Todavía no se consultó" : esDni(cuit) ? "Con DNI no se consulta BCRA" : "El cliente no tiene CUIT de 11 números"}
             </p>
           </div>
         </div>

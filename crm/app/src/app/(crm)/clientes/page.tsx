@@ -29,6 +29,7 @@ import { TIPO_DOCUMENTO_LABEL, type DatosImpositivos } from "@/lib/documento-imp
 import { traerTodo } from "@/lib/paginar";
 import { traerSaldosClientes, saldoClienteEn, cobradoPorFactura, saldoFacturaVenta, type SaldoCliente } from "@/lib/saldo-clientes";
 import { totalesCuentaCorriente } from "@/lib/cuenta-corriente-cliente";
+import { esDni, digitosDocumento, textoDocumento } from "@/lib/documento-cliente";
 
 const condicionLabels: Record<string, string> = {
   RI: "Resp. Inscripto",
@@ -244,6 +245,9 @@ export default function ClientesPage() {
   const [formError, setFormError] = useState("");
   const [cuitLookupLoading, setCuitLookupLoading] = useState(false);
   const [cuitLookupMsg, setCuitLookupMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  // Cliente persona con DNI (misma columna `cuit`): sin búsqueda en ARCA y se le factura manual.
+  const [tipoDoc, setTipoDoc] = useState<"cuit" | "dni">("cuit");
+  const docEsDni = tipoDoc === "dni";
 
   // Sucursales in modal (edit mode only)
   type SucursalForm = { id: string; nombre: string; direccion: string; localidad: string; provincia: string; cp: string; telefono: string; email: string; isNew?: boolean };
@@ -867,6 +871,7 @@ export default function ClientesPage() {
     // Vendedor asignado: por defecto el usuario que da el alta (editable).
     const yo = profile?.id && vendedores.some((v) => v.id === profile.id) ? profile.id : null;
     setForm({ ...emptyForm, assigned_to: yo });
+    setTipoDoc("cuit");
     setFormError("");
     setFormFieldErrors({});
     setCuitLookupMsg(null);
@@ -912,6 +917,7 @@ export default function ClientesPage() {
       fecha_pago: (c as any).fechaPago || "",
       email_comprobante: (c as any).emailComprobante || "",
     });
+    setTipoDoc(esDni(c.cuit) ? "dni" : "cuit");
     setFormError("");
     setFormFieldErrors({});
     setCuitLookupMsg(null);
@@ -998,7 +1004,7 @@ export default function ClientesPage() {
     }
     const cambios: string[] = [];
     const next = { ...form };
-    if (d.cuit && !form.cuit.trim()) { next.cuit = d.cuit; cambios.push("CUIT"); }
+    if (d.cuit && !form.cuit.trim()) { next.cuit = d.cuit; cambios.push("CUIT"); setTipoDoc("cuit"); }
     if (d.razon_social && !form.razon_social.trim()) { next.razon_social = d.razon_social; cambios.push("razón social"); }
     if (d.direccion && !form.direccion.trim()) { next.direccion = d.direccion; cambios.push("dirección"); }
     if (d.localidad && !form.localidad.trim()) { next.localidad = d.localidad; cambios.push("localidad"); }
@@ -1036,7 +1042,9 @@ export default function ClientesPage() {
     if (!form.razon_social.trim()) fieldErrs.razon_social = "La razón social es obligatoria";
     const isCF = form.condicion_iva === "CF";
     if (!form.cuit.trim()) {
-      if (!isCF) fieldErrs.cuit = "El CUIT/DNI es obligatorio";
+      if (!isCF) fieldErrs.cuit = docEsDni ? "El DNI es obligatorio" : "El CUIT es obligatorio";
+    } else if (docEsDni) {
+      if (!esDni(form.cuit)) fieldErrs.cuit = "El DNI tiene 7 u 8 números";
     } else {
       const cleanCuit = form.cuit.replace(/\D/g, "");
       if (![7, 8, 11].includes(cleanCuit.length)) fieldErrs.cuit = "Ingrese un DNI (7-8 dígitos) o CUIT (11 dígitos)";
@@ -1078,6 +1086,8 @@ export default function ClientesPage() {
       const { markup_predeterminado, ...formWithout } = form;
       const payload: Record<string, unknown> = {
         ...formWithout,
+        // El DNI se guarda solo con números (con puntos se colaría un repetido).
+        ...(docEsDni && form.cuit.trim() ? { cuit: digitosDocumento(form.cuit) } : {}),
         markup_predeterminado: markup_predeterminado != null && markup_predeterminado !== (0 as any) ? markup_predeterminado : null,
         email_facturacion: form.email_facturacion?.trim() || null,
         assigned_to: (form as any).assigned_to || null,
@@ -1590,7 +1600,7 @@ export default function ClientesPage() {
                             </span>
                           )}
                         </div>
-                        <p className="text-xs text-zinc-400">{row.cuit ? (row.cuit.replace(/\D/g, "").length <= 8 ? `DNI ${row.cuit}` : row.cuit) : "Sin CUIT/DNI"}</p>
+                        <p className="text-xs text-zinc-400">{textoDocumento(row.cuit)}</p>
                       </div>
                     </div>
                     );
@@ -1655,7 +1665,7 @@ export default function ClientesPage() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <h2 className="text-lg font-bold text-zinc-900 dark:text-white truncate">{selectedCliente.razonSocial}</h2>
-                  <p className="text-sm text-zinc-500">{selectedCliente.cuit ? (selectedCliente.cuit.replace(/\D/g, "").length <= 8 ? `DNI ${selectedCliente.cuit}` : selectedCliente.cuit) : "Sin CUIT/DNI"}</p>
+                  <p className="text-sm text-zinc-500">{textoDocumento(selectedCliente.cuit)}</p>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   <button onClick={() => setPanelFullscreen(!panelFullscreen)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={panelFullscreen ? "Reducir" : "Ampliar"}>
@@ -1765,7 +1775,7 @@ export default function ClientesPage() {
                       </h3>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         {(selectedCliente as any).aliasCbu && <InfoField label="Alias / CBU" value={(selectedCliente as any).aliasCbu} />}
-                        {selectedCliente.cuit && <InfoField label="CUIT / CUIL" value={selectedCliente.cuit} />}
+                        {selectedCliente.cuit && <InfoField label={esDni(selectedCliente.cuit) ? "DNI" : "CUIT / CUIL"} value={selectedCliente.cuit} />}
                         {(selectedCliente as any).tipoCuenta && <InfoField label="CC / CA" value={(selectedCliente as any).tipoCuenta} />}
                         {(selectedCliente as any).fechaPago && <InfoField label="Fecha de pago" value={(selectedCliente as any).fechaPago} />}
                         {(selectedCliente as any).emailComprobante && (
@@ -2447,22 +2457,29 @@ export default function ClientesPage() {
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               <div id="field-cuit">
+                <div className="mb-1.5 flex items-center gap-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                  <span className="inline-flex overflow-hidden rounded border border-zinc-300 dark:border-zinc-600">
+                    {(["cuit", "dni"] as const).map((t) => (
+                      <button key={t} type="button" onClick={() => { setTipoDoc(t); setCuitLookupMsg(null); setFormFieldErrors((p) => ({ ...p, cuit: "" })); }} className={`px-1.5 py-px text-[10px] font-semibold ${tipoDoc === t ? "bg-orange-500 text-white" : "bg-white text-zinc-500 dark:bg-zinc-800"}`}>{t.toUpperCase()}</button>
+                    ))}
+                  </span>
+                  {docEsDni ? "DNI" : "CUIT"}{form.condicion_iva === "CF" ? "" : " *"}
+                </div>
+                {docEsDni && <p className="mb-1 text-[11px] text-amber-600 dark:text-amber-400">Con DNI se factura manual, sin ARCA, y no se consulta BCRA.</p>}
                 <div className="flex items-end gap-2">
                   <div className="flex-1">
                     <Input
-                      label={form.condicion_iva === "CF" ? "CUIT / DNI" : "CUIT / DNI *"}
                       value={form.cuit}
                       onChange={(e) => { setForm({ ...form, cuit: e.target.value }); setCuitLookupMsg(null); setFormFieldErrors((p) => ({ ...p, cuit: "" })); }}
-                      placeholder="DNI o CUIT"
+                      placeholder={docEsDni ? "Solo números" : "XX-XXXXXXXX-X"}
                       error={formFieldErrors.cuit}
                       autoFocus={!editingId}
                       onBlur={() => {
-                        const clean = form.cuit.replace(/\D/g, "");
-                        if ([7, 8, 11].includes(clean.length)) handleCuitLookup();
+                        if (!docEsDni && form.cuit.replace(/\D/g, "").length === 11) handleCuitLookup();
                       }}
                     />
                   </div>
-                  <button
+                  {!docEsDni && <button
                     type="button"
                     onClick={handleCuitLookup}
                     disabled={cuitLookupLoading}
@@ -2475,7 +2492,7 @@ export default function ClientesPage() {
                       <Search className="h-4 w-4" />
                     )}
                     ARCA
-                  </button>
+                  </button>}
                 </div>
                 {cuitLookupMsg && (
                   <p className={`mt-1 text-xs ${cuitLookupMsg.type === "error" ? "text-red-500 dark:text-red-400" : "text-green-600 dark:text-green-400"}`}>
@@ -2507,7 +2524,7 @@ export default function ClientesPage() {
                   error={formFieldErrors.razon_social}
                 />
               </div>
-              {(form.cuit.replace(/\D/g, "").length === 11 || form.razon_social.trim().length >= 4) && (
+              {(form.cuit.replace(/\D/g, "").length === 11 || esDni(form.cuit) || form.razon_social.trim().length >= 4) && (
                 <div className="sm:col-span-2 lg:col-span-3 space-y-2">
                   <SemaforoBCRAPrevio cuit={form.cuit} />
                   <AvisoDuplicadosCliente

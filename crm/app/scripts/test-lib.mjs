@@ -19,7 +19,7 @@ const PRUEBAS = [
   "test-cobro-reparto.mjs", "test-compras-armado.ts", "test-compras-lazza.ts", "test-compras-recepcion.ts",
   "test-comprobante-medios.ts", "test-conciliacion-preguntas.ts", "test-condicion-desde-factura.ts",
   "test-condicion-pago.ts", "test-contacto-ventas.ts", "test-control-dia.ts", "test-correo-finanzas.ts",
-  "test-cron-auth.ts", "test-cuenta-corriente-cliente.ts", "test-documento-impositivo.ts",
+  "test-cron-auth.ts", "test-cuenta-corriente-cliente.ts", "test-documento-cliente.ts", "test-documento-impositivo.ts",
   "test-dolar-presupuesto.ts", "test-echeq-reportes.ts", "test-envio-detectar.ts", "test-envio-factura-texto.ts",
   "test-envio-reparto.ts", "test-estado-factura-venta.mjs", "test-extracto-bbva.ts", "test-factura-condicion.ts",
   "test-factura-desglose-talles.ts", "test-factura-moneda.ts", "test-factura-sin-ia.ts", "test-factura-tipo.ts",

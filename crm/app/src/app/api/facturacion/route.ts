@@ -11,6 +11,7 @@ import { consultarObligacionFce, consultarComprobanteFce } from "@/lib/arca-wsfe
 import { fceRequired, validateFceFields, withFceMetadata, type FceInvoiceData } from "@/lib/fce-invoice";
 import { fiscalPayloadHash, validEmissionKey, reserveFiscalEmission, finishFiscalEmission } from "@/lib/fiscal-emission-guard";
 import { assertSafeFiscalEnvironment } from "@/lib/fiscal-environment";
+import { esDni, AVISO_DNI_SIN_ARCA } from "@/lib/documento-cliente";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -476,6 +477,11 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "Cliente no encontrado" }, { status: 404 });
       }
       cliente = { razon_social: data.razon_social, cuit: data.cuit, condicion_iva: data.condicion_iva };
+
+      // Cliente con DNI: no va a ARCA (se mandaría como CUIT y la rechaza). Se le hace factura manual.
+      if (esDni(cliente.cuit)) {
+        return NextResponse.json({ error: `${AVISO_DNI_SIN_ARCA}. No se mandó nada a ARCA.` }, { status: 400 });
+      }
 
       // Validate tipo vs condicion_iva
       if (tipo.endsWith("A") && ![1,6].includes(condicionIvaArca(cliente.condicion_iva))) {
