@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     // userEmail se ignora: el remitente lo arma el servidor con el usuario que entró (auditoría H38).
-    const { to, subject, bodyHtml, pdfBase64, pdfFilename, sociedadId, documentType, extraAttachments } = body as {
+    const { to, subject, bodyHtml, pdfBase64, pdfFilename, sociedadId, documentType, documentId, extraAttachments } = body as {
       to: string[];
       subject: string;
       bodyHtml: string;
@@ -25,6 +25,8 @@ export async function POST(req: NextRequest) {
       pdfFilename: string;
       sociedadId?: string;
       documentType?: string;
+      /** PR que se manda: el envío queda anotado en presupuesto_envios. */
+      documentId?: string;
       userEmail?: string;
       extraAttachments?: { filename: string; url: string }[];
     };
@@ -68,10 +70,10 @@ export async function POST(req: NextRequest) {
     const isAdminDoc = documentType === "factura" || documentType === "orden_pago" || documentType === "recibo" || documentType === "resumen_cuenta";
     const supabase = await createSupabaseServer();
     let fromEmail = process.env.EMAIL_FROM || ADMIN_EMAIL;
+    const { data: { user } } = await supabase.auth.getUser();
     if (isAdminDoc) {
       fromEmail = ADMIN_EMAIL;
     } else {
-      const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         const { data: perfil } = await (supabase as any).from("profiles").select("email, full_name").eq("id", user.id).maybeSingle();
         fromEmail = remitenteDelUsuario(perfil?.email || user.email, perfil?.full_name) || fromEmail;
@@ -119,7 +121,25 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Error al enviar email: ${emailError.message}` }, { status: 500 });
     }
 
-    return NextResponse.json({ success: true, emailId: emailResult?.id, filename: pdfFilename });
+    // PR: cada envío queda anotado (quién, cuándo y a quién; Augusto 28/10). El mail ya salió: si esto falla, solo se avisa.
+    let envio: { enviado_at: string } | null = null;
+    let avisoRegistro: string | undefined;
+    if (documentType === "presupuesto" && documentId && user) {
+      const { data: fila, error: errEnvio } = await (supabase as any).from("presupuesto_envios").insert({
+        presupuesto_id: documentId,
+        sociedad_id: sociedadId || null,
+        enviado_por: user.id,
+        enviado_a: to.join(", "),
+        remitente: fromEmail,
+        resend_id: emailResult?.id || null,
+      }).select("enviado_at").single();
+      if (errEnvio) {
+        console.error("No se pudo anotar el envío del PR:", errEnvio);
+        avisoRegistro = "El mail salió, pero no quedó anotado en el PR.";
+      } else envio = fila;
+    }
+
+    return NextResponse.json({ success: true, emailId: emailResult?.id, filename: pdfFilename, envio, avisoRegistro });
   } catch (err: any) {
     console.error("Email send error:", err);
     return NextResponse.json({ error: err.message || "Error interno del servidor" }, { status: 500 });

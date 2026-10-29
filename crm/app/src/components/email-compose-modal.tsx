@@ -10,6 +10,8 @@ interface EmailComposeModalProps {
   open: boolean;
   onClose: () => void;
   documentType: EmailDocumentType;
+  /** Id del documento (PR): el servidor anota cada envío. */
+  documentId?: string;
   /** Pre-filled recipient email(s) */
   defaultTo?: string;
   /** Pre-filled subject */
@@ -56,6 +58,7 @@ export function EmailComposeModal({
   open,
   onClose,
   documentType,
+  documentId,
   defaultTo = "",
   defaultSubject = "",
   defaultBody = "",
@@ -165,6 +168,7 @@ export function EmailComposeModal({
           pdfFilename: pdfFilename || `${DOC_LABELS[documentType]}.pdf`,
           sociedadId,
           documentType,
+          documentId,
           userEmail,
           ...(extraAttachments.length > 0 ? { extraAttachments } : {}),
         }),
@@ -176,7 +180,7 @@ export function EmailComposeModal({
         setResult({ success: false, message: data.error || "Error al enviar" });
       } else {
         await onSuccess?.(data.emailId, emails);
-        setResult({ success: true, message: `Email enviado correctamente a ${emails.join(", ")}` });
+        setResult({ success: true, message: `Email enviado correctamente a ${emails.join(", ")}${data.avisoRegistro ? `. ${data.avisoRegistro}` : ""}` });
       }
     } catch (err: any) {
       setResult({ success: false, message: err.message || "Error de conexión" });

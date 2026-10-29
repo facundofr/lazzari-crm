@@ -44,6 +44,7 @@ import { RemitoVentana } from "@/components/remito-ventana";
 import { traerSaldoUnCliente } from "@/lib/cuenta-corriente-cliente";
 import { VentaCaidaOCs } from "@/components/presupuestos/venta-caida-ocs";
 import { superaLimiteCredito } from "@/lib/saldo-clientes";
+import { enviosPorPR, textoEnvio, type EnvioPR } from "@/lib/presupuesto-envios";
 import { parseCantidadAR, textoCantidadValido, numeroAEditable, formatCantidad, avisosRenglon, renglonesSinPrecio } from "@/lib/numero-ar";
 import { convertirCostoPR, leerDolaresGuardados, fechaDolarPresupuesto, dolarAtrasado, etiquetaDolar, esCostoUsd, esCostoDivisa, tcParaCosto, type DolaresGuardados } from "@/lib/dolar-presupuesto";
 
@@ -499,6 +500,9 @@ export default function PresupuestosLista() {
   const [vendedorFilter, setVendedorFilter] = useState<string>("");
   const [operadorFilter, setOperadorFilter] = useState<string>("");
   const [vendedores, setVendedores] = useState<{id: string; full_name: string}[]>([]);
+  // Envíos por mail de cada PR (presupuesto_envios, Augusto 28/10): todos, el más nuevo primero.
+  const [envios, setEnvios] = useState<Map<string, EnvioPR[]>>(new Map());
+  const nombreUsuario = (id: string | null) => (id ? vendedores.find(v => v.id === id)?.full_name : null);
 
   // Email modal
   const [emailModal, setEmailModal] = useState<{ open: boolean; id: string; to: string; subject: string; body: string; filename: string }>({ open: false, id: "", to: "", subject: "", body: "", filename: "" });
@@ -897,6 +901,23 @@ export default function PresupuestosLista() {
       } catch { /* ignore */ }
     }
   }
+
+  const cargarEnvios = useCallback(async (ids: string[]) => {
+    if (!ids.length) return;
+    const filas: EnvioPR[] = [];
+    for (let i = 0; i < ids.length; i += 150) {
+      const { data } = await (supabase as any).from("presupuesto_envios")
+        .select("presupuesto_id, enviado_at, enviado_por, enviado_a").in("presupuesto_id", ids.slice(i, i + 150));
+      filas.push(...((data || []) as EnvioPR[]));
+    }
+    const nuevos = enviosPorPR(filas);
+    setEnvios(prev => {
+      const m = new Map(prev);
+      for (const id of ids) { const l = nuevos.get(id); if (l) m.set(id, l); else m.delete(id); }
+      return m;
+    });
+  }, []);
+  useEffect(() => { cargarEnvios(presupuestos.map(p => p.id)); }, [presupuestos, cargarEnvios]);
 
   // Smart filters
   const filterConfigs: FilterConfig[] = [
@@ -2944,6 +2965,11 @@ export default function PresupuestosLista() {
                   <div className="flex items-center gap-1.5">
                     {row.estado === "solicitud" ? <Inbox className="h-3.5 w-3.5 text-blue-400" /> : <FileText className="h-3.5 w-3.5 text-zinc-400" />}
                     <span className="font-mono text-xs font-bold whitespace-nowrap">{row.estado === "solicitud" ? row.numero.replace("PR-", "SOL-") : row.numero}</span>
+                    {(envios.get(row.id)?.length ?? 0) > 0 && (
+                      <span className="flex items-center gap-0.5 text-[10px] text-emerald-600 dark:text-emerald-400" title={`Enviado por mail:\n${envios.get(row.id)!.map(e => textoEnvio(e, nombreUsuario)).join("\n")}`}>
+                        <Mail className="h-3 w-3" />{envios.get(row.id)!.length > 1 ? envios.get(row.id)!.length : ""}
+                      </span>
+                    )}
                   </div>
                 ),
               },
@@ -3369,7 +3395,14 @@ export default function PresupuestosLista() {
                   usuario={profile?.full_name || undefined}
                   onGuardado={async (c) => { setSelected({ ...selected, ...c, ocCliente: c.ocCliente ?? (selected as any).ocCliente, ocClienteFecha: c.ocClienteFecha ?? (selected as any).ocClienteFecha, archivoUrl: c.archivoUrl ?? (selected as any).archivoUrl, archivoNombre: c.archivoNombre ?? (selected as any).archivoNombre, notasInternas: c.notasInternas ?? selected.notasInternas } as any); await fetchPresupuestos(); }}
                 />
-                {selected.enviadoAt && (
+                {(envios.get(selected.id)?.length ?? 0) > 0 ? (
+                  <div className="col-span-full">
+                    <p className="text-xs text-zinc-500">Enviado por mail ({envios.get(selected.id)!.length})</p>
+                    {envios.get(selected.id)!.map((e, i) => (
+                      <p key={i} className="flex items-center gap-1 text-sm"><Mail className="h-3.5 w-3.5 shrink-0 text-emerald-600" />{textoEnvio(e, nombreUsuario)}</p>
+                    ))}
+                  </div>
+                ) : selected.enviadoAt && (
                   <div>
                     <p className="text-xs text-zinc-500">Enviado</p>
                     <p className="text-sm font-medium">{formatDate(selected.enviadoAt)}</p>
@@ -4714,6 +4747,8 @@ export default function PresupuestosLista() {
         open={emailModal.open}
         onClose={() => setEmailModal(prev => ({ ...prev, open: false }))}
         documentType="presupuesto"
+        documentId={emailModal.id}
+        onSuccess={() => cargarEnvios([emailModal.id])}
         sociedadId={sociedadActiva?.id}
         userEmail={profile?.email ? `${profile.full_name || "Lazzari"} <${profile.email}>` : undefined}
         defaultTo={emailModal.to}
