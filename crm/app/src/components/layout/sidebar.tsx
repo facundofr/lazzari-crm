@@ -25,7 +25,6 @@ import {
   MailCheck,
   Shirt,
   Zap,
-  Scissors,
   FileSearch,
   Sparkles,
 } from "lucide-react";
@@ -57,7 +56,6 @@ const navigation: { grupo: string; items: { name: string; href: string; icon: ty
   { grupo: "Comprar", items: [
     { name: "Proveedores", href: "/proveedores", icon: Factory, module: "proveedores" },
     { name: "Compras Lazza", href: "/compras-lazza", icon: ShoppingCart, module: "compras_nueva" },
-    { name: "Personalización", href: "/personalizacion", icon: Scissors, module: "ordenes_compra", oculto: true },
   ] },
   { grupo: "Entregar", items: [
     { name: "Remitos", href: "/remitos", icon: Receipt, module: "remitos" },

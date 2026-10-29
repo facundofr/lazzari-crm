@@ -67,7 +67,7 @@ export const GUIA_SECCIONES: SeccionGuia[] = [
     "titulo": "Proveedores",
     "ruta": "/proveedores",
     "modulo": "proveedores",
-    "texto": "**Para qué sirve:** ficha de cada proveedor (fiscales, administración, vendedores, \"Cómo se le paga\", banco, deuda) y pestañas **Lista de costos** y **Listas de precios**.\n**Cómo se hace:** 1) **Nuevo proveedor** → CUIT → **Buscar en ARCA**; **Leer papeles con IA (ARCA, CBU…)** completa lo vacío → **Crear**. 2) \"Vendedores (a ellos se les mandan las OC)\" → **Agregar vendedor** (mail/WhatsApp de administración solo para facturas y pagos). 3) **Cómo se le paga**: condición, \"Se paga a (desde factura)\", medio, \"Cheque diferido a\" (\"Queda así: …\"). 4) Deuda: filtro **Con deuda**, **Ver cuenta corriente →**. 5) **Eliminar** con **Motivo**; para pausar, **Desactivar** / **Reactivar**. 6) \"¿Es transporte o taller?\" para que aparezca en Transportes o Personalización.\n**Ojo:** con historial no se borra, se desactiva. Días de pago desde la fecha de factura. **Lista de costos** es solo consulta: los precios vienen del catálogo, nunca se cambian a mano. Semáforo 🟢 ≤30 días, 🟡 30-60, 🔴 >60 → **Pedir actualización**. BCRA de proveedores: Finanzas → Informes (aviso)."
+    "texto": "**Para qué sirve:** ficha de cada proveedor (fiscales, administración, vendedores, \"Cómo se le paga\", banco, deuda) y pestañas **Lista de costos** y **Listas de precios**.\n**Cómo se hace:** 1) **Nuevo proveedor** → CUIT → **Buscar en ARCA**; **Leer papeles con IA (ARCA, CBU…)** completa lo vacío → **Crear**. 2) \"Vendedores (a ellos se les mandan las OC)\" → **Agregar vendedor** (mail/WhatsApp de administración solo para facturas y pagos). 3) **Cómo se le paga**: condición, \"Se paga a (desde factura)\", medio, \"Cheque diferido a\" (\"Queda así: …\"). 4) Deuda: filtro **Con deuda**, **Ver cuenta corriente →**. 5) **Eliminar** con **Motivo**; para pausar, **Desactivar** / **Reactivar**. 6) \"¿Es transporte o taller?\" para que aparezca en Transportes o en el filtro **Talleres**.\n**Ojo:** con historial no se borra, se desactiva. Días de pago desde la fecha de factura. **Lista de costos** es solo consulta: los precios vienen del catálogo, nunca se cambian a mano. Semáforo 🟢 ≤30 días, 🟡 30-60, 🔴 >60 → **Pedir actualización**. BCRA de proveedores: Finanzas → Informes (aviso)."
   },
   {
     "id": "comprar-compras-lazza-ordenes-de-compra",
@@ -84,14 +84,6 @@ export const GUIA_SECCIONES: SeccionGuia[] = [
     "ruta": "/compras-lazza",
     "modulo": "ordenes_compra",
     "texto": "**Para qué sirve:** cargar la factura o nota de crédito del proveedor: va directo a su cuenta corriente (no se ata a ninguna OC).\n**Cómo se hace:** 1) **Cargar factura** → subí el PDF: lee el **QR de ARCA** o el texto, sin IA (\"Buscando proveedor…\" y lo encuentra por CUIT). **Leer con IA** es opcional (para ver los artículos). 2) Revisá tipo, número, neto, IVA, percepciones y total. 3) \"¿Cómo se paga?\": **Va a Pagos** (transferencia o eCheq a __ días: calcula el vencimiento) o **Ya pagada con Visa**. 4) **Nota para Finanzas** (opcional) → **Guardar**.\n**Ojo:** si al proveedor le falta el mail o el CBU/alias, lo pide y lo guarda en su ficha. La nota de crédito queda como crédito del proveedor."
-  },
-  {
-    "id": "comprar-personalizacion",
-    "grupo": "Comprar",
-    "titulo": "Personalización",
-    "ruta": "/personalizacion",
-    "modulo": "ordenes_compra",
-    "texto": "**Para qué sirve:** bordados y estampados en talleres externos: qué se lleva, cuánto cuesta, liquidación del mes.\n**Cómo se hace:** 1) **Talleres y precios** → **Nuevo** (o marcar un proveedor como taller) y su lista por técnica. 2) **Nuevo trabajo**: taller, cliente, PR; **Traer prendas del presupuesto**; técnica, ubicación, logo. 3) Estado: En el taller → Listo parcial / Listo → Retirado; cargá **Listas** y **Fallas**. 4) Logos por cliente (técnica, ubicación, taller, último costo). 5) **Generar liquidación interna** o **Liquidar con su factura**.\n**Ojo:** el costo se completa solo (✨). Liquidar es de administración. Si el taller factura, la factura se carga antes en Cargar facturas."
   },
   {
     "id": "entregar-remitos",

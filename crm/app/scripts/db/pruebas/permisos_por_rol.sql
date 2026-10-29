@@ -41,7 +41,6 @@ select pg_temp.pr_upd('vendedor', 'proveedores', 'pudo');
 select pg_temp.pr_upd('vendedor', 'clientes', 'pudo');
 select pg_temp.pr_upd('vendedor', 'transportes', 'pudo');
 select pg_temp.pr_upd('vendedor', 'muestra_envios', 'pudo');
-select pg_temp.pr_upd('vendedor', 'personalizacion_trabajos', 'pudo');
 insert into pr_res (quien, prueba, esperado, resultado)
 select 'vendedor', 'ver órdenes de pago', 've', case when count(*) > 0 then 've (' || count(*) || ')' else 'no ve' end from public.ordenes_pago;
 select pg_temp.pr_rpc('vendedor', 'eliminar cliente sin motivo', $q$select public.eliminar_cliente('040ea9ed-4231-49cf-a0e2-d207baa30ae1', '  ')$q$, 'error: pide motivo');

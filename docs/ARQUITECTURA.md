@@ -17,7 +17,7 @@ Sacado de CLAUDE.md para que gaste menos uso. Leer antes de tocar código.
 
 ```
 app/(crm)/          módulos: clientes, proveedores, presupuestos, muestras, oportunidades, ventas,
-                    ordenes-compra (Compras), personalizacion, remitos, transportes, finanzas,
+                    compras-lazza (Compras), remitos, transportes, finanzas,
                     facturacion, reportes, dashboard, calendario, stock, configuracion, papelera
 app/api/            rutas de servidor (IA, ARCA, BCRA, crons, email)
 components/         componentes grandes (conciliacion-compras, cargar-factura-oc, plan-pagos,
@@ -53,9 +53,8 @@ supabase/migrations + supabase/rollback   (en crm/app)
   - Las órdenes de pago usan las RPC seguras `registrar_pago_proveedor_seguro` y `registrar_pago_proveedor_con_nc`, con `request_key` idempotente.
   - El **Plan de pagos** (`pagos_lotes`) calcula la retención de Ganancias RG 830 por mes acumulado y arma el resumen bancario, que se exporta a Excel.
   - Los comprobantes se cargan en masa con IA.
-- **Personalización**:
-  - Los talleres son proveedores con `es_personalizador`.
-  - Se registran trabajos, logos por cliente y la liquidación mensual (con factura o con liquidación interna, que genera una "FC Manual").
+- **Personalización**: la pantalla se borró el 29/10/2026 (nunca se usó; `/personalizacion` redirige a Compras Lazza).
+  - Los talleres siguen siendo proveedores con `es_personalizador` (filtro Talleres en Proveedores). Las tablas `personalizacion_*` se borraron (migración 20261029180000; estaban vacías).
 - **Muestras**:
   - Renglones libres o tomados de la lista de costos, con valor opcional.
   - Cada renglón termina como Devolvió, Se la quedó o Baja/regalo.

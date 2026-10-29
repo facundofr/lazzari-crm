@@ -482,7 +482,7 @@ export function ProveedorFormModal({
                 </select>
               )}
               <span className="text-[11px] text-zinc-400">
-                {form.es_personalizador && form.es_transportista ? "Aparece en Personalización y en el catálogo de Transportes." : form.es_personalizador ? "Aparece en Personalización." : form.es_transportista ? "Aparece en el catálogo de Transportes." : ""}
+                {form.es_personalizador && form.es_transportista ? "Aparece en Proveedores > Talleres y en el catálogo de Transportes." : form.es_personalizador ? "Aparece en Proveedores > Talleres." : form.es_transportista ? "Aparece en el catálogo de Transportes." : ""}
               </span>
             </div>
           </SeccionModal>

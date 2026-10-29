@@ -31,7 +31,7 @@ const SINONIMOS: Record<string, string[]> = {
   echeq: ["cheque", "e-cheq"], retencion: ["retenciones"], sicore: ["retenciones"],
   cobrar: ["cobro"], pagar: ["pago"], flete: ["envio", "transporte"], envio: ["flete"],
   vep: ["impuesto"], banco: ["extracto"], afip: ["arca"], borrar: ["eliminar", "anular"], eliminar: ["anular"],
-  qr: ["carga manual"], bordado: ["personalizacion", "taller"], estampado: ["personalizacion", "taller"],
+  qr: ["carga manual"], bordado: ["taller"], estampado: ["taller"],
   whatsapp: ["copiar resumen"],
 };
 
