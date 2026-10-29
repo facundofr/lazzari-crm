@@ -476,6 +476,13 @@ export function EmitirFacturaModal({
         fce_cbu: ["FCEA", "FCEB"].includes(emitData.tipo) ? emitData.fce_cbu : undefined,
         fce_transmision: ["FCEA", "FCEB"].includes(emitData.tipo) ? emitData.fce_transmision : undefined,
       });
+      // Auditoría H13: autorizada por ARCA pero todavía sin guardar en el CRM. No se marca el PR ni el resto (lo hace la base al
+      // registrarla); se pide reintentar con el mismo formulario, que usa la misma clave y NO vuelve a emitir.
+      if (data.success && data.reconciliation_required) {
+        setEmitError(`${data.warning || "La factura fue autorizada por ARCA, pero no se guardó en el CRM."} (${data.factura?.comprobante || "sin número"}, CAE ${data.factura?.cae || "—"})`);
+        setEmitStep("error");
+        return;
+      }
       if (data.success) {
         await marcarPresupuestoFacturado();
         await guardarResto(data.factura.id);

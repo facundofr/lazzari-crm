@@ -33,7 +33,7 @@ export function LineaPremio({ neto, periodo }: { neto: number; periodo: string }
 
 /** Tarjeta de Gastos: los premios del mes anterior (los que se pagan con el sueldo de este mes). Solo en Lazzari. */
 export function PremiosCarga({ sociedadId, periodo, onCargado }: { sociedadId: string; periodo: string; onCargado: () => void }) {
-  const { sociedadActiva, profile } = useUser();
+  const { sociedadActiva } = useUser();
   const { toast } = useToast();
   const [estado, setEstado] = useState<{ mes: string; neto: number; faltan: ReturnType<typeof premiosPorCargar>; hechos: number } | null>(null);
   const [error, setError] = useState(false);
@@ -77,17 +77,14 @@ export function PremiosCarga({ sociedadId, periodo, onCargado }: { sociedadId: s
     let fallas = 0;
     for (const x of estado.faltan) {
       const fecha = todayAR();
-      const { data: nuevo, error: e } = await db.from("gastos_manuales").insert({
-        sociedad_id: sociedadId, fecha, descripcion: x.detalle, categoria: "Premios", grupo: "Premios", monto: x.monto, moneda: "ARS",
-        medio_pago: "transferencia", tipo_gasto: "general", tipo_recurrencia: "eventual",
-        notas: `Premio del mes de ${nombre}: nivel ${p.nivel === "muy_bueno" ? "Muy bueno" : "Bueno"} sobre el neto facturado.`, created_by: profile?.id || null,
-      }).select("id").single();
-      if (e || !nuevo) { fallas++; toast.error(`No se pudo cargar el premio de ${x.persona}: ${e?.message || "sin respuesta"}`); continue; }
-      const { error: e2 } = await db.from("movimientos").insert({
-        tipo: "pago", descripcion: `Gasto — Premios — ${x.detalle}`, monto: x.monto, moneda: "ARS", fecha, conciliado: false, gasto_manual_id: nuevo.id,
-        sociedad_id: sociedadId, created_by: profile?.id || null,
+      // Auditoría H21: gasto y pago juntos en la base (crear_gasto_con_pago).
+      const { error: e } = await db.rpc("crear_gasto_con_pago", {
+        p_sociedad_id: sociedadId,
+        p_gasto: { fecha, descripcion: x.detalle, categoria: "Premios", grupo: "Premios", monto: x.monto, moneda: "ARS", medio_pago: "transferencia",
+          tipo_gasto: "general", tipo_recurrencia: "eventual", notas: `Premio del mes de ${nombre}: nivel ${p.nivel === "muy_bueno" ? "Muy bueno" : "Bueno"} sobre el neto facturado.` },
+        p_descripcion_pago: `Gasto — Premios — ${x.detalle}`,
       });
-      if (e2) toast.warning(`El premio de ${x.persona} se cargó, pero no su pago en Movimientos: ${e2.message}`);
+      if (e) { fallas++; toast.error(`No se pudo cargar el premio de ${x.persona}: ${e.message}`); continue; }
     }
     setCargando(false);
     if (!fallas) toast.success(`Premios de ${nombre} cargados`);

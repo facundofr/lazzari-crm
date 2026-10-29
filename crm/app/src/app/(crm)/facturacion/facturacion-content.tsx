@@ -492,6 +492,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+        // Auditoría H13: autorizada pero sin guardar en el CRM: no se marca el PR (lo hace la base al registrarla al reintentar).
+        if (data.reconciliation_required) throw new Error(`${data.warning || "Autorizada por ARCA pero sin guardar en el CRM."} (${data.factura?.comprobante || ""}, CAE ${data.factura?.cae || "—"})`);
         const { error: updateError } = await (supabase as any).from("presupuestos").update({ estado: "facturado" }).eq("id", pr.id).eq("sociedad_id", sociedadActiva.id);
         resultados.push({ id: pr.id, numero: pr.numero, ok: true, comprobante: data.factura?.comprobante, error: updateError ? "Factura emitida; no se pudo actualizar el estado del presupuesto" : undefined });
       } catch (err: any) {
@@ -505,28 +507,37 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   }
 
   // ── Detail actions ─────────────────────────────────────────────
+  // Auditoría H31 (29/10/2026): anular y revertir una factura sin CAE van en la base, en una transacción
+  // (gestionar_factura_manual): lo cobrado queda a favor del cliente y el PR vuelve a "facturar" (y al revés al revertir).
+  async function gestionarFacturaManual(id: string, accion: "anular" | "revertir"): Promise<{ estado?: string; avisos: string[] } | null> {
+    const { data, error } = await (supabase as any).rpc("gestionar_factura_manual", { p_factura_id: id, p_accion: accion });
+    if (error) {
+      const falta = error.code === "PGRST202" || error.code === "42883" || /Could not find the function|does not exist/i.test(String(error.message || ""));
+      alert(falta ? "Falta correr la migración 20261029110000 (anular factura sin CAE)." : error.message);
+      return null;
+    }
+    return { estado: data?.estado, avisos: Array.isArray(data?.avisos) ? data.avisos.map(String) : [] };
+  }
+
   async function handleAnular(id: string) {
-    if (!confirm("¿Seguro que queres anular esta factura?")) return;
+    if (!confirm("¿Seguro que queres anular esta factura? Si tiene cobros, quedan a favor del cliente.")) return;
     try {
-      let q = supabase.from("facturas").update({ estado: "anulada" } as any).eq("id", id);
-      if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
-      const { error } = await q;
-      if (error) { alert(error.message); return; }
+      const r = await gestionarFacturaManual(id, "anular");
+      if (!r) return;
       await fetchData();
       if (detailFactura?.id === id) { setDetailFactura(null); setPanelFullscreen(false); }
+      if (r.avisos.length) alert(["Factura anulada.", ...r.avisos].join("\n"));
     } catch (err) { console.error("Error anulando:", err); }
   }
 
   async function handleRevertirAnulacion(id: string) {
-    if (!confirm("¿Revertir la anulación y volver a estado Emitida?")) return;
+    if (!confirm("¿Revertir la anulación? La factura vuelve a quedar vigente (si tenía cobros, vuelven a ella).")) return;
     try {
-      let q = supabase.from("facturas").update({ estado: "emitida" } as any).eq("id", id);
-      if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
-      const { error } = await q;
-      if (error) { alert(error.message); return; }
+      const r = await gestionarFacturaManual(id, "revertir");
+      if (!r) return;
       await fetchData();
-      if (detailFactura?.id === id) setDetailFactura(prev => prev ? { ...prev, estado: "emitida" } : null);
-      alert("Factura revertida a Emitida");
+      if (detailFactura?.id === id) setDetailFactura(prev => prev ? { ...prev, estado: r.estado || "emitida" } : null);
+      alert(["Anulación revertida.", ...r.avisos].join("\n"));
     } catch (err) { alert("Error al revertir: " + (err as Error).message); }
   }
 

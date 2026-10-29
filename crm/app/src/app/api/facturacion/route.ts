@@ -685,6 +685,51 @@ export async function POST(req: NextRequest) {
     const production = process.env.ARCA_PRODUCTION !== "false";
     const emissionKey = req.headers.get("Idempotency-Key");
     if (!validEmissionKey(emissionKey)) return NextResponse.json({ error: "Falta la clave segura de emisión. Actualizá el CRM antes de emitir." }, { status: 400 });
+    // Nota interna que se guarda con la factura (cotización modificada, observaciones de ARCA y datos FCE).
+    const armarNotaFactura = (avisosArca: string[]) => {
+      let nota = requestedRateOverride ? `${nota_interna || ""}\nCotización modificada por augusto@lazzari.com.ar antes de emitir: ${tc} ARS/USD. Fecha indicada: ${String(body.cotizacion_fecha || "sin especificar").slice(0,10)}. Registro: ${new Date().toISOString()}`.trim() : String(nota_interna || "");
+      if (avisosArca.length) nota += `\nObservaciones ARCA: ${avisosArca.join("; ")}`;
+      if (fceData) nota = withFceMetadata(nota, fceData);
+      return nota;
+    };
+    // Auditoría H13 (29/10/2026): la factura común autorizada por ARCA se registra en la base en UNA transacción
+    // (cabecera, renglones y PR "facturado"), idempotente por la clave de emisión. Si falla, el intento queda "authorized"
+    // y al reintentar con la misma clave se registra sin volver a emitir (igual que la nota de crédito).
+    const registrarFacturaComun = (numero: number, caeAut: string, caeVto: string, nota: string) =>
+      supabase.rpc("registrar_factura_venta_autorizada", {
+        p_sociedad_id: sociedad_id,
+        p_request_key: emissionKey,
+        p_factura: {
+          tipo,
+          punto_venta: ptoVta,
+          numero,
+          cliente_id: cliente_id === "consumidor_final" ? null : cliente_id,
+          presupuesto_id: presupuesto_id || null,
+          fecha: fechaFacturaInput,
+          cae: caeAut,
+          cae_vencimiento: caeVto,
+          subtotal: totalNeto,
+          iva: totalIva,
+          total: totalFinal,
+          moneda: isUSD ? "USD" : "ARS",
+          tipo_cambio: isUSD ? tc : null,
+          cotizacion_modalidad: isUSD ? inheritedRateModality : null,
+          oc_cliente: oc_cliente || null,
+          oc_cliente_fecha: oc_cliente_fecha || null,
+          solicitado_por: solicitado_por || null,
+          observaciones: observaciones || null,
+          condicion_venta: condicion_venta || null,
+          fecha_vencimiento: fecha_vencimiento || null,
+          nota_interna: nota || null,
+        },
+        p_items: items.map((item: any, index: number) => ({
+          descripcion: item.descripcion || "Item",
+          cantidad: Number(item.cantidad),
+          precio_unitario: Number(item.precio_unitario),
+          iva_porcentaje: Number(item.iva_porcentaje ?? 21),
+          orden: index,
+        })),
+      });
     const emissionHash = fiscalPayloadHash({ body, production, cuit: arcaConfig.cuit });
     const attempt = await reserveFiscalEmission(supabase, sociedad_id, emissionKey, emissionHash, ptoVta, body);
     if (!attempt.acquired) {
@@ -729,6 +774,29 @@ export async function POST(req: NextRequest) {
             : undefined,
           factura: {...authorized, id: reconciled.factura_id},
           aplicacion: reconciled,
+        };
+        await finishFiscalEmission(supabase, sociedad_id, emissionKey, emissionHash, "completed", 200, completed);
+        return NextResponse.json(completed);
+      }
+      // H13: factura común autorizada que no se pudo registrar: se registra ahora con los datos de ARCA, sin volver a emitir.
+      if (!isSalesCreditNote && attempt.state === "authorized" && attempt.response?.factura) {
+        const authorized = attempt.response.factura as Record<string, unknown>;
+        const { data: registrada, error: registroError } = await registrarFacturaComun(
+          Number(authorized.numero), String(authorized.cae), String(authorized.cae_vencimiento), armarNotaFactura([]),
+        );
+        if (registroError || !registrada?.factura_id) {
+          console.error("Factura autorizada todavía sin registrar:", registroError);
+          return NextResponse.json({
+            ...attempt.response,
+            warning: "La factura fue autorizada por ARCA, pero todavía no se pudo guardar en el CRM. Reintentá con el mismo formulario; no vuelvas a emitir.",
+            reconciliation_required: true,
+          }, { status: 200 });
+        }
+        const completed = {
+          ...attempt.response,
+          reconciliation_required: false,
+          warning: undefined,
+          factura: { ...authorized, id: registrada.factura_id },
         };
         await finishFiscalEmission(supabase, sociedad_id, emissionKey, emissionHash, "completed", 200, completed);
         return NextResponse.json(completed);
@@ -805,10 +873,7 @@ export async function POST(req: NextRequest) {
       factura: { numero: cbteNro, cae, cae_vencimiento: caeFchVto, total: totalFinal, comprobante: `${tipo} ${String(ptoVta).padStart(4, "0")}-${String(cbteNro).padStart(8, "0")}` },
       emission_key: emissionKey,
     });
-    const fechaFactura = fechaFacturaInput;
-    let savedNote = requestedRateOverride ? `${nota_interna || ""}\nCotización modificada por augusto@lazzari.com.ar antes de emitir: ${tc} ARS/USD. Fecha indicada: ${String(body.cotizacion_fecha || "sin especificar").slice(0,10)}. Registro: ${new Date().toISOString()}`.trim() : String(nota_interna || "");
-    if (arcaWarnings.length) savedNote += `\nObservaciones ARCA: ${arcaWarnings.join("; ")}`;
-    if (fceData) savedNote = withFceMetadata(savedNote,fceData);
+    const savedNote = armarNotaFactura(arcaWarnings);
 
     if (isSalesCreditNote) {
       const { data: applied, error: applyError } = await supabase.rpc("registrar_nota_credito_venta_autorizada", {
@@ -865,85 +930,36 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(completedResponse);
     }
 
-    // Save factura to database
-    const { data: factura, error: insertError } = await supabase
-      .from("facturas")
-      .insert({
-        tipo,
-        punto_venta: ptoVta,
-        numero: cbteNro,
-        cliente_id: cliente_id === "consumidor_final" ? null : cliente_id,
-        presupuesto_id: presupuesto_id || null,
-        fecha: fechaFactura,
-        cae,
-        cae_vencimiento: caeFchVto,
-        subtotal: totalNeto,
-        iva: totalIva,
-        total: totalFinal,
-        moneda: isUSD ? "USD" : "ARS",
-        tipo_cambio: isUSD ? tc : null,
-        cotizacion_modalidad: isUSD ? inheritedRateModality : null,
-        estado: "emitida",
-        sociedad_id: arcaConfig.id,
-        factura_origen_id: factura_origen_id || null,
-        oc_cliente: oc_cliente || null,
-        oc_cliente_fecha: oc_cliente_fecha || null,
-        solicitado_por: solicitado_por || null,
-        observaciones: observaciones || null,
-        condicion_venta: condicion_venta || null,
-        fecha_vencimiento: fecha_vencimiento || null,
-        nota_interna: savedNote || null,
-      } as any)
-      .select()
-      .single();
-
-    if (insertError) {
-      console.error("Error guardando factura en DB:", insertError);
+    // Auditoría H13: cabecera, renglones y PR "facturado" en una sola transacción de la base.
+    const comprobanteTexto = `${tipo} ${String(ptoVta).padStart(4, "0")}-${String(cbteNro).padStart(8, "0")}`;
+    const { data: registrada, error: registroError } = await registrarFacturaComun(cbteNro, cae, caeFchVto, savedNote);
+    if (registroError || !registrada?.factura_id) {
+      console.error("Factura autorizada sin registrar en el CRM:", registroError);
+      // El intento queda "authorized" (el punto de venta sigue reservado): al reintentar con la misma clave se registra sin emitir.
       return NextResponse.json({
         success: true,
-        warning: "Factura autorizada por ARCA pero hubo un error al guardar localmente.",
+        warning: "La factura fue autorizada por ARCA, pero no se pudo guardar en el CRM. Reintentá con el mismo formulario; no vuelvas a emitir.",
         reconciliation_required: true,
-        factura: {
-          numero: cbteNro, cae, cae_vencimiento: caeFchVto, total: totalFinal,
-          comprobante: `${tipo} ${String(ptoVta).padStart(4, "0")}-${String(cbteNro).padStart(8, "0")}`,
-        },
-        dbError: insertError.message,
+        factura: { numero: cbteNro, cae, cae_vencimiento: caeFchVto, total: totalFinal, comprobante: comprobanteTexto },
+        emission_key: emissionKey,
+        dbError: registroError?.message,
       });
-    }
-
-    // Save factura_items server-side
-    const facturaItems = items.map((item: any, idx: number) => ({
-      factura_id: factura.id,
-      descripcion: item.descripcion || "Item",
-      cantidad: Number(item.cantidad),
-      precio_unitario: Number(item.precio_unitario),
-      iva_porcentaje: Number(item.iva_porcentaje ?? 21),
-      orden: idx,
-    }));
-
-    const { error: itemsError } = await supabase
-      .from("factura_items")
-      .insert(facturaItems);
-
-    if (itemsError) {
-      console.error("Error guardando factura_items:", itemsError);
     }
 
     const completedResponse = {
       success: true,
-      reconciliation_required: !!itemsError,
-      warning: [...arcaWarnings, ...(itemsError ? ["Factura autorizada, pero sus artículos no se guardaron. No vuelvas a emitir; requiere conciliación local."] : [])].join("; ") || undefined,
+      reconciliation_required: false,
+      warning: arcaWarnings.join("; ") || undefined,
       factura: {
-        id: factura.id,
+        id: registrada.factura_id,
         numero: cbteNro,
         cae,
         cae_vencimiento: caeFchVto,
         total: totalFinal,
-        comprobante: `${tipo} ${String(ptoVta).padStart(4, "0")}-${String(cbteNro).padStart(8, "0")}`,
+        comprobante: comprobanteTexto,
       },
     };
-    // Keep the PV reserved if item persistence failed; reconciliation must finish it.
-    if (!itemsError) await finishFiscalEmission(supabase, sociedad_id, emissionKey, emissionHash, "completed", 200, completedResponse);
+    await finishFiscalEmission(supabase, sociedad_id, emissionKey, emissionHash, "completed", 200, completedResponse);
     return NextResponse.json(completedResponse);
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);

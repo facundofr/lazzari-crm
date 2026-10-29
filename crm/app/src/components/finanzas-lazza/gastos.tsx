@@ -13,7 +13,6 @@ import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetState
 import { AlertTriangle, ArrowDown, ArrowUp, ChevronsUpDown, Loader2, Paperclip, Pencil, Plus, Search, Sparkles, Trash2, Undo2, X } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
-import { useUser } from "@/lib/auth-context";
 import { useToast } from "@/components/ui/toast";
 import { Select } from "@/components/ui/input";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
@@ -49,7 +48,6 @@ interface Sicore { mes: string; monto: number }
 const nombreDeMes = (mes: string) => `${MESES[Number(mes.slice(5, 7)) - 1]} ${mes.slice(0, 4)}`;
 
 export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: string; periodo: string }) {
-  const { profile } = useUser();
   const { toast } = useToast();
   const [gastos, setGastos] = useState<GastoRow[] | null>(null);
   const [fijos, setFijos] = useState<FijoRow[]>([]);
@@ -181,15 +179,13 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
           if (e2) toast.warning(`Gasto guardado, pero su pago en Movimientos no se pudo actualizar: ${e2.message}`);
         }
       } else {
-        const { data: nuevo, error: e } = await db.from("gastos_manuales").insert({
-          ...datos, sociedad_id: sociedadId, categoria: b.grupo, tipo_gasto: "general", notas: b.nota || "", gasto_fijo_id: b.fijoId, created_by: profile?.id || null,
-        }).select("id").single();
-        if (e) throw e;
-        const { error: e2 } = await db.from("movimientos").insert({
-          tipo: "pago", descripcion: descMov, monto, moneda: b.moneda, fecha: b.fecha, conciliado: false, gasto_manual_id: nuevo.id,
-          sociedad_id: sociedadId, created_by: profile?.id || null,
+        // Auditoría H21 (29/10/2026): el gasto y su pago se crean juntos en la base, o no se crea nada.
+        const { error: e } = await db.rpc("crear_gasto_con_pago", {
+          p_sociedad_id: sociedadId,
+          p_gasto: { ...datos, categoria: b.grupo, tipo_gasto: "general", notas: b.nota || "", gasto_fijo_id: b.fijoId },
+          p_descripcion_pago: descMov,
         });
-        if (e2) toast.warning(`Gasto guardado, pero no se pudo registrar su pago en Movimientos: ${e2.message}`);
+        if (e) throw new Error(faltaFuncion(e) ? "Falta correr la migración 20261029100000 (alta y baja de gastos)." : e.message);
       }
       setBorrador(null);
       toast.success("Gasto guardado");
@@ -206,21 +202,15 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
     if (!ids.length) return;
     if (preguntar && !confirm(ids.length === 1 ? "¿Borrar este gasto? Su pago en Movimientos se anula (queda el registro)." : `¿Borrar estos ${ids.length} gastos? Sus pagos se anulan (queda el registro).`)) return;
     let fallas = 0;
+    // Auditoría H21 (29/10/2026): anular los pagos y borrar el gasto van juntos en la base; si algo falla, no se borra nada.
     for (const id of ids) {
-      for (const p of pagosDe(id).length ? pagosDe(id) : await traerPagos(id)) {
-        const { error: e } = await db.rpc("gestionar_cobro", { p_movimiento_id: p.id, p_accion: "anular" });
-        if (e) { fallas++; toast.error(`No se pudo anular el pago: ${e.message}`); }
-      }
-      const { error: e } = await db.from("gastos_manuales").delete().eq("id", id).eq("sociedad_id", sociedadId);
-      if (e) { fallas++; toast.error(`No se pudo borrar el gasto: ${e.message}`); }
+      const { data, error: e } = await db.rpc("borrar_gasto", { p_gasto_id: id });
+      if (e) { fallas++; toast.error(faltaFuncion(e) ? "Falta correr la migración 20261029100000 (alta y baja de gastos)." : `No se pudo borrar el gasto: ${e.message}`); continue; }
+      for (const a of (data?.avisos as unknown[]) || []) toast.info(String(a));
     }
     if (!fallas) toast.success(ids.length === 1 ? "Gasto borrado" : `${ids.length} gastos borrados`);
     recargar();
   }
-  const traerPagos = async (gastoId: string): Promise<{ id: string }[]> => {
-    const { data } = await db.from("movimientos").select("id").eq("sociedad_id", sociedadId).eq("anulado", false).eq("gasto_manual_id", gastoId);
-    return data || [];
-  };
 
   const nuevo = (): Borrador => ({ id: null, fecha: esMesActual ? hoy : `${periodo}-01`, grupo: "Operativos", detalle: "", fijo: false, medio: "transferencia", monto: "", moneda: "ARS", fijoId: null });
   const desdeFila = (f: FilaGasto): Borrador => {

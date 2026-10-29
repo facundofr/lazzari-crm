@@ -1,7 +1,7 @@
 // Execute the actual route with in-memory dependencies. NEVER contacts ARCA/DB.
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),ts=require('typescript'),assert=require('node:assert/strict');
 const society='eee2a3c8-fe6c-494d-bd2f-7a5d8067d021';
-let allowed=true,obligado=true,wsCalls=0,emissions=[],origin='FCEA',fceState='PendienteRecepcion',saved=[],rpcCalls=[],failNcPersist=false,timeout=false,failTable=null,preflight=false;
+let allowed=true,obligado=true,wsCalls=0,emissions=[],origin='FCEA',fceState='PendienteRecepcion',saved=[],rpcCalls=[],failNcPersist=false,failFacturaPersist=false,timeout=false,failTable=null,preflight=false;
 const attempts=new Map();
 const client={id:'client',sociedad_id:society,cuit:'30641405554',condicion_iva:'RI',razon_social:'Test'};
 const db={auth:{getUser:async()=>({data:{user:{id:'user',email:'augusto@lazzari.com.ar'}}})},from(table){let cols='',inserted=null,filters={};const q={
@@ -11,6 +11,10 @@ const db={auth:{getUser:async()=>({data:{user:{id:'user',email:'augusto@lazzari.
  };return q;}};
 db.rpc=async(name,p)=>{
  rpcCalls.push({name,p});
+ if(name==='registrar_factura_venta_autorizada'){
+  if(failFacturaPersist)return {data:null,error:{message:'simulated invoice persistence failure'}};
+  saved.push({table:'facturas',v:p.p_factura});return {data:{factura_id:'fa-new',replayed:false},error:null};
+ }
  if(name==='registrar_nota_credito_venta_autorizada'){
   if(failNcPersist)return {data:null,error:{message:'simulated NC persistence failure'}};
   return {data:{factura_id:'nc-new',factura_origen_id:p.p_factura_origen_id,credito_aplicado:p.p_factura.total,saldo_a_favor:0,saldo_restante:0},error:null};
@@ -40,6 +44,7 @@ const context={exports:{},console:{error(){}},Buffer,URL,Date:FixedDate,Intl,pro
  if(name==='@/lib/invoice-exchange-rate')return {getInvoiceExchangeRate:async()=>({valor_venta:1500,fecha:'2026-09-11'})};
  if(name==='@/lib/invoice-rate-permission')return {canOverrideInvoiceRate:()=>true};
  if(name==='@/lib/factura-moneda'){const m={exports:{},require};vm.runInNewContext(ts.transpileModule(fs.readFileSync('src/lib/factura-moneda.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,m);return m.exports;}
+ if(name==='@/lib/documento-cliente'){const m={exports:{},require};vm.runInNewContext(ts.transpileModule(fs.readFileSync('src/lib/documento-cliente.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,m);return m.exports;}
  if(name==='@/lib/fce-invoice')return helper.exports;
  throw new Error(`Unexpected dependency ${name}`);
 }};
@@ -73,10 +78,9 @@ const cbu='0720000'+digit('0720000',[7,1,3,9,7,1,3])+'2000000123456'+digit('2000
  attempts.clear();emissions=[];timeout=true;r=await post(small);assert.equal(r.status,500);
  timeout=false;r=await post(small);assert.equal(r.status,409);assert.equal(emissions.length,1,'uncertain retry must not emit');
  r=await post(small,'22222222-2222-4222-8222-222222222222');assert.equal(r.status,500);assert.equal(emissions.length,1,'other intent blocked while PV unresolved');
- for(const table of ['facturas','factura_items']){
-  attempts.clear();emissions=[];failTable=table;r=await post(small);assert.equal(r.status,200);assert.equal(r.data.reconciliation_required,true);assert.equal([...attempts.values()][0].state,'authorized');
-  failTable=null;r=await post(small);assert.equal(r.data.factura.cae,'12345678901234');assert.equal(r.data.reconciliation_required,true);assert.equal(emissions.length,1,'DB failure retry must return original CAE, not emit');
- }
+ // H13: si falla el registro de la factura común después del CAE, queda "authorized" y al reintentar se registra SIN volver a emitir.
+ attempts.clear();emissions=[];failFacturaPersist=true;r=await post(small);assert.equal(r.status,200);assert.equal(r.data.reconciliation_required,true);assert.equal([...attempts.values()][0].state,'authorized');
+ failFacturaPersist=false;rpcCalls=[];r=await post(small);assert.equal(r.data.factura.cae,'12345678901234');assert.equal(r.data.reconciliation_required,false);assert.equal(r.data.factura.id,'fa-new');assert.equal(emissions.length,1,'recovery after CAE must not emit again');assert.equal([...attempts.values()][0].state,'completed');assert.ok(rpcCalls.some(x=>x.name==='registrar_factura_venta_autorizada'&&x.p.p_items.length===1&&x.p.p_factura.cae==='12345678901234'));
  attempts.clear();emissions=[];preflight=true;r=await post(small);assert.equal(r.status,422);assert.equal(r.data.emission_completed,true);assert.equal([...attempts.values()][0].state,'completed');assert.equal(emissions.length,0);
  preflight=false;r=await post(small,'33333333-3333-4333-8333-333333333333');assert.equal(r.status,200);assert.equal(emissions.length,1,'preflight failure releases PV safely');
  console.log('OK actual POST/GET route plus concurrent requests, completed replay, changed payload, uncertain retry, PV locking, CAE recovery after invoice/items DB failure and safe pre-send failure. MOCKS ONLY; no network/fiscal emission.');

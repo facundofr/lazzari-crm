@@ -31,8 +31,9 @@ export async function createFactura(data: Record<string, unknown>) {
   return result;
 }
 
+/** Anula una factura sin CAE con la función de la base (auditoría H31): cobros a favor del cliente y PR a "facturar". */
 export async function anularFactura(id: string) {
-  const { error } = await supabase.from("facturas").update({ estado: "anulada" }).eq("id", id);
+  const { error } = await (supabase as any).rpc("gestionar_factura_manual", { p_factura_id: id, p_accion: "anular" });
   if (error) throw error;
 }
 

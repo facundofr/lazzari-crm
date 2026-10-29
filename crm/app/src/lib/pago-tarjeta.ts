@@ -38,15 +38,14 @@ export async function traerTarjetas(db: any, sociedadId: string): Promise<Tarjet
 }
 
 /**
- * Registra el pago con tarjeta de una factura ya guardada y la deja "pagada".
- * La función de la base controla sociedad, tarjeta y que no se duplique; si todavía no está, inserta el movimiento directo.
+ * Registra el pago con tarjeta de una factura ya guardada y la deja "pagada", todo junto en la función de la base
+ * (controla sociedad, tarjeta y que no se duplique).
+ * Auditoría H48 (29/10/2026): ya no hay "plan B" en el navegador (marcar pagada y después insertar el pago, en dos pasos que
+ * podían quedar a medias). Si la función no está, avisa y la factura queda cargada sin el pago. `_respaldo` queda solo por compatibilidad.
  */
-export async function registrarPagoTarjeta(db: any, facturaId: string, tarjeta: Tarjeta, respaldo: ReturnType<typeof movimientoPagoTarjeta>): Promise<{ error?: string }> {
+export async function registrarPagoTarjeta(db: any, facturaId: string, tarjeta: Tarjeta, _respaldo?: ReturnType<typeof movimientoPagoTarjeta>): Promise<{ error?: string }> {
   const { error } = await db.rpc("registrar_pago_tarjeta_factura_compra", { p_factura_id: facturaId, p_cuenta_id: tarjeta.id });
   if (!error) return {};
-  if (!faltaFuncion(error)) return { error: error.message };
-  const { error: eEstado } = await db.from("facturas_compra").update({ estado: "pagada" }).eq("id", facturaId);
-  if (eEstado) return { error: eEstado.message };
-  const { error: eMov } = await db.from("movimientos").insert(respaldo);
-  return eMov ? { error: eMov.message } : {};
+  if (faltaFuncion(error)) return { error: "Falta la función de la base para el pago con tarjeta (migración 20261013220000). La factura quedó cargada sin el pago: avisá a soporte." };
+  return { error: error.message };
 }
