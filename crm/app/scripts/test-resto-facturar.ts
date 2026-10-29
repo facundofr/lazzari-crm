@@ -1,5 +1,5 @@
 // npx tsx scripts/test-resto-facturar.ts
-import { restoSinFacturar, totalesResto, detalleResto } from "../src/lib/resto-facturar";
+import { restoSinFacturar, totalesResto, detalleResto, cartelResto } from "../src/lib/resto-facturar";
 
 let fallas = 0;
 const ok = (cond: boolean, msg: string) => { if (!cond) { fallas++; console.error("FALLA:", msg); } else console.log("ok:", msg); };
@@ -25,6 +25,17 @@ ok(detalleResto(resto).startsWith("800 RESPIRADOR"), "detalle");
 ok(restoSinFacturar(pr, pr.map((it, i) => ({ prIdx: i, cantidad: Number(it.cantidad) }))).length === 0, "todo facturado: sin resto");
 ok(restoSinFacturar(pr, [...pr.map((it, i) => ({ prIdx: i, cantidad: Number(it.cantidad) + 5 })), { cantidad: 3 }]).length === 0, "de más o renglón a mano: sin resto");
 ok(restoSinFacturar([{ descripcion: "A", cantidad: 10, precio_venta: null, iva_porcentaje: 21, total: 121 }], [{ prIdx: 0, cantidad: 4 }])[0].precio_venta === 10, "sin precio_venta: sale del total");
+
+// Cartel del resto dentro del PR (lista de Presupuestos).
+const itemsResto = [{ descripcion: "Respirador N95", cantidad: 800, precio_venta: 1.5, iva_porcentaje: 21, total: 1452 }, { descripcion: "Suspensión H700", cantidad: 12, precio_venta: 2, iva_porcentaje: 21, total: 29.04 }];
+const base = { id: "r", presupuesto_id: "p", moneda: "USD", total: 2022.93, items: itemsResto };
+let c = cartelResto({ ...base, estado: "pendiente" });
+ok(c.pendiente && c.titulo === "Resto a facturar: US$ 2.022,93", "cartel pendiente en US$");
+ok(c.detalle === "800 Respirador N95 · 12 Suspensión H700", "cartel con el detalle");
+c = cartelResto({ ...base, estado: "facturado", factura_resto: { tipo: "FA", punto_venta: 15, numero: 90 } });
+ok(!c.pendiente && c.titulo === "Resto facturado en FA 0015-00000090: US$ 2.022,93", "cartel facturado con el número");
+c = cartelResto({ ...base, moneda: "ARS", total: 1500, estado: "no_facturar" });
+ok(!c.pendiente && c.titulo === "Resto marcado No facturar: $ 1.500,00", "cartel No facturar en pesos");
 
 if (fallas) { console.error(`${fallas} falla(s)`); process.exit(1); }
 console.log("Todo OK");

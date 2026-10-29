@@ -63,3 +63,31 @@ export function totalesResto(items: ItemResto[]): { subtotal: number; total: num
 export function detalleResto(items: ItemResto[]): string {
   return items.map((it) => `${Number(it.cantidad.toFixed(4))} ${it.descripcion}`).join(" · ");
 }
+
+/** Un resto guardado, como lo leen la lista y el panel del PR. */
+export interface RestoPR {
+  id: string;
+  presupuesto_id: string;
+  estado: "pendiente" | "facturado" | "no_facturar";
+  moneda: string;
+  total: number | string;
+  items: ItemResto[];
+  factura_resto?: { tipo: string; punto_venta: number | null; numero: number | null } | null;
+}
+
+function importe(moneda: string, n: number | string): string {
+  const v = (Number(n) || 0).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${moneda === "USD" ? "US$" : "$"} ${v}`;
+}
+
+/** Cartel del resto dentro del PR: pendiente (ámbar, con Ir a Facturar) o ya resuelto (gris). */
+export function cartelResto(r: RestoPR): { pendiente: boolean; titulo: string; detalle: string } {
+  const detalle = detalleResto(r.items || []);
+  if (r.estado === "pendiente") return { pendiente: true, titulo: `Resto a facturar: ${importe(r.moneda, r.total)}`, detalle };
+  if (r.estado === "facturado") {
+    const f = r.factura_resto;
+    const nro = f ? ` en ${f.tipo} ${String(f.punto_venta ?? 0).padStart(4, "0")}-${String(f.numero ?? 0).padStart(8, "0")}` : "";
+    return { pendiente: false, titulo: `Resto facturado${nro}: ${importe(r.moneda, r.total)}`, detalle };
+  }
+  return { pendiente: false, titulo: `Resto marcado No facturar: ${importe(r.moneda, r.total)}`, detalle };
+}

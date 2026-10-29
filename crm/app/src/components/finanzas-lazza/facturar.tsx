@@ -270,7 +270,7 @@ Sale de esta lista; el PR y su factura quedan como están.`)) return;
         <div className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
           <DataTable columns={cols} data={visibles} pageSize={50} emptyMessage={texto ? "No hay PR para facturar con esa búsqueda" : "No hay PR para facturar"} />
           <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-zinc-200 px-3 py-2 text-xs text-zinc-500 dark:border-zinc-700">
-            <span className="text-zinc-400">{visibles.length} PR · {visibles.filter((f) => f.esperandoOc).length} esperando OC</span>
+            <span className="text-zinc-400">{visibles.filter((f) => !f.restoId).length} PR{visibles.some((f) => f.restoId) ? ` · ${visibles.filter((f) => f.restoId).length} resto${visibles.filter((f) => f.restoId).length > 1 ? "s" : ""}` : ""} · {visibles.filter((f) => f.esperandoOc).length} esperando OC</span>
             <span>Neto <b className="font-mono text-zinc-800 dark:text-zinc-100">{plata("neto")}</b></span>
             <span>Total <b className="font-mono text-zinc-800 dark:text-zinc-100">{plata("total")}</b></span>
           </div>

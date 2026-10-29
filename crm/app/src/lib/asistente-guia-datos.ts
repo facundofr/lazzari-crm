@@ -46,14 +46,6 @@ export const GUIA_SECCIONES: SeccionGuia[] = [
     "texto": "**Para qué sirve:** padrón de clientes con datos, contactos, sucursales, cuenta corriente y Ficha 360.\n**Cómo se hace:** 1) **Nuevo cliente** → CUIT → **Consultar ARCA** → **Crear cliente**. 2) Buscar por razón social, CUIT o email, o filtrar. 3) En el cliente: Datos, Contactos, Sucursales, Relevamiento, **Ficha 360**, Actividad, Cta. Cte. 4) Ficha 360: cotizado, ganado, conversión, última compra, saldo, oportunidades, PR, artículos, facturas, cobros y muestras en su poder. 5) Tarjeta **Central de Deudores (BCRA)**: semáforo, deuda en bancos, cheques rechazados; **Actualizar ahora**, **Ver detalle por banco**.\n**Ojo:** \"cliente parecido / CUIT repetido\" y BCRA son avisos: se puede guardar igual. **Pide OC para facturar** lo muestra en Finanzas Lazza → Facturar (no bloquea). **Eliminar** pide motivo; con historial queda desactivado."
   },
   {
-    "id": "vender-oportunidades",
-    "grupo": "Vender",
-    "titulo": "Oportunidades",
-    "ruta": "/oportunidades",
-    "modulo": "clientes",
-    "texto": "**Para qué sirve:** a quién llamar y qué ofrecerle según lo que compró.\n**Cómo se hace:** 1) Filtrá: Le toca reponer, Temporada, Volver a cotizar, Complementario, Cliente dormido. 2) \"Buscar cliente o artículo…\" o vendedor (el vendedor arranca con sus clientes). 3) Tocá el cliente para abrir su ficha.\n**Ojo:** clientes con alerta BCRA salen marcados (informe en Finanzas → Informes). Muestra 200; usá filtros para el resto."
-  },
-  {
     "id": "vender-presupuestos",
     "grupo": "Vender",
     "titulo": "Presupuestos",

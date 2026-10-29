@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
-  Lightbulb,
   LayoutDashboard,
   Users,
   FileText,
@@ -12,7 +11,6 @@ import {
   Truck,
   Package,
   Wallet,
-  BarChart3,
   Settings,
   Trash2,
   LogOut,
@@ -23,7 +21,6 @@ import {
   Sun,
   Moon,
   X,
-  ArrowRightLeft,
   Calendar,
   MailCheck,
   Shirt,
@@ -53,11 +50,9 @@ const navigation: { grupo: string; items: { name: string; href: string; icon: ty
   ] },
   { grupo: "Vender", items: [
     { name: "Clientes", href: "/clientes", icon: Users, module: "clientes" },
-    { name: "Oportunidades", href: "/oportunidades", icon: Lightbulb, module: "clientes", oculto: true },
     { name: "Presupuestos nuevo", href: "/presupuestos-nuevo", icon: Sparkles, module: "presupuestos_nuevo", oculto: true }, // Augusto 20/10: ahora es Presupuestos (el link redirige)
     { name: "Presupuestos", href: "/presupuestos", icon: FileText, module: "presupuestos" },
     { name: "Muestras", href: "/muestras", icon: Shirt, module: "muestras", oculto: true }, // Augusto 20/10: fuera del menú (sigue por link)
-    { name: "Ventas", href: "/ventas", icon: ArrowRightLeft, module: "presupuestos", oculto: true }, // Augusto 20/10: fuera del menú (sigue por link)
     { name: "Facturas", href: "/facturas", icon: FileSearch, module: "consulta_facturas" }, // Augusto 20/10: Facturas de Finanzas Lazza (vendedores solo mirar); la vieja sigue en /consulta-facturas
   ] },
   { grupo: "Comprar", items: [
@@ -75,7 +70,6 @@ const navigation: { grupo: string; items: { name: string; href: string; icon: ty
   ] },
   { grupo: "Plata", items: [
     { name: "Finanzas", href: "/finanzas", icon: Wallet, module: "finanzas", soloRoles: ["super_admin", "administrativo"] }, // Mudanza 23/10: Finanzas es la nueva (ex Finanzas Lazza); la vieja quedó oculta en /finanzas-vieja
-    { name: "Reportes", href: "/reportes", icon: BarChart3, module: "reportes", oculto: true }, // Augusto 20/10: usa Reportes de Finanzas Lazza (sigue por link)
   ] },
 ];
 

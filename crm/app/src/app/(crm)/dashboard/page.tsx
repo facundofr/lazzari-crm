@@ -575,7 +575,7 @@ export default function DashboardPage() {
         )}
 
         {/* Los gráficos históricos (facturación mensual y presupuestos por estado) viven solo en Reportes: acá no se repiten. */}
-        <Link href="/reportes" className="flex items-center justify-between rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm text-zinc-600 hover:border-orange-300 hover:text-orange-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
+        <Link href="/finanzas?seccion=reportes" className="flex items-center justify-between rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm text-zinc-600 hover:border-orange-300 hover:text-orange-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
           <span>Evolución mensual, presupuestos por estado y comparativas</span>
           <span className="flex items-center gap-1 text-xs font-medium text-orange-500">Ver en Reportes <ArrowRight className="h-3 w-3" /></span>
         </Link>

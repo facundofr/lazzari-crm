@@ -46,6 +46,7 @@ import { traerSaldoUnCliente } from "@/lib/cuenta-corriente-cliente";
 import { VentaCaidaOCs } from "@/components/presupuestos/venta-caida-ocs";
 import { superaLimiteCredito } from "@/lib/saldo-clientes";
 import { enviosPorPR, textoEnvio, type EnvioPR } from "@/lib/presupuesto-envios";
+import { cartelResto, type RestoPR } from "@/lib/resto-facturar";
 import { ETIQUETA_ESTADO, type EstadoMail } from "@/lib/correos-enviados";
 import { parseCantidadAR, textoCantidadValido, numeroAEditable, formatCantidad, avisosRenglon, renglonesSinPrecio } from "@/lib/numero-ar";
 import { convertirCostoPR, leerDolaresGuardados, fechaDolarPresupuesto, dolarAtrasado, etiquetaDolar, esCostoUsd, esCostoDivisa, tcParaCosto, type DolaresGuardados } from "@/lib/dolar-presupuesto";
@@ -922,6 +923,20 @@ export default function PresupuestosLista() {
     });
   }, []);
   useEffect(() => { cargarEnvios(presupuestos.map(p => p.id)); }, [presupuestos, cargarEnvios]);
+
+  // Resto a facturar de cada PR (lo que se sacó al facturar; tabla presupuesto_restos_facturar). Si falla, la lista sigue sin la marca.
+  const [restos, setRestos] = useState<Map<string, RestoPR[]>>(new Map());
+  const cargarRestos = useCallback(async () => {
+    if (!sociedadActiva?.id) return;
+    const { data, error } = await (supabase as any).from("presupuesto_restos_facturar")
+      .select("id, presupuesto_id, estado, moneda, total, items, factura_resto:factura_resto_id(tipo, punto_venta, numero)")
+      .eq("sociedad_id", sociedadActiva.id).order("created_at");
+    if (error) { console.error("Presupuestos · restos:", error.message); return; }
+    const m = new Map<string, RestoPR[]>();
+    for (const r of (data || []) as RestoPR[]) m.set(r.presupuesto_id, [...(m.get(r.presupuesto_id) || []), r]);
+    setRestos(m);
+  }, [sociedadActiva?.id]);
+  useEffect(() => { cargarRestos(); }, [presupuestos, cargarRestos]);
 
   // Smart filters
   const filterConfigs: FilterConfig[] = [
@@ -2972,6 +2987,9 @@ export default function PresupuestosLista() {
                         <Mail className="h-3 w-3" />{envios.get(row.id)!.length > 1 ? envios.get(row.id)!.length : ""}
                       </span>
                     )}
+                    {restos.get(row.id)?.some(r => r.estado === "pendiente") && (
+                      <span className="rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" title={restos.get(row.id)!.filter(r => r.estado === "pendiente").map(r => { const c = cartelResto(r); return `${c.titulo}\n${c.detalle}`; }).join("\n")}>resto</span>
+                    )}
                   </div>
                 ),
               },
@@ -3411,6 +3429,19 @@ export default function PresupuestosLista() {
                   </div>
                 )}
               </div>
+
+              {(restos.get(selected.id) || []).map((r) => {
+                const c = cartelResto(r);
+                return (
+                  <div key={r.id} className={`mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm ${c.pendiente ? "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300" : "border-zinc-200 bg-zinc-50 text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-400"}`}>
+                    <div className="min-w-0">
+                      <p className="font-medium">{c.titulo}</p>
+                      <p className="text-xs">{c.detalle}</p>
+                    </div>
+                    {c.pendiente && <a href="/finanzas?seccion=facturar" className="shrink-0 rounded-md bg-amber-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-600">Ir a Facturar</a>}
+                  </div>
+                );
+              })}
 
               {/* Items table */}
               <div className="border-t border-zinc-200 pt-3 dark:border-zinc-700">
