@@ -284,6 +284,7 @@ Sale de esta lista; el PR y su factura quedan como están.`)) return;
           saldoClienteArs={(id) => (saldosClientes ? saldoClienteEn(saldosClientes, id, "ARS") : null)}
           onClose={() => setEmitir(null)}
           onEmitted={() => setRecarga((n) => n + 1)}
+          onOcGuardada={() => setRecarga((n) => n + 1)}
         />
       )}
     </div>

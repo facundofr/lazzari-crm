@@ -12,6 +12,7 @@ import { AvisoBCRA } from "@/components/clientes/bcra-card";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
+import { OcClienteBloque, type OcClienteDatos } from "@/components/presupuestos/oc-cliente-bloque";
 import { canOverrideInvoiceRate } from "@/lib/invoice-rate-permission";
 import { useFiscalDateLimits } from "@/lib/use-fiscal-date-limits";
 import { beginInvoiceIntent, postInvoiceIntent } from "@/lib/invoice-intent";
@@ -27,8 +28,9 @@ import {
   fechaMinimaFactura, fechaAntesDeOc, sugerenciaFechaFactura, leyendaCotizacion, observacionesConCotizacion,
 } from "@/lib/factura-moneda";
 import {
-  AlertTriangle, CheckCircle2, Download, FileCheck, Loader2, Maximize2, Minimize2, Minus, Plus, Search, ShieldCheck, X, XCircle,
+  AlertTriangle, CheckCircle2, Download, FileCheck, Loader2, Mail, Maximize2, Minimize2, Minus, Plus, Search, ShieldCheck, X, XCircle,
 } from "lucide-react";
+import { FichaFacturaVenta } from "@/components/facturas-consulta";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { observacionesParaCliente } from "@/lib/observaciones-cliente";
 import { detalleResto, restoSinFacturar, totalesResto } from "@/lib/resto-facturar";
@@ -95,7 +97,7 @@ function firmaCargado(d: { cliente_id: string; observaciones: string; items: { d
 }
 
 export function EmitirFacturaModal({
-  presupuesto, arcaCertOk, saldoClienteArs, onClose, onEmitted,
+  presupuesto, arcaCertOk, saldoClienteArs, onClose, onEmitted, onOcGuardada,
 }: {
   presupuesto?: PresupuestoAFacturar | null;
   /** false = la sociedad no tiene certificado ARCA: solo manual. */
@@ -104,6 +106,8 @@ export function EmitirFacturaModal({
   saldoClienteArs?: (clienteId: string) => number | null;
   onClose: () => void;
   onEmitted?: (facturaId: string) => void;
+  /** Se cargó o cambió la OC del cliente desde esta ventana (para refrescar la lista de atrás). */
+  onOcGuardada?: () => void;
 }) {
   const { sociedadActiva, profile } = useUser();
   const pr = presupuesto || null;
@@ -116,7 +120,24 @@ export function EmitirFacturaModal({
   // Cliente con DNI: no se factura con ARCA, va manual (Augusto 28/10/2026, lib/documento-cliente).
   const prClienteDni = !!pr && esDni(pr.cliente?.cuit);
   const tipoCliente = pr ? tipoFacturaPorCondicionIva(pr.cliente?.condicion_iva) : "FB";
-  const ocFecha = pr?.oc_cliente_fecha ? String(pr.oc_cliente_fecha).slice(0, 10) : null;
+  // OC del cliente: se puede cargar o cambiar desde acá si no la cargaron en el PR (Augusto 29/10/2026). Se lee del PR al abrir
+  // (con las notas internas, para dejar "EX OC" sin pisarlas) y lo guardado vale para esta factura.
+  const [ocDatos, setOcDatos] = useState<OcClienteDatos | null>(null);
+  // Mandar la factura por mail apenas se emite (Augusto 29/10/2026): la misma ventana de mail que Finanzas > Facturas > Enviar.
+  const [mandarMail, setMandarMail] = useState(false);
+  const [mailEnviado, setMailEnviado] = useState(false);
+  useEffect(() => {
+    if (!pr?.id) return;
+    let vivo = true;
+    (supabase as any).from("presupuestos").select("oc_cliente, oc_cliente_fecha, archivo_url, archivo_nombre, notas_internas").eq("id", pr.id).maybeSingle()
+      .then(({ data }: { data: any }) => {
+        if (vivo && data) setOcDatos({ id: pr.id, ocCliente: data.oc_cliente || "", ocClienteFecha: data.oc_cliente_fecha ? String(data.oc_cliente_fecha).slice(0, 10) : "", archivoUrl: data.archivo_url || "", archivoNombre: data.archivo_nombre || "", notasInternas: data.notas_internas || "" });
+      });
+    return () => { vivo = false; };
+  }, [pr?.id]);
+  const ocNumero = ocDatos ? ocDatos.ocCliente || null : pr?.oc_cliente || null;
+  const ocFechaCruda = ocDatos ? ocDatos.ocClienteFecha || null : pr?.oc_cliente_fecha || null;
+  const ocFecha = ocFechaCruda ? String(ocFechaCruda).slice(0, 10) : null;
 
   const [emitManual, setEmitManual] = useState(forceManual || sourceIsManual || prClienteDni);
   const [rateOverride, setRateOverride] = useState(false);
@@ -405,8 +426,8 @@ export function EmitirFacturaModal({
       items: itemsFactura.map(({ prIdx: _prIdx, ...it }) => it),
       sociedad_id: sociedadActiva?.id,
       presupuesto_id: pr?.id || undefined,
-      oc_cliente: pr?.oc_cliente || null,
-      oc_cliente_fecha: pr?.oc_cliente_fecha || null,
+      oc_cliente: ocNumero,
+      oc_cliente_fecha: ocFecha,
     };
   }
 
@@ -754,7 +775,12 @@ export function EmitirFacturaModal({
             {/* Datos del presupuesto: OC del cliente (siempre a la vista) y observaciones. Las OC a proveedores no van acá. */}
             {pr && (
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-                {(pr.oc_cliente || pr.oc_cliente_fecha || pr.archivo_url) ? (
+                {ocDatos ? (
+                  <div className="basis-full">
+                    <OcClienteBloque pr={ocDatos} sociedadId={sociedadActiva?.id} usuario={profile?.full_name || undefined}
+                      onGuardado={(c) => { setOcDatos((prev) => (prev ? { ...prev, ...c } : prev)); onOcGuardada?.(); }} />
+                  </div>
+                ) : (pr.oc_cliente || pr.oc_cliente_fecha || pr.archivo_url) ? (
                   <span className="flex flex-wrap items-center gap-1.5">
                     <span className="text-zinc-500 font-medium">OC cliente:</span>
                     <span className="font-mono font-bold dark:text-white">{pr.oc_cliente || "Sin número"}</span>
@@ -994,6 +1020,11 @@ export function EmitirFacturaModal({
             </div>
             <div className="flex justify-center gap-3">
               {emitResult.id && (
+                <button onClick={() => setMandarMail(true)} className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600">
+                  <Mail className="h-4 w-4" /> {mailEnviado ? "Enviada · mandar otra vez" : "Enviar por mail"}
+                </button>
+              )}
+              {emitResult.id && (
                 <button onClick={descargarPDF} disabled={descargando} className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60">
                   {descargando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />} Descargar PDF
                 </button>
@@ -1019,6 +1050,9 @@ export function EmitirFacturaModal({
           </div>
         )}
       </div>
+      {mandarMail && emitResult?.id && (
+        <FichaFacturaVenta facturaId={emitResult.id} soloMail onClose={() => setMandarMail(false)} onEnviada={() => setMailEnviado(true)} />
+      )}
     </div>
   );
 }

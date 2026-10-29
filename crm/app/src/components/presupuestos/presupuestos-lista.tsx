@@ -45,7 +45,7 @@ import { RemitoVentana } from "@/components/remito-ventana";
 import { traerSaldoUnCliente } from "@/lib/cuenta-corriente-cliente";
 import { VentaCaidaOCs } from "@/components/presupuestos/venta-caida-ocs";
 import { superaLimiteCredito } from "@/lib/saldo-clientes";
-import { enviosPorPR, textoEnvio, type EnvioPR } from "@/lib/presupuesto-envios";
+import { enviosPorPR, textoEnvio, sugerenciasMailPR, type EnvioPR, type ContactoMail } from "@/lib/presupuesto-envios";
 import { cartelResto, type RestoPR } from "@/lib/resto-facturar";
 import { ETIQUETA_ESTADO, type EstadoMail } from "@/lib/correos-enviados";
 import { parseCantidadAR, textoCantidadValido, numeroAEditable, formatCantidad, avisosRenglon, renglonesSinPrecio } from "@/lib/numero-ar";
@@ -252,6 +252,7 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     id: row.id,
     numero: row.numero,
     clienteId: row.cliente_id,
+    sucursalId: row.sucursal_id ?? undefined,
     clienteNombre: row.clientes?.razon_social ?? "",
     fecha: row.fecha,
     vencimiento: row.vencimiento,
@@ -508,7 +509,7 @@ export default function PresupuestosLista() {
   const nombreUsuario = (id: string | null) => (id ? vendedores.find(v => v.id === id)?.full_name : null);
 
   // Email modal
-  const [emailModal, setEmailModal] = useState<{ open: boolean; id: string; to: string; subject: string; body: string; filename: string }>({ open: false, id: "", to: "", subject: "", body: "", filename: "" });
+  const [emailModal, setEmailModal] = useState<{ open: boolean; id: string; to: string; subject: string; body: string; filename: string; sugeridos: { email: string; label?: string }[] }>({ open: false, id: "", to: "", subject: "", body: "", filename: "", sugeridos: [] });
 
   /** Aviso (nunca frena) antes de enviar o descargar: renglones sin precio. true = seguir. */
   function seguirConFaltantesDePrecio(pr: Presupuesto, accion: string): boolean {
@@ -520,9 +521,17 @@ export default function PresupuestosLista() {
 
   async function openEmailModal(pr: Presupuesto) {
     if (!seguirConFaltantesDePrecio(pr, "Enviar")) return;
-    const contactoEmail = (pr as any).contactoEmail || "";
-    const clientEmail = (pr as any).clienteEmail || "";
-    const emailFact = (pr as any).clienteEmailFacturacion || "";
+    // Contactos del cliente con mail: se sugieren todos (los de facturación no, Augusto 29/10/2026). Si falla, quedan el solicitante y el email del cliente.
+    const { data: contactosCli } = await (supabase as any).from("contactos").select("email, nombre, cargo, sucursal_id")
+      .eq("entity_type", "cliente").eq("entity_id", pr.clienteId).not("email", "is", null).order("principal", { ascending: false });
+    const { para, sugeridos } = sugerenciasMailPR({
+      solicitante: { email: (pr as any).contactoEmail, nombre: (pr as any).contactoNombre },
+      contactos: (contactosCli || []) as ContactoMail[],
+      sucursalId: (pr as any).sucursalId,
+      emailCliente: (pr as any).clienteEmail,
+      emailsFacturacion: (pr as any).clienteEmailFacturacion,
+      creador: { email: (pr as any).creadorEmail, nombre: (pr as any).creadorNombre },
+    });
     const template = await loadEmailTemplate("presupuesto", sociedadActiva?.id || "");
     const vars = {
       numero: pr.numero,
@@ -534,10 +543,9 @@ export default function PresupuestosLista() {
     setEmailModal({
       open: true,
       id: pr.id,
-      // En presupuestos el contacto elegido es quien solicitó la cotización.
-      // Se propone primero, conservando facturación y el email general como
-      // alternativas editables en el compositor.
-      to: contactoEmail || emailFact.split(",")[0]?.trim() || clientEmail,
+      // Va al solicitante del PR; sin solicitante queda vacío y se elige de los contactos sugeridos.
+      to: para,
+      sugeridos,
       subject: applyTemplateVars(template.asunto, vars),
       body: applyTemplateVars(template.cuerpo, vars),
       filename: `${pr.numero}.pdf`,
@@ -4788,24 +4796,7 @@ export default function PresupuestosLista() {
         defaultSubject={emailModal.subject}
         defaultBody={emailModal.body}
         pdfFilename={emailModal.filename}
-        suggestedEmails={(() => {
-          const pr = presupuestos.find(p => p.id === emailModal.id);
-          if (!pr) return [];
-          const suggestions: { email: string; label?: string }[] = [];
-          const contactoEmail = (pr as any).contactoEmail;
-          const clienteEmail = (pr as any).clienteEmail;
-          if (contactoEmail && !suggestions.some(s => s.email === contactoEmail)) suggestions.push({ email: contactoEmail, label: (pr as any).contactoNombre || "Solicitante" });
-          const emailFact = (pr as any).clienteEmailFacturacion;
-          if (emailFact) {
-            for (const e of emailFact.split(",").map((s: string) => s.trim()).filter(Boolean)) {
-              if (!suggestions.some(s => s.email === e)) suggestions.push({ email: e, label: "Facturación" });
-            }
-          }
-          if (clienteEmail && !suggestions.some(s => s.email === clienteEmail)) suggestions.push({ email: clienteEmail, label: "Email cliente" });
-          const creadorEmail = (pr as any).creadorEmail;
-          if (creadorEmail && !suggestions.some(s => s.email === creadorEmail)) suggestions.push({ email: creadorEmail, label: `Creador: ${(pr as any).creadorNombre || ""}` });
-          return suggestions;
-        })()}
+        suggestedEmails={emailModal.sugeridos}
         generatePdf={async () => {
           const pr = presupuestos.find(p => p.id === emailModal.id);
           if (!pr || !sociedadActiva) throw new Error("No se encontró el presupuesto");
