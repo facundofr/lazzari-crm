@@ -22,6 +22,7 @@ import { esNotaCredito, filtrarParaGestion, incluirEnLibroIVACompras, incluirEnL
 import { clasificarMovimiento, type LineaMov } from "./movimientos-banco";
 import { sinCodigoBanco } from "./bbva-codigos";
 import { esGastoFijo } from "./gastos-lazza";
+import { costoRaro } from "./presupuesto-moneda-costo";
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const num = (v: unknown) => Number(v || 0) || 0;
@@ -131,6 +132,8 @@ export interface AvisoPr {
   presupuestoId: string | null;
   prNumero: string | null;
   motivo: string;
+  /** Costo absurdo contra la venta (probable moneda del costo cruzada): Reportes lo muestra arriba de todo. */
+  costoRaro?: boolean;
 }
 
 export interface ReporteBasico {
@@ -290,6 +293,7 @@ export function reporteBasico(input: {
     // Costo: de su PR (factura) o del PR de la factura de origen, proporcional (NC).
     let costo = vacioNI();
     let aviso: string | null = null;
+    let costoRaroFactura = false;
     const facturaCosto = nc ? (f.factura_origen_id ? origenPorId.get(f.factura_origen_id) : undefined) : f;
     const prId = facturaCosto?.presupuesto_id ?? null;
     if (nc && !facturaCosto) {
@@ -309,10 +313,17 @@ export function reporteBasico(input: {
       else if (c.sinCosto) aviso = `${c.sinCosto} artículo${c.sinCosto === 1 ? "" : "s"} del PR sin costo`;
       else if (c.sinTc) aviso = "Costo en US$ sin cotización del día";
       else if (c.aproximado && (itemsFacturaPorId.get(facturaCosto!.id) || []).length > 0) aviso = "Los renglones de la factura no coinciden con los del PR: se tomó el costo del PR entero";
+      // Costo absurdo contra la venta (29/10/2026, caso PR-2026-1142 de septiembre): casi siempre es la moneda del costo cruzada.
+      // Solo si el costo salió limpio: con otro aviso (PR entero en una factura parcial, sin costo, sin dólar) ya se explica.
+      if (!nc && !aviso && costoRaro(costo.neto, venta.neto)) {
+        const veces = costo.neto / venta.neto;
+        costoRaroFactura = true;
+        aviso = `Costo raro: ${veces >= 1 ? `${Math.round(veces).toLocaleString("es-AR")} veces la venta` : `${Math.round(veces * 100)} % de la venta`}. Revisá la moneda del costo en el PR`;
+      }
     }
     sumarNI(costoTot, costo);
     const prNumero = prId ? input.prNumero[prId] ?? null : null;
-    if (aviso) avisos.push({ facturaId: f.id, comprobante: comp, cliente, presupuestoId: prId, prNumero, motivo: aviso });
+    if (aviso) avisos.push({ facturaId: f.id, comprobante: comp, cliente, presupuestoId: prId, prNumero, motivo: aviso, ...(costoRaroFactura ? { costoRaro: true } : {}) });
     filas.push({ facturaId: f.id, comprobante: comp, fecha: f.fecha, cliente, presupuestoId: prId, prNumero, esNC: nc, venta: redondearNI(venta), costo: redondearNI(costo), aviso });
   }
 

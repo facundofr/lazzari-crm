@@ -41,6 +41,7 @@ import { estadoPorRecibido } from "@/lib/compras-recepcion";
 import { calculateNetPrice, parseQuantityRange, type PriceListRule } from "@/lib/price-list-rules";
 import { observacionesParaCliente } from "@/lib/observaciones-cliente";
 import { margenPR, MARGEN_MINIMO_PR, gastosPorcentajePR, margenNetoPct, costoEnMonedaPR } from "@/lib/presupuesto-margen";
+import { monedaCostoSospechosa } from "@/lib/presupuesto-moneda-costo";
 import { RemitoVentana } from "@/components/remito-ventana";
 import { traerSaldoUnCliente } from "@/lib/cuenta-corriente-cliente";
 import { VentaCaidaOCs } from "@/components/presupuestos/venta-caida-ocs";
@@ -1292,6 +1293,19 @@ export default function PresupuestosLista() {
     });
   }
 
+  // "Pasar a $ / US$" del aviso de moneda cruzada: cambia solo la moneda del costo; el precio de venta queda igual y se rehace el markup.
+  function pasarCostoAMoneda(index: number, moneda: "ARS" | "USD") {
+    setNewPR((prev) => {
+      const items = [...prev.items];
+      const item = { ...items[index], costo_moneda: moneda } as NewPRItem;
+      const costoConv = convertCosto(item.precio_costo, item.costo_moneda, prev.moneda, prev.tipo_cambio, prev.tipo_cambio_divisas);
+      if (costoConv > 0 && item.precio_venta > 0) item.markup_porcentaje = ((item.precio_venta / costoConv) - 1) * 100;
+      items[index] = item;
+      return { ...prev, items };
+    });
+    toast.success(`Costo pasado a ${moneda === "ARS" ? "$" : "US$"}: el precio de venta no cambió`);
+  }
+
   // ── Ayudas de la ventana (Augusto 13/10): último precio al cliente, buscar en la lista al escribir, repetir un PR ──
   // Último precio (neto) al que se le vendió cada artículo a este cliente (presupuestos aprobados / facturados).
   const ultimosDelCliente = useMemo(() => {
@@ -1506,6 +1520,12 @@ export default function PresupuestosLista() {
         avisos.push(`Margen neto total: ${margenTot === null ? "—" : margenTot.toFixed(1) + "%"} (mínimo ${MARGEN_MINIMO}%, descontando ${gastos}% de gastos e impuestos).` + (bajos.length ? `\nArtículos bajo el mínimo: ${bajos.slice(0, 8).join(", ")}${bajos.length > 8 ? "…" : ""}` : ""));
       }
       if (sinDolar) avisos.push(`${sinDolar} artículo(s) con costo en otra moneda y sin dólar cargado: no se pudo calcular su margen.`);
+      const monedaCruzada = validItems
+        .map((it) => ({ it, s: monedaCostoSospechosa(it.precio_costo, it.costo_moneda, precioNeto(it, descGeneral), newPR.moneda, newPR.tipo_cambio, newPR.tipo_cambio_divisas, dolaresGuardados?.billete?.valor || 0) }))
+        .filter((x) => x.s);
+      if (monedaCruzada.length) {
+        avisos.push(`¿Costo en la moneda equivocada? ${monedaCruzada.slice(0, 5).map(({ it, s }) => `${it.codigo || it.descripcion.slice(0, 30)} (cargado en ${esCostoUsd(it.costo_moneda) ? "US$" : "$"}, parece ${s!.sugerida === "ARS" ? "$" : "US$"})`).join(", ")}${monedaCruzada.length > 5 ? "…" : ""}.\nSe corrige con "Pasar a…" debajo del costo.`);
+      }
       const cli = clientes.find((c) => c.id === newPR.cliente_id) as any;
       const pref = cli?.moneda_predeterminada === "USD" ? "billetes" : cli?.moneda_predeterminada === "USD Divisa" ? "divisas" : null;
       if (newPR.moneda === "USD" && pref && newPR.cotizacion_modalidad && newPR.cotizacion_modalidad !== pref) {
@@ -1621,7 +1641,7 @@ export default function PresupuestosLista() {
         setEditingPRId(null);
         setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, tipo_cambio_divisas: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", costo_envio_interno: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
         await fetchPresupuestos();
-        toast.success(ocsSynced > 0 ? `Presupuesto actualizado — ${ocsSynced} OC actualizada(s) y marcada(s) como pendiente` : "Presupuesto actualizado");
+        toast.success(ocsSynced > 0 ? `Presupuesto actualizado — ${ocsSynced} OC actualizada(s)` : "Presupuesto actualizado");
       } else {
         // ── CREATE new PR ──
         const today = todayAR();
@@ -4347,6 +4367,18 @@ export default function PresupuestosLista() {
                               {t > 0
                                 ? `× ${esCostoDivisa(item.costo_moneda) ? "divisa" : "billete"} ${t.toLocaleString("es-AR")} = $ ${(item.precio_costo * t).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
                                 : "⚠️ falta el dólar"}
+                            </div>
+                          );
+                        })()}
+                        {(() => {
+                          // Moneda del costo cruzada (caso PR-2026-1142): solo avisa; el botón cambia la moneda y deja el precio de venta igual.
+                          const s = monedaCostoSospechosa(item.precio_costo, item.costo_moneda, precioNeto(item, descGeneral), newPR.moneda, newPR.tipo_cambio, newPR.tipo_cambio_divisas, dolaresGuardados?.billete?.valor || 0);
+                          if (!s) return null;
+                          const otra = s.sugerida === "ARS" ? "$" : "US$";
+                          return (
+                            <div className="mt-0.5 text-right text-[10px] leading-tight text-amber-600" title={`Con la moneda cargada el costo da ${formatCurrency(s.costoActual * item.cantidad, newPR.moneda)} y con ${otra} da ${formatCurrency(s.costoSugerido * item.cantidad, newPR.moneda)}. Es un aviso, se puede guardar igual.`}>
+                              ⚠️ ¿El costo está en {otra}?{" "}
+                              <button type="button" onClick={() => pasarCostoAMoneda(idx, s.sugerida)} className="font-semibold text-orange-600 hover:underline">Pasar a {otra}</button>
                             </div>
                           );
                         })()}

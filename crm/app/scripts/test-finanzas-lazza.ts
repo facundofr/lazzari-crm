@@ -414,3 +414,15 @@ assert.deepEqual(porProveedor.map((p) => [p.proveedorId, p.facturas, p.saldo, p.
 }
 
 console.log("test-finanzas-lazza OK");
+
+// Costo raro (29/10/2026, caso PR-2026-1142): costo en la moneda equivocada → aviso arriba en Reportes.
+{
+  const fRaro = fv({ id: "raro", fecha: "2026-10-15", presupuesto_id: "praro", subtotal: 49173.75, iva: 10326.49, total: 59500.24 });
+  const rRaro = reporteBasico({ periodo: "2026-10", facturas: [fRaro], origenes: [], idsAnulados: [], items: [{ presupuesto_id: "praro", cantidad: 1, precio_costo: 36425, costo_moneda: "USD", iva_porcentaje: 21 }], prNumero: { praro: "PR-2026-1142" }, gastos: [], tcDia });
+  const aRaro = rRaro.avisos.find((a) => a.facturaId === "raro");
+  assert.equal(aRaro?.costoRaro, true);
+  assert.match(aRaro!.motivo, /Costo raro: .* veces la venta/);
+  const rBien = reporteBasico({ periodo: "2026-10", facturas: [fRaro], origenes: [], idsAnulados: [], items: [{ presupuesto_id: "praro", cantidad: 1, precio_costo: 36425, costo_moneda: "ARS", iva_porcentaje: 21 }], prNumero: {}, gastos: [], tcDia });
+  assert.equal(rBien.avisos.some((a) => a.costoRaro), false);
+  console.log("costo raro OK");
+}

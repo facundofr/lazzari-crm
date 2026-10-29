@@ -44,6 +44,23 @@ export function FinanzasLazzaReportes({ sociedadId, periodo }: { sociedadId: str
     <div className="space-y-3">
       {/* Objetivos adentro de Reportes (auditoría UX 27/10, arreglo 8): antes era una tarjeta aparte con la misma cuenta. */}
       <BarraObjetivo o={r.objetivo} periodo={periodo} />
+      {(() => {
+        // Costo raro (29/10/2026, caso PR-2026-1142): arriba de los números, porque puede dar vuelta el resultado.
+        const raros = r.avisos.filter((a) => a.costoRaro);
+        if (!raros.length) return null;
+        return (
+          <div className="flex items-start gap-1.5 rounded-xl border border-red-200 bg-red-50 p-2.5 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              {raros.length === 1 ? "Hay 1 factura" : `Hay ${raros.length} facturas`} con un costo raro (¿moneda del costo equivocada en el PR?): el resultado puede estar mal.{" "}
+              {raros.slice(0, 3).map((a, i) => (
+                <span key={a.facturaId}>{i > 0 && ", "}{a.presupuestoId ? <Link href={`/presupuestos?selected=${a.presupuestoId}`} className="font-medium text-orange-600 hover:underline">{a.prNumero || a.comprobante}</Link> : a.comprobante}</span>
+              ))}
+              {raros.length > 3 && "…"} Detalle en Para revisar.
+            </span>
+          </div>
+        );
+      })()}
       <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
         <table className="w-full text-sm">
           <thead>
