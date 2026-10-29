@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { LineaPremio } from "./premios";
 import { OBJETIVOS_MES, reporteBasico, type NetoIva, type ReporteBasico } from "@/lib/finanzas-lazza";
 import { traerDatosReporte } from "./datos";
 
@@ -42,7 +43,7 @@ export function FinanzasLazzaReportes({ sociedadId, periodo }: { sociedadId: str
   return (
     <div className="space-y-3">
       {/* Objetivos adentro de Reportes (auditoría UX 27/10, arreglo 8): antes era una tarjeta aparte con la misma cuenta. */}
-      <BarraObjetivo o={r.objetivo} />
+      <BarraObjetivo o={r.objetivo} periodo={periodo} />
       <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
         <table className="w-full text-sm">
           <thead>
@@ -126,7 +127,7 @@ export function FinanzasLazzaReportes({ sociedadId, periodo }: { sociedadId: str
 }
 
 /** Barra de objetivos del mes sobre el neto facturado (Mínimo / Bueno / Muy bueno). */
-export function BarraObjetivo({ o }: { o: ReporteBasico["objetivo"] }) {
+export function BarraObjetivo({ o, periodo }: { o: ReporteBasico["objetivo"]; periodo?: string }) {
   const tope = OBJETIVOS_MES.muyBueno * 1.1;
   const pct = (m: number) => `${Math.min(100, Math.max(0, (m / tope) * 100))}%`;
   return (
@@ -146,6 +147,7 @@ export function BarraObjetivo({ o }: { o: ReporteBasico["objetivo"] }) {
             <span key={n} className="absolute -translate-x-1/2 whitespace-nowrap" style={{ left: pct(m as number) }}>{n} {Number(m) / 1_000_000}M</span>
           ))}
         </div>
+        {periodo && <div className="mt-2"><LineaPremio neto={o.neto} periodo={periodo} /></div>}
       </div>
   );
 }
@@ -167,7 +169,7 @@ export function FinanzasLazzaObjetivos({ sociedadId, periodo }: { sociedadId: st
   if (!r) return <p className="flex items-center gap-2 py-6 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Calculando…</p>;
   return (
     <div className="space-y-2">
-      <BarraObjetivo o={r.objetivo} />
+      <BarraObjetivo o={r.objetivo} periodo={periodo} />
       <p className="text-[11px] text-zinc-500">Neto facturado del mes: <b className="font-mono">{formatCurrency(r.objetivo.neto)}</b> (facturas − NC, US$ al TC de cada factura). Objetivos: Mínimo $64.000.000 · Bueno $80.000.000 · Muy bueno $96.000.000.</p>
     </div>
   );

@@ -26,6 +26,7 @@ import { gastoConVep, type DatosVep } from "@/lib/vep";
 import { sumarMeses } from "@/lib/reportes-comprobantes";
 import { rangoMes } from "./datos";
 import { linkArchivo } from "@/lib/archivo-link";
+import { PremiosCarga } from "./premios";
 
 const db = supabase as any;
 const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
@@ -259,6 +260,9 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
           <button type="button" aria-label="Cerrar aviso" onClick={() => setCargadosSolos([])} className="ml-auto rounded p-0.5 hover:bg-blue-100"><X className="h-3 w-3" /></button>
         </div>
       )}
+
+      {/* Premios del mes anterior (solo Lazzari): sugiere y se cargan con el botón, confirmando. */}
+      <PremiosCarga sociedadId={sociedadId} periodo={periodo} onCargado={recargar} />
 
       {/* Totales por grupo: tocar uno filtra la lista. */}
       <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4 lg:grid-cols-8">
