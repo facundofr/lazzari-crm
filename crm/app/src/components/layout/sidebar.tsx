@@ -36,33 +36,25 @@ import { useUser } from "@/lib/auth-context";
 import { useTheme } from "@/lib/theme-context";
 import { APP_VERSION_LABEL } from "@/lib/app-version";
 
-// Menú agrupado por lo que hace cada sector. Cada uno ve solo los módulos que su rol permite
-// (los vendedores/compradores no ven Plata). Los grupos sin nada visible no se muestran.
+// Menú en una sola lista, en el orden que pidió Augusto (29/10). Cada uno ve solo los módulos que su rol permite
+// (los vendedores/compradores no ven Finanzas).
 // `oculto`: no aparece en el menú por ahora (se desarrolla más adelante); la pantalla sigue andando si se entra por el link.
 // `soloSuperAdmin`: en armado, por ahora la ve solo Augusto. `soloRoles`: solo esos roles (además de tener el módulo).
 const navigation: { grupo: string; items: { name: string; href: string; icon: typeof Users; module: string; oculto?: boolean; soloSuperAdmin?: boolean; soloRoles?: string[] }[] }[] = [
-  { grupo: "Inicio", items: [
+  { grupo: "Menú", items: [
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, module: "dashboard", oculto: true }, // Augusto 20/10: fuera del menú (sigue por link); el sistema abre en Presupuestos
-    { name: "Calendario", href: "/calendario", icon: Calendar, module: "calendario" },
-    { name: "Correos enviados", href: "/correos", icon: MailCheck, module: "calendario" }, // Augusto 28/10: cada mail que sale del CRM y si llegó (todos los usuarios)
-  ] },
-  { grupo: "Vender", items: [
     { name: "Clientes", href: "/clientes", icon: Users, module: "clientes" },
+    { name: "Proveedores", href: "/proveedores", icon: Factory, module: "proveedores" },
     { name: "Presupuestos nuevo", href: "/presupuestos-nuevo", icon: Sparkles, module: "presupuestos_nuevo", oculto: true }, // Augusto 20/10: ahora es Presupuestos (el link redirige)
     { name: "Presupuestos", href: "/presupuestos", icon: FileText, module: "presupuestos" },
     { name: "Muestras", href: "/muestras", icon: Shirt, module: "muestras", oculto: true }, // Augusto 20/10: fuera del menú (sigue por link)
-    { name: "Facturas", href: "/facturas", icon: FileSearch, module: "consulta_facturas" }, // Augusto 20/10: Facturas de Finanzas Lazza (vendedores solo mirar); la vieja (/consulta-facturas) se borró 29/10 y redirige acá
-  ] },
-  { grupo: "Comprar", items: [
-    { name: "Proveedores", href: "/proveedores", icon: Factory, module: "proveedores" },
-    { name: "Compras Lazza", href: "/compras-lazza", icon: ShoppingCart, module: "compras_nueva" },
-  ] },
-  { grupo: "Entregar", items: [
+    { name: "Compras", href: "/compras-lazza", icon: ShoppingCart, module: "compras_nueva" },
     { name: "Remitos", href: "/remitos", icon: Receipt, module: "remitos" },
     { name: "Stock", href: "/stock", icon: Package, module: "stock", oculto: true },
     { name: "Transportes", href: "/transportes", icon: Truck, module: "remitos" },
-  ] },
-  { grupo: "Plata", items: [
+    { name: "Facturas", href: "/facturas", icon: FileSearch, module: "consulta_facturas" }, // Augusto 20/10: Facturas de Finanzas Lazza (vendedores solo mirar); la vieja (/consulta-facturas) se borró 29/10 y redirige acá
+    { name: "Correos", href: "/correos", icon: MailCheck, module: "calendario" }, // Augusto 28/10: cada mail que sale del CRM y si llegó (todos los usuarios)
+    { name: "Calendario", href: "/calendario", icon: Calendar, module: "calendario" },
     { name: "Finanzas", href: "/finanzas", icon: Wallet, module: "finanzas", soloRoles: ["super_admin", "administrativo"] }, // Mudanza 23/10: Finanzas es la nueva (ex Finanzas Lazza); la vieja quedó oculta en /finanzas-vieja
   ] },
 ];
@@ -175,9 +167,6 @@ export function Sidebar() {
           const showLabel = !collapsed || mobileSidebarOpen;
           return (
             <div key={g.grupo} className="mb-2">
-              {showLabel
-                ? <p className="px-3 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">{g.grupo}</p>
-                : <div className="mx-3 mb-1 border-t border-zinc-200 dark:border-zinc-800" />}
               <ul className="space-y-0.5">
                 {visibles.map((item) => {
                   // Exacto o subruta: que /finanzas-lazza no prenda también Finanzas.
