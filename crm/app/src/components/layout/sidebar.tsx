@@ -71,9 +71,9 @@ export function Sidebar() {
     profile, role,
     sidebarCollapsed: collapsed, setSidebarCollapsed: setCollapsed,
     mobileSidebarOpen, setMobileSidebarOpen,
-    sociedadActiva,
+    sociedadActiva, sociedades, setSociedadActiva,
   } = useUser();
-  const { theme, toggleTheme } = useTheme();
+  const { theme, toggleTheme, disenoNuevo } = useTheme();
   const [loggingOut, setLoggingOut] = useState(false);
 
   const supabase = createBrowserClient(
@@ -94,6 +94,10 @@ export function Sidebar() {
   }
 
   const accentColor = sociedadActiva?.colorPrimario || "#FF4500";
+  // Diseño nuevo: el menú es oscuro, la sección activa va en blanco sobre gris (el color queda en el ícono).
+  const estiloActivo = disenoNuevo
+    ? { backgroundColor: "rgba(255,255,255,0.09)", color: "#fff" }
+    : { backgroundColor: accentColor + "15", color: accentColor };
   const logoInitial = sociedadActiva?.nombre?.charAt(0) || "L";
   const logoName = sociedadActiva?.nombre || "Lazzari";
 
@@ -107,7 +111,7 @@ export function Sidebar() {
   return (
     <aside
       className={cn(
-        "fixed left-0 top-0 z-40 flex h-screen flex-col border-r border-zinc-200 bg-white transition-all duration-200 dark:border-zinc-800 dark:bg-zinc-950",
+        "dn-sidebar fixed left-0 top-0 z-40 flex h-screen flex-col border-r border-zinc-200 bg-white transition-all duration-200 dark:border-zinc-800 dark:bg-zinc-950",
         // Desktop: normal behavior
         collapsed ? "lg:w-[68px]" : "lg:w-[250px]",
         // Mobile: off-screen by default, slide in when open
@@ -117,7 +121,7 @@ export function Sidebar() {
       )}
     >
       {/* Logo */}
-      <div className="flex h-16 items-center justify-between border-b border-zinc-200 px-4 dark:border-zinc-800">
+      <div className="dn-logo flex h-16 items-center justify-between border-b border-zinc-200 px-4 dark:border-zinc-800">
         {(!collapsed || mobileSidebarOpen) && (
           <Link href="/presupuestos" className="flex items-center gap-2" onClick={handleNavClick}>
             <div
@@ -159,6 +163,19 @@ export function Sidebar() {
         </button>
       </div>
 
+      {/* Diseño nuevo: cambio de sociedad en el menú (reemplaza el botón de la barra de arriba) */}
+      {disenoNuevo && sociedades.length > 1 && sociedadActiva && (!collapsed || mobileSidebarOpen) && (
+        <div className="dn-sociedades mx-3 mb-2 grid grid-cols-2 gap-1 rounded-xl p-1">
+          {sociedades.map((s) => (
+            <button key={s.id} type="button" onClick={() => setSociedadActiva(s)} data-active={s.id === sociedadActiva.id}
+              className="flex items-center justify-center gap-1.5 truncate rounded-lg px-2 py-1.5 text-xs font-medium">
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: s.colorPrimario }} />
+              <span className="truncate">{s.nombre}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-3 py-2">
         {navigation.map((g) => {
@@ -177,10 +194,11 @@ export function Sidebar() {
                         href={item.href}
                         onClick={handleNavClick}
                         className={cn(
-                          "flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
+                          "dn-link flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
                           !isActive && "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-white"
                         )}
-                        style={isActive ? { backgroundColor: accentColor + "15", color: accentColor } : undefined}
+                        data-active={isActive}
+                        style={isActive ? estiloActivo : undefined}
                         title={!showLabel ? item.name : undefined}
                       >
                         <item.icon className="h-4 w-4 shrink-0" style={isActive ? { color: accentColor } : undefined} />
@@ -196,16 +214,17 @@ export function Sidebar() {
       </nav>
 
       {/* Bottom */}
-      <div className="border-t border-zinc-200 px-3 py-2 dark:border-zinc-800">
+      <div className="dn-pie border-t border-zinc-200 px-3 py-2 dark:border-zinc-800">
         {hasModuleAccess(role, "presupuestos") && (
           <Link
             href="/papelera"
             onClick={handleNavClick}
             className={cn(
-              "flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
+              "dn-link flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
               !pathname.startsWith("/papelera") && "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
             )}
-            style={pathname.startsWith("/papelera") ? { backgroundColor: accentColor + "15", color: accentColor } : undefined}
+            data-active={pathname.startsWith("/papelera")}
+            style={pathname.startsWith("/papelera") ? estiloActivo : undefined}
             title={collapsed && !mobileSidebarOpen ? "Papelera" : undefined}
           >
             <Trash2 className="h-4 w-4" />
@@ -217,10 +236,11 @@ export function Sidebar() {
             href="/configuracion"
             onClick={handleNavClick}
             className={cn(
-              "flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
+              "dn-link flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
               !pathname.startsWith("/configuracion") && "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
             )}
-            style={pathname.startsWith("/configuracion") ? { backgroundColor: accentColor + "15", color: accentColor } : undefined}
+            data-active={pathname.startsWith("/configuracion")}
+            style={pathname.startsWith("/configuracion") ? estiloActivo : undefined}
             title={collapsed && !mobileSidebarOpen ? "Configuración" : undefined}
           >
             <Settings className="h-4 w-4" />
@@ -232,7 +252,7 @@ export function Sidebar() {
         <button
           onClick={toggleTheme}
           className={cn(
-            "flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-white w-full",
+            "dn-link flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-white w-full",
             collapsed && !mobileSidebarOpen && "justify-center"
           )}
           title={theme === "dark" ? "Modo claro" : "Modo oscuro"}

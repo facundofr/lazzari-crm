@@ -7,12 +7,20 @@ type Theme = "light" | "dark";
 interface ThemeContextValue {
   theme: Theme;
   toggleTheme: () => void;
+  /** Diseño nuevo en prueba (Augusto 29/10): se prende en Configuración y vale solo para esta compu. */
+  disenoNuevo: boolean;
+  setDisenoNuevo: (v: boolean) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue>({
   theme: "light",
   toggleTheme: () => {},
+  disenoNuevo: false,
+  setDisenoNuevo: () => {},
 });
+
+const DISENO_NUEVO_KEY = "lazzari-diseno-nuevo";
+const FUENTE_DISENO_NUEVO = "https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap";
 
 export function useTheme() {
   return useContext(ThemeContext);
@@ -21,6 +29,7 @@ export function useTheme() {
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<Theme>("light");
   const [mounted, setMounted] = useState(false);
+  const [disenoNuevo, setDisenoNuevo] = useState(false);
 
   useEffect(() => {
     const stored = localStorage.getItem("lazzari-theme") as Theme | null;
@@ -29,8 +38,23 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     } else if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
       setTheme("dark");
     }
+    setDisenoNuevo(localStorage.getItem(DISENO_NUEVO_KEY) === "1");
     setMounted(true);
   }, []);
+
+  useEffect(() => {
+    if (!mounted) return;
+    document.documentElement.classList.toggle("diseno-nuevo", disenoNuevo);
+    localStorage.setItem(DISENO_NUEVO_KEY, disenoNuevo ? "1" : "0");
+    // La letra del diseño nuevo se baja solo si está prendido.
+    if (disenoNuevo && !document.getElementById("fuente-diseno-nuevo")) {
+      const link = document.createElement("link");
+      link.id = "fuente-diseno-nuevo";
+      link.rel = "stylesheet";
+      link.href = FUENTE_DISENO_NUEVO;
+      document.head.appendChild(link);
+    }
+  }, [disenoNuevo, mounted]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -48,7 +72,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme }}>
+    <ThemeContext.Provider value={{ theme, toggleTheme, disenoNuevo, setDisenoNuevo }}>
       {children}
     </ThemeContext.Provider>
   );

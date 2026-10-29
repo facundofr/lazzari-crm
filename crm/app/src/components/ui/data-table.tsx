@@ -120,7 +120,7 @@ export function DataTable<T extends { id: string }>({
   return (
     <div>
       <div className="overflow-x-auto">
-        <table className="w-full">
+        <table className="dn-tabla w-full">
           <thead>
             <tr className="border-b border-zinc-200 dark:border-zinc-700">
               {columns.map((col) => (

@@ -17,6 +17,7 @@ import { ArcaStatusCard } from "@/components/arca-status-card";
 import { FechasChequeConfig } from "@/components/fechas-cheque-config";
 import { UsoIAConfig } from "@/components/uso-ia-config";
 import { AgenteMailInterruptor } from "@/components/agente-mail-interruptor";
+import { DisenoNuevoInterruptor } from "@/components/diseno-nuevo-interruptor";
 
 type ComisionTipo = "porcentaje_venta" | "porcentaje_margen" | "monto_fijo";
 type ComisionAplicaA = "todos" | "vendedor_especifico";
@@ -709,6 +710,7 @@ export default function ConfiguracionPage() {
     <>
       <Header title="Configuracion" subtitle="Administracion del sistema" />
       <div className="p-3 sm:p-4 space-y-2.5">
+        {profile?.role === "super_admin" && <DisenoNuevoInterruptor />}
         <div className="flex gap-1 overflow-x-auto border-b border-zinc-200 dark:border-zinc-800">
           {tabs.map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)}

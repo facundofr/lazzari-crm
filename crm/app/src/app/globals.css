@@ -90,3 +90,65 @@ body {
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
 }
+
+/* ───────────── Diseño nuevo (prueba, Augusto 29/10) ─────────────
+   Se prende en Configuración y vale solo para esa compu (clase .diseno-nuevo en <html>).
+   Menú oscuro flotante, fondo claro tipo papel, tarjetas blancas con sombra suave y letra Geist.
+   Cambia cómo se ve, nunca lo que hace. Apagado, el CRM queda exactamente como antes. */
+html.diseno-nuevo {
+  --dn-bg: #F3F3F1; --dn-card: #FFFFFF; --dn-soft: #F5F5F4; --dn-line: #ECECEA;
+  --dn-text: #151517; --dn-muted: #66666E;
+  --dn-shadow: 0 1px 2px rgba(20,20,20,.04), 0 6px 20px rgba(20,20,20,.05);
+  --dn-side: #151517; --dn-side-text: #F5F5F5; --dn-side-muted: #9A9AA2; --dn-side-chip: #202024; --dn-side-on: #2E2E34;
+  --dn-ink: #151517; --dn-ink-text: #FFFFFF;
+}
+html.diseno-nuevo.dark {
+  --dn-bg: #0A0A0B; --dn-card: #141416; --dn-soft: #1C1C1F; --dn-line: #232327;
+  --dn-text: #F2F2F4; --dn-muted: #A0A0AA;
+  --dn-shadow: 0 0 0 1px #232327;
+  --dn-side: #141416; --dn-side-text: #F2F2F4; --dn-side-muted: #8E8E98; --dn-side-chip: #1E1E22; --dn-side-on: #2A2A30;
+  --dn-ink: #F2F2F4; --dn-ink-text: #111113;
+}
+html.diseno-nuevo body { font-family: "Geist", "Inter", system-ui, sans-serif; background: var(--dn-bg); font-feature-settings: "tnum" 1; }
+html.diseno-nuevo .min-h-screen.bg-zinc-50 { background: var(--dn-bg) !important; }
+
+/* Menú flotante oscuro */
+html.diseno-nuevo .dn-sidebar { background: var(--dn-side) !important; border: 0 !important; color: var(--dn-side-text); }
+@media (min-width: 1024px) {
+  html.diseno-nuevo .dn-sidebar { top: 12px; left: 12px; height: calc(100vh - 24px); border-radius: 20px; }
+  html.diseno-nuevo .dn-main { margin-left: 274px !important; margin-right: 8px; }
+  html.diseno-nuevo .dn-main[data-collapsed="true"] { margin-left: 92px !important; }
+}
+html.diseno-nuevo .dn-sidebar .dn-logo, html.diseno-nuevo .dn-sidebar .dn-pie { border-color: transparent !important; }
+html.diseno-nuevo .dn-sidebar .dn-logo span { color: var(--dn-side-text) !important; }
+html.diseno-nuevo .dn-sidebar .dn-logo span + span { color: var(--dn-side-muted) !important; }
+html.diseno-nuevo .dn-sidebar .dn-logo button:hover { background: var(--dn-side-chip) !important; }
+html.diseno-nuevo .dn-sidebar .dn-link { padding-top: .5rem; padding-bottom: .5rem; border-radius: 11px; }
+html.diseno-nuevo .dn-sidebar .dn-link:not([data-active="true"]) { color: var(--dn-side-muted) !important; }
+html.diseno-nuevo .dn-sidebar .dn-link:not([data-active="true"]):hover { color: var(--dn-side-text) !important; background: var(--dn-side-chip) !important; }
+html.diseno-nuevo .dn-sidebar .dn-pie p { color: var(--dn-side-text) !important; }
+html.diseno-nuevo .dn-sidebar .dn-pie p + p { color: var(--dn-side-muted) !important; }
+html.diseno-nuevo .dn-sidebar .dn-pie .rounded-full { background: var(--dn-side-chip) !important; color: var(--dn-side-text) !important; }
+html.diseno-nuevo .dn-sociedades { background: var(--dn-side-chip); }
+html.diseno-nuevo .dn-sociedades button { color: var(--dn-side-muted); }
+html.diseno-nuevo .dn-sociedades button[data-active="true"] { background: var(--dn-side-on); color: var(--dn-side-text); font-weight: 600; }
+
+/* Barra de arriba: sin franja, título grande, buscador grande */
+html.diseno-nuevo .dn-header { background: transparent !important; border: 0 !important; padding: 18px 20px 6px !important; }
+html.diseno-nuevo .dn-titulo { font-size: 28px; line-height: 1.15; letter-spacing: -0.03em; color: var(--dn-text) !important; }
+html.diseno-nuevo .dn-subtitulo { font-size: 13.5px; margin-top: 2px; color: var(--dn-muted) !important; }
+html.diseno-nuevo .dn-soc-arriba { display: none; }
+html.diseno-nuevo .dn-buscar { height: 42px !important; width: 360px !important; border-radius: 13px !important; border: 0 !important; background: var(--dn-card) !important; box-shadow: var(--dn-shadow); font-size: 14px; }
+html.diseno-nuevo .dn-kbd { border: 0 !important; background: var(--dn-soft) !important; border-radius: 6px; }
+html.diseno-nuevo .dn-header button.relative.rounded-lg { background: var(--dn-card); box-shadow: var(--dn-shadow); border-radius: 13px; padding: 11px; }
+html.diseno-nuevo .dn-accion { background: var(--dn-ink) !important; color: var(--dn-ink-text) !important; border-radius: 13px !important; height: 42px; padding-left: 18px !important; padding-right: 18px !important; font-weight: 600 !important; box-shadow: none !important; }
+
+/* Tarjetas y tablas comunes */
+html.diseno-nuevo .dn-card { border-color: transparent !important; background: var(--dn-card) !important; box-shadow: var(--dn-shadow) !important; border-radius: 18px !important; }
+html.diseno-nuevo .dn-tabla thead tr { background: var(--dn-soft); border-color: var(--dn-line) !important; }
+html.diseno-nuevo .dn-tabla th { text-transform: none !important; letter-spacing: 0 !important; font-size: 12.5px !important; font-weight: 500 !important; color: var(--dn-muted) !important; padding: 10px 12px !important; }
+html.diseno-nuevo .dn-tabla td { padding: 10px 12px !important; font-size: 13.5px !important; }
+html.diseno-nuevo .dn-tabla th:first-child, html.diseno-nuevo .dn-tabla td:first-child { padding-left: 20px !important; }
+html.diseno-nuevo .dn-tabla tbody { border-color: var(--dn-line) !important; }
+html.diseno-nuevo .dn-tabla tbody > tr { background: transparent !important; border-color: var(--dn-line) !important; }
+html.diseno-nuevo .dn-tabla tbody > tr:hover { background: var(--dn-soft) !important; }

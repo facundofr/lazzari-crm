@@ -33,8 +33,9 @@ function CRMContent({ children }: { children: React.ReactNode }) {
       )}
       <Sidebar />
       <main
+        data-collapsed={sidebarCollapsed}
         className={cn(
-          "transition-all duration-200",
+          "dn-main transition-all duration-200",
           sidebarCollapsed ? "lg:ml-[68px]" : "lg:ml-[250px]"
         )}
       >

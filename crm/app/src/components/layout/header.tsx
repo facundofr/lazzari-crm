@@ -365,7 +365,7 @@ export function Header({ title, subtitle, action }: HeaderProps) {
   }
 
   return (
-    <header className="flex items-center justify-between border-b border-zinc-200 bg-white px-4 py-2 sm:px-5 dark:border-zinc-800 dark:bg-zinc-950">
+    <header className="dn-header flex items-center justify-between border-b border-zinc-200 bg-white px-4 py-2 sm:px-5 dark:border-zinc-800 dark:bg-zinc-950">
       <div className="flex items-center gap-3">
         {/* Hamburger menu - mobile only */}
         <button
@@ -375,16 +375,16 @@ export function Header({ title, subtitle, action }: HeaderProps) {
           <Menu className="h-5 w-5" />
         </button>
         <div>
-          <h1 className="text-lg font-bold text-zinc-900 dark:text-white">{title}</h1>
+          <h1 className="dn-titulo text-lg font-bold text-zinc-900 dark:text-white">{title}</h1>
         {subtitle && (
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">{subtitle}</p>
+          <p className="dn-subtitulo text-xs text-zinc-500 dark:text-zinc-400">{subtitle}</p>
         )}
         </div>
       </div>
       <div className="flex items-center gap-2 sm:gap-3">
         {/* Sociedad selector */}
         {sociedades.length > 1 && sociedadActiva && (
-          <div className="relative">
+          <div className="dn-soc-arriba relative">
             <button
               onClick={() => setSociedadOpen(!sociedadOpen)}
               className="flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors"
@@ -452,9 +452,9 @@ export function Header({ title, subtitle, action }: HeaderProps) {
             onFocus={() => {
               if (search.length >= 2) setSearchOpen(true);
             }}
-            className="h-9 w-72 rounded-lg border border-zinc-200 bg-zinc-50 pl-9 pr-4 text-sm text-zinc-700 placeholder:text-zinc-400 focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+            className="dn-buscar h-9 w-72 rounded-lg border border-zinc-200 bg-zinc-50 pl-9 pr-4 text-sm text-zinc-700 placeholder:text-zinc-400 focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
           />
-          <kbd className="absolute right-3 top-1/2 -translate-y-1/2 rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[10px] text-zinc-400 dark:border-zinc-600 dark:bg-zinc-700">
+          <kbd className="dn-kbd absolute right-3 top-1/2 -translate-y-1/2 rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[10px] text-zinc-400 dark:border-zinc-600 dark:bg-zinc-700">
             ⌘K
           </kbd>
 
@@ -719,7 +719,7 @@ export function Header({ title, subtitle, action }: HeaderProps) {
         {action && (
           <button
             onClick={action.onClick}
-            className="flex items-center gap-2 rounded-lg bg-orange-500 px-3 py-2 sm:px-4 text-sm font-medium text-white shadow-sm hover:bg-orange-600 transition-colors"
+            className="dn-accion flex items-center gap-2 rounded-lg bg-orange-500 px-3 py-2 sm:px-4 text-sm font-medium text-white shadow-sm hover:bg-orange-600 transition-colors"
           >
             <Plus className="h-4 w-4" />
             <span className="hidden sm:inline">{action.label}</span>

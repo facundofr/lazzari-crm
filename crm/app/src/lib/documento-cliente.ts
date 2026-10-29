@@ -30,4 +30,11 @@ export function textoDocumento(doc: string | null | undefined): string {
   return esDni(doc) ? `DNI ${digitosDocumento(doc)}` : String(doc);
 }
 
+/** Igual que textoDocumento, pero el CUIT con guiones (30-71880971-8): se lee mejor. Lo usa el diseño nuevo. */
+export function textoDocumentoConGuiones(doc: string | null | undefined): string {
+  if (!esCuit(doc)) return textoDocumento(doc);
+  const d = digitosDocumento(doc);
+  return `CUIT ${d.slice(0, 2)}-${d.slice(2, 10)}-${d.slice(10)}`;
+}
+
 export const AVISO_DNI_SIN_ARCA = "Cliente con DNI: se factura manual, sin ARCA";

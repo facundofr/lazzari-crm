@@ -29,7 +29,8 @@ import { TIPO_DOCUMENTO_LABEL, type DatosImpositivos } from "@/lib/documento-imp
 import { traerTodo } from "@/lib/paginar";
 import { traerSaldosClientes, saldoClienteEn, cobradoPorFactura, saldoFacturaVenta, type SaldoCliente } from "@/lib/saldo-clientes";
 import { totalesCuentaCorriente } from "@/lib/cuenta-corriente-cliente";
-import { esDni, digitosDocumento, textoDocumento } from "@/lib/documento-cliente";
+import { esDni, digitosDocumento, textoDocumento, textoDocumentoConGuiones } from "@/lib/documento-cliente";
+import { useTheme } from "@/lib/theme-context";
 
 const condicionLabels: Record<string, string> = {
   RI: "Resp. Inscripto",
@@ -211,6 +212,7 @@ interface TimelineEvent {
 
 export default function ClientesPage() {
   const { sociedadActiva, sociedades, profile } = useUser();
+  const { disenoNuevo } = useTheme();
   // Saldo real de cuenta corriente (B3): si no se pudo calcular, se avisa en pantalla.
   const [saldosError, setSaldosError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -1277,6 +1279,20 @@ export default function ClientesPage() {
     return name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
   }
 
+  // Diseño nuevo: cada cliente con su color suave (siempre el mismo para el mismo nombre).
+  function colorIniciales(name: string) {
+    const colores = [
+      "bg-orange-50 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300",
+      "bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300",
+      "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300",
+      "bg-violet-50 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300",
+      "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300",
+    ];
+    let h = 0;
+    for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    return colores[h % colores.length];
+  }
+
   function toggleSection(key: string) {
     setExpandedSections((prev) => ({ ...prev, [key]: !prev[key] }));
   }
@@ -1567,8 +1583,34 @@ export default function ClientesPage() {
         </div>
         {saldosError && <p className="text-xs text-amber-600">{saldosError}</p>}
 
+        {/* Diseño nuevo: los números importantes en tarjetas grandes */}
+        {disenoNuevo && (() => {
+          const saldoArs = clientes.reduce((a, c) => a + c.saldoCuentaCorriente, 0);
+          const saldoUsd = clientes.reduce((a, c) => a + (c.saldoUSD || 0), 0);
+          const tarjetas = [
+            { label: "Saldo en dólares", valor: formatCurrency(saldoUsd, "USD") },
+            { label: "Crédito otorgado", valor: formatCurrency(clientes.reduce((a, c) => a + c.limiteCredito, 0), "ARS") },
+            { label: "Clientes", valor: String(clientes.length), sub: `en ${new Set(clientes.map((c) => c.provincia)).size} provincias` },
+          ];
+          return (
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <div className="flex flex-col gap-3 rounded-[18px] p-5 text-white" style={{ backgroundColor: sociedadActiva?.colorPrimario || "#FF4500" }}>
+                <span className="text-[13px] font-medium opacity-90">Saldo en pesos</span>
+                <b className="text-2xl font-bold tracking-tight">{formatCurrency(saldoArs, "ARS")}</b>
+              </div>
+              {tarjetas.map((t) => (
+                <div key={t.label} className="dn-card flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+                  <span className="text-[13px] font-medium text-zinc-500">{t.label}</span>
+                  <b className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-white">{t.valor}</b>
+                  {t.sub && <span className="-mt-2 text-xs text-zinc-500">{t.sub}</span>}
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+
         {/* Números rápidos en una línea */}
-        <div className="flex flex-wrap gap-1.5 text-xs">
+        {!disenoNuevo && <div className="flex flex-wrap gap-1.5 text-xs">
           <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Clientes</span> <b>{clientes.length}</b></span>
           <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900">
             <span className="text-zinc-500">Saldo CC</span> <b className="font-mono">{formatCurrency(clientes.reduce((a, c) => a + c.saldoCuentaCorriente, 0), "ARS")}</b>
@@ -1576,18 +1618,18 @@ export default function ClientesPage() {
           </span>
           <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Crédito otorgado</span> <b className="font-mono">{formatCurrency(clientes.reduce((a, c) => a + c.limiteCredito, 0), "ARS")}</b></span>
           <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Provincias</span> <b>{new Set(clientes.map((c) => c.provincia)).size}</b></span>
-        </div>
+        </div>}
 
         <Card className="p-0 overflow-hidden">
             <DataTable<ClienteExt>
               columns={[
                 {
-                  key: "razonSocial", label: "Razon social", sortable: true,
+                  key: "razonSocial", label: "Razón social", sortable: true,
                   render: (row) => {
                     const pendCount = pendingCountMap[row.id] || 0;
                     return (
-                    <div className="flex items-center gap-2">
-                      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-orange-50 text-orange-600 font-bold text-xs dark:bg-orange-900/30 dark:text-orange-400">
+                    <div className={disenoNuevo ? "flex max-w-[380px] items-center gap-3" : "flex items-center gap-2"} title={disenoNuevo ? row.razonSocial : undefined}>
+                      <div className={disenoNuevo ? `flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-xs font-semibold ${colorIniciales(row.razonSocial)}` : "flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-orange-50 text-orange-600 font-bold text-xs dark:bg-orange-900/30 dark:text-orange-400"}>
                         {getInitials(row.razonSocial)}
                       </div>
                       <div className="min-w-0">
@@ -1600,7 +1642,7 @@ export default function ClientesPage() {
                             </span>
                           )}
                         </div>
-                        <p className="text-xs text-zinc-400">{textoDocumento(row.cuit)}</p>
+                        <p className="text-xs text-zinc-400">{disenoNuevo ? textoDocumentoConGuiones(row.cuit) : textoDocumento(row.cuit)}</p>
                       </div>
                     </div>
                     );
@@ -1618,8 +1660,8 @@ export default function ClientesPage() {
                   ) : <span className="text-zinc-300 dark:text-zinc-600">—</span>;
                 }},
                 { key: "saldoCuentaCorriente", label: "Saldo CC", className: "text-right", sortable: true, render: (row) => (
-                  <span className="font-mono text-xs block text-right">
-                    <span className={row.saldoCuentaCorriente < 0 ? "text-emerald-600" : ""} title={row.saldoCuentaCorriente < 0 ? "Saldo a favor del cliente" : undefined}>{formatCurrency(row.saldoCuentaCorriente, "ARS")}</span>
+                  <span className={disenoNuevo ? "block text-right text-[13.5px]" : "font-mono text-xs block text-right"}>
+                    <span className={row.saldoCuentaCorriente < 0 ? "text-emerald-600" : disenoNuevo ? (row.saldoCuentaCorriente === 0 ? "text-zinc-400" : "font-bold text-zinc-900 dark:text-white") : ""} title={row.saldoCuentaCorriente < 0 ? "Saldo a favor del cliente" : undefined}>{formatCurrency(row.saldoCuentaCorriente, "ARS")}</span>
                     {(row.saldoUSD || 0) !== 0 && <span className={`block ${(row.saldoUSD || 0) < 0 ? "text-emerald-600" : "text-zinc-500"}`}>{formatCurrency(row.saldoUSD || 0, "USD")}</span>}
                   </span>
                 ) },
