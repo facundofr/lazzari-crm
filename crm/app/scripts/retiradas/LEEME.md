@@ -26,3 +26,16 @@ de cuentas de `src/lib` que corren antes de cada publicación (`scripts/test-lib
 
 Si alguna de estas reglas vuelve a importar, conviene escribirla como prueba de una función de `src/lib`
 (no buscando texto en una pantalla) y sumarla a la lista de `scripts/test-lib.mjs`.
+
+## 29/10/2026: se borraron Compras nueva, Compras (vieja) e Importaciones
+
+Estas 5 leían el código de pantallas o ventanas que ya no existen (`ordenes-compra/page.tsx` y `cargar-factura-oc.tsx`).
+Las dos de facturas de compra salieron de `test:regressions`.
+
+| Prueba | Qué cuidaba |
+|---|---|
+| test-oc-state-guards.cjs | Cambios de estado permitidos de la OC en la pantalla Compras vieja |
+| test-pr-pagination-and-op-duplicates.mjs | Paginado de PR y OP duplicadas (leía también la carga de factura vieja) |
+| test-purchase-credit-note.mjs | NC de compra desde la carga de factura vieja |
+| test-purchase-invoice-parser.cjs | Lectura de facturas de compra en la carga vieja |
+| test-purchase-invoice-reconciliation.cjs | Cruce factura ↔ OC de la carga vieja |
