@@ -77,3 +77,22 @@ export const CANAL_TEXTO: Record<string, string> = { mail: "mail", whatsapp: "Wh
 export function haceDias(d: number): string {
   return d <= 0 ? "hoy" : d === 1 ? "ayer" : `hace ${d} días`;
 }
+
+// Avisos de la campana del control diario (cron presupuestos-vencimiento). Cada paso tiene su propio título
+// (antes el de 5 días repetía el de 3 y nunca salía). Se dedupe por lo que va antes de ":".
+export const AVISOS_SEGUIMIENTO_PR = [
+  { dias: 3, title: "Seguimiento PR", urgente: false },
+  { dias: 5, title: "Seguimiento PR (5 días)", urgente: false },
+  { dias: 7, title: "Seguimiento urgente PR", urgente: true },
+] as const;
+export type AvisoSeguimientoPR = (typeof AVISOS_SEGUIMIENTO_PR)[number];
+
+/** El aviso que toca hoy: solo el último paso alcanzado, y nada si ya salió ese o uno posterior
+ *  (así un PR viejo no recibe los tres juntos ni vuelve atrás). `yaSalieron`: títulos ya creados para ese PR. */
+export function avisoSeguimientoQueToca(dias: number, yaSalieron: ReadonlySet<string>): AvisoSeguimientoPR | null {
+  let i = -1;
+  AVISOS_SEGUIMIENTO_PR.forEach((a, k) => { if (dias >= a.dias) i = k; });
+  if (i < 0) return null;
+  for (let k = i; k < AVISOS_SEGUIMIENTO_PR.length; k++) if (yaSalieron.has(AVISOS_SEGUIMIENTO_PR[k].title)) return null;
+  return AVISOS_SEGUIMIENTO_PR[i];
+}

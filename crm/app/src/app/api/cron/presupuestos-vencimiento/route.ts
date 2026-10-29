@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cronNoAutorizado } from "@/lib/cron-auth";
 import { createClient } from "@supabase/supabase-js";
+import { avisoSeguimientoQueToca } from "@/lib/presupuesto-seguimiento";
 
 /**
  * GET /api/cron/presupuestos-vencimiento
@@ -10,6 +11,7 @@ import { createClient } from "@supabase/supabase-js";
  *   - 3 dias sin respuesta: alerta suave
  *   - 5 dias sin respuesta: alerta de atencion
  *   - 7 dias sin respuesta: alerta urgente
+ *   (solo el último paso alcanzado; los aprobados no reciben seguimiento: el cliente ya respondió)
  *   - Al superar fecha de vencimiento: marca estado = "vencido" + alerta "vencimiento_pr"
  * Además (Finanzas): avisa 3 días antes del débito de cada cheque propio que cubre un tercero
  * (echeqs.cubre_tercero, ej. Martín Fernández), para avisarle a tiempo.
@@ -24,13 +26,6 @@ function getSupabase() {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 }
-
-// Tipos de alerta de seguimiento por dias transcurridos
-const SEGUIMIENTO_DIAS = [
-  { dias: 3, tag: "seguimiento_3d", title: "Seguimiento PR", urgencia: "normal" },
-  { dias: 5, tag: "seguimiento_5d", title: "Seguimiento PR", urgencia: "normal" },
-  { dias: 7, tag: "seguimiento_7d", title: "Seguimiento urgente PR", urgencia: "urgente" },
-] as const;
 
 /** Avisos de cheques que cubre un tercero: uno por cheque, cuando faltan 3 días o menos. Nunca rompe el cron. */
 async function avisarChequesTercero(supabase: ReturnType<typeof getSupabase>, today: string): Promise<{ creadas: number; error?: string }> {
@@ -100,7 +95,9 @@ export async function GET(req: NextRequest) {
     const { data: presupuestos, error: prError } = await supabase
       .from("presupuestos")
       .select("id, numero, fecha, vencimiento, estado, vendedor_id, sociedad_id, cliente_id")
-      .in("estado", ["pendiente", "aprobado", "solicitud", "postergado"]);
+      .in("estado", ["pendiente", "aprobado", "solicitud", "postergado"])
+      // Los de la Papelera no avisan ni se vencen
+      .or("eliminado.is.null,eliminado.eq.false");
 
     if (prError) {
       return NextResponse.json({ error: `Error al buscar presupuestos: ${prError.message}` }, { status: 500 });
@@ -141,28 +138,28 @@ export async function GET(req: NextRequest) {
       // Determinar user_id para la alerta (vendedor o created_by)
       const userId = pr.vendedor_id || null;
 
-      // A) Alertas de seguimiento a los 10 y 20 dias
-      for (const seg of SEGUIMIENTO_DIAS) {
-        if (diasDesdeCreacion >= seg.dias && !vencido) {
-          const dedupKey = `${seg.title}|${pr.id}`;
-          if (!alertaSet.has(dedupKey)) {
-            const desc = seg.urgencia === "urgente"
-              ? `${diasDesdeCreacion} dias sin respuesta. Consultar al cliente con urgencia.`
-              : `${diasDesdeCreacion} dias sin respuesta. Hacer seguimiento con el cliente.`;
+      // A) Alertas de seguimiento a los 3, 5 y 7 dias (no a los aprobados: el cliente ya respondió)
+      if (!vencido && pr.estado !== "aprobado") {
+        const yaSalieron = new Set<string>();
+        for (const k of alertaSet) if (k.endsWith(`|${pr.id}`)) yaSalieron.add(k.slice(0, -(pr.id.length + 1)));
+        const seg = avisoSeguimientoQueToca(diasDesdeCreacion, yaSalieron);
+        if (seg) {
+          const desc = seg.urgente
+            ? `${diasDesdeCreacion} dias sin respuesta. Consultar al cliente con urgencia.`
+            : `${diasDesdeCreacion} dias sin respuesta. Hacer seguimiento con el cliente.`;
 
-            alertasAInsertar.push({
-              tipo: "seguimiento",
-              title: `${seg.title}: ${pr.numero}`,
-              description: desc,
-              entity_id: pr.id,
-              entity_type: "presupuesto",
-              module: "presupuestos",
-              user_id: userId,
-              sociedad_id: pr.sociedad_id,
-              read: false,
-            });
-            alertaSet.add(dedupKey);
-          }
+          alertasAInsertar.push({
+            tipo: "seguimiento",
+            title: `${seg.title}: ${pr.numero}`,
+            description: desc,
+            entity_id: pr.id,
+            entity_type: "presupuesto",
+            module: "presupuestos",
+            user_id: userId,
+            sociedad_id: pr.sociedad_id,
+            read: false,
+          });
+          alertaSet.add(`${seg.title}|${pr.id}`);
         }
       }
 

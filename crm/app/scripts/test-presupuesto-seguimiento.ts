@@ -1,6 +1,6 @@
 // Prueba de lib/presupuesto-seguimiento.ts. Correr desde crm/app: npx tsx scripts/test-presupuesto-seguimiento.ts
 import assert from "node:assert/strict";
-import { clasificarPR, sumarDias, diasEntre, fechaAR, haceDias, compararSeguimiento, type EventoSeg } from "../src/lib/presupuesto-seguimiento";
+import { avisoSeguimientoQueToca, clasificarPR, sumarDias, diasEntre, fechaAR, haceDias, compararSeguimiento, type EventoSeg } from "../src/lib/presupuesto-seguimiento";
 
 const hoy = "2026-10-16";
 const ev = (o: Partial<EventoSeg>): EventoSeg => ({ id: Math.random().toString(), presupuesto_id: "p", tipo: "contacto", created_at: "2026-10-10T15:00:00Z", ...o } as EventoSeg);
@@ -47,5 +47,17 @@ assert.notEqual(c.grupo, "vencido");
 const orden = [{ grupo: "hoy", atraso: 1, diasEnviado: 4, montoPesos: 100 }, { grupo: "hoy", atraso: 3, diasEnviado: 6, montoPesos: 10 }, { grupo: "hoy", atraso: 1, diasEnviado: 4, montoPesos: 900 }] as const;
 const o = [...orden].sort(compararSeguimiento);
 assert.equal(o[0].atraso, 3); assert.equal(o[1].montoPesos, 900);
+
+// Avisos del control diario: el de 5 días sale (antes no), sin repetir ni mandar los tres juntos
+const ya = (...t: string[]) => new Set(t);
+assert.equal(avisoSeguimientoQueToca(2, ya()), null);
+assert.equal(avisoSeguimientoQueToca(3, ya())?.title, "Seguimiento PR");
+assert.equal(avisoSeguimientoQueToca(4, ya("Seguimiento PR")), null);
+assert.equal(avisoSeguimientoQueToca(5, ya("Seguimiento PR"))?.title, "Seguimiento PR (5 días)");
+assert.equal(avisoSeguimientoQueToca(6, ya("Seguimiento PR", "Seguimiento PR (5 días)")), null);
+assert.equal(avisoSeguimientoQueToca(7, ya("Seguimiento PR", "Seguimiento PR (5 días)"))?.urgente, true);
+assert.equal(avisoSeguimientoQueToca(30, ya())?.title, "Seguimiento urgente PR"); // PR viejo: solo el último
+assert.equal(avisoSeguimientoQueToca(6, ya("Seguimiento urgente PR")), null); // ya tiene uno posterior
+assert.equal(avisoSeguimientoQueToca(9, ya("Seguimiento urgente PR")), null);
 
 console.log("test-presupuesto-seguimiento OK");

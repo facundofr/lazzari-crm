@@ -12,6 +12,7 @@ import { OcClienteBloque } from "@/components/presupuestos/oc-cliente-bloque";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
+import { armarDuplicadoPR } from "@/lib/presupuesto-duplicar";
 import { generatePresupuestoPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
 import type { Presupuesto, PRStatus } from "@/lib/types";
 import { supabase } from "@/lib/supabase/client";
@@ -2293,30 +2294,28 @@ export default function PresupuestosLista() {
         return;
       }
 
-      const { id: _id, numero: _num, created_at: _ca, updated_at: _ua, enviado_at: _ea, respondido_at: _ra, presupuesto_items, ...rest } = fullPR;
+      // Sale como uno nuevo (fecha de hoy, vence en 30 días, Pendiente, creado por quien duplica) y se guarda de una
+      // sola vez con sus renglones: si algo falla no queda un PR vacío (lib/presupuesto-duplicar, auditoría H46).
+      const dup = armarDuplicadoPR(fullPR as any, todayAR(), profile?.id ?? null);
+      const { data: newRowId, error: insertError } = await (supabase as any).rpc("crear_presupuesto_atomico", {
+        p_sociedad_id: (fullPR as any).sociedad_id || sociedadActiva?.id,
+        p_presupuesto: dup.presupuesto,
+        p_items: dup.renglones,
+      });
 
-      const { data: newPRRow, error: insertError } = await supabase
-        .from("presupuestos")
-        // La OC del cliente, su fecha y el adjunto son de la operación original: el duplicado arranca sin ellos.
-        .insert({ ...rest, estado: "pendiente", version: 1, oc_cliente: null, oc_cliente_fecha: null, archivo_url: null, archivo_nombre: null } as any)
-        .select()
-        .single();
-
-      if (insertError || !newPRRow) {
+      if (insertError || !newRowId) {
         console.error("Error duplicating:", insertError);
-        toast.error("Error al duplicar presupuesto");
+        toast.error("No se pudo duplicar el presupuesto" + (insertError?.message ? ` (${insertError.message})` : ""));
         return;
       }
 
-      if (presupuesto_items && presupuesto_items.length > 0) {
-        const items = presupuesto_items.map(({ id: _iid, presupuesto_id: _pid, created_at: _ica, subtotal: _st, iva: _iv, total: _tot, ...itemRest }: Record<string, unknown>) => ({
-          ...itemRest,
-          presupuesto_id: newPRRow.id,
-        }));
-        await supabase.from("presupuesto_items").insert(items as any);
+      // Envío interno, transportista y dirección de entrega: la función de crear no los guarda.
+      if (Object.keys(dup.aparte).length > 0) {
+        const { error: aparteError } = await (supabase as any).from("presupuestos").update(dup.aparte).eq("id", newRowId);
+        if (aparteError) toast.warning("El presupuesto se duplicó, pero no el envío ni la entrega (" + aparteError.message + ")");
       }
 
-      toast.success("Presupuesto duplicado correctamente");
+      toast.success("Presupuesto duplicado: fecha de hoy y vence en 30 días");
       await fetchPresupuestos();
     } catch (err) {
       console.error("Error duplicating PR:", err);
