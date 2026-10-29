@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { esGastoFijo, nombreGrupo, armarFilasGastos, filtrarGastos, fijosSinCargar, grupoDe, grupoDeCategoria, totalesPorGrupo, venceEnMes, type FijoRow, type GastoRow } from "../src/lib/gastos-lazza";
 
 assert.equal(grupoDeCategoria("Sueldos"), "Personal");
+assert.equal(grupoDeCategoria("Premios"), "Premios"); // 28/10: grupo nuevo, seguido a Sueldos
+assert.equal(grupoDe({ grupo: "Premios", categoria: "Premios" }), "Premios");
 assert.equal(grupoDeCategoria("Débitos automáticos"), "Local y servicios");
 assert.equal(grupoDeCategoria("debitos automaticos"), "Local y servicios");
 assert.equal(grupoDeCategoria("Bancarios"), "Bancos y financieros");
@@ -35,7 +37,7 @@ assert.deepEqual(filtrarGastos(filas, { grupo: "Impuestos" }).map((f) => f.id), 
 assert.deepEqual(filtrarGastos(filas, { texto: "debito automatico" }).map((f) => f.id), ["g1"]);
 
 const t = totalesPorGrupo(filas);
-assert.equal(t.length, 7);
+assert.equal(t.length, 8); // 7 grupos + Premios (28/10)
 assert.deepEqual(t.find((x) => x.grupo === "Impuestos"), { grupo: "Impuestos", n: 1, ARS: 2520000, USD: 0 });
 assert.deepEqual(t.find((x) => x.grupo === "Personales"), { grupo: "Personales", n: 1, ARS: 0, USD: 800 });
 

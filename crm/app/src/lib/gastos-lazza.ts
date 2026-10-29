@@ -2,7 +2,7 @@
 // débito automático como forma de pago. Funciones puras (prueba: scripts/test-gastos-lazza.ts).
 // Grupo: el que tenga el gasto (columna `grupo`, migración 20261020150000); si no tiene (cargado desde Finanzas vieja), sale de su categoría.
 
-export const GRUPOS = ["Personal", "Local y servicios", "Profesionales", "Impuestos", "Bancos y financieros", "Operativos", "Personales"] as const;
+export const GRUPOS = ["Personal", "Premios", "Local y servicios", "Profesionales", "Impuestos", "Bancos y financieros", "Operativos", "Personales"] as const;
 export type Grupo = (typeof GRUPOS)[number];
 
 /** Nombre que se ve en pantalla (Augusto 23/10: "Sueldos" y "Augusto"). El valor guardado en la base no cambia: lo restringe un check de la tabla. */
@@ -11,7 +11,7 @@ export const nombreGrupo = (g: string | null | undefined) => NOMBRE_GRUPO[String
 
 /** Misma tabla que la migración 20261020150000. */
 const POR_CATEGORIA: Record<string, Grupo> = {
-  sueldos: "Personal", comisiones: "Personal",
+  sueldos: "Personal", comisiones: "Personal", premios: "Premios",
   alquiler: "Local y servicios", servicios: "Local y servicios", "debitos automaticos": "Local y servicios",
   profesionales: "Profesionales",
   impuestos: "Impuestos",

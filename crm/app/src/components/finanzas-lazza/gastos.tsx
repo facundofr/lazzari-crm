@@ -1,7 +1,7 @@
 "use client";
 
 // Finanzas Lazza → Gastos (Tanda 4, Augusto 20/10/2026: "Debito automatico pasa a ser forma de pago. Hace los grupos que vos decis.
-// Que todo se pueda editar y cambiar de grupo si yo quiero."). Una sola lista del mes (fijos y eventuales), 7 grupos, todo editable.
+// Que todo se pueda editar y cambiar de grupo si yo quiero."). Una sola lista del mes (fijos y eventuales), 8 grupos (con Premios, 28/10), todo editable.
 // Mismas reglas que Finanzas vieja: cada gasto tiene su pago en Movimientos (tipo "pago", gasto_manual_id); al editar, el pago
 // acompaña (gestionar_cobro "editar"); al borrar, el pago se anula. Si el gasto ya está cruzado con el banco: aviso, nunca frena.
 // Débitos automáticos: al abrir el mes en curso se cargan solos los del día ya pasado (cargar_debitos_automaticos, migración

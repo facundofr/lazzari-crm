@@ -1,0 +1,1 @@
+select 'fijo' t, descripcion, categoria, grupo from gastos_fijos where id='6a8fef61-c882-4fc3-90f2-320720ef89cf' union all select 'gasto', descripcion, categoria, grupo from gastos_manuales where id='8319c96d-64d7-4d76-8e27-ba8efc396ddd';
