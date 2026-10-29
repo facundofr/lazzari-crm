@@ -397,4 +397,20 @@ assert.deepEqual(porProveedor.map((p) => [p.proveedorId, p.facturas, p.saldo, p.
   assert.equal(conNc.costo.neto, -325000); // mitad de 650.000
 }
 
+// ── Transportes (29/10/2026): Reportes resta las facturas de transporte del mes (neto) ──
+{
+  const conTr = reporteBasico({ periodo: "2026-10", facturas: [fv({ id: "v1", subtotal: 100000, iva: 21000, total: 121000 })], origenes: [], idsAnulados: [], items: [], prNumero: {}, gastos: [],
+    transportes: [
+      { fecha: "2026-10-20", subtotal: 72000, iva: 0, total: 72000, moneda: "ARS" },
+      { fecha: "2026-10-10", subtotal: 10000, iva: 2100, total: 12100, moneda: "ARS" },
+      { fecha: "2026-09-30", subtotal: 99999, iva: 0, total: 99999, moneda: "ARS" }, // otro mes: no suma
+    ], tcDia });
+  assert.equal(conTr.transportes.neto, 82000);
+  assert.equal(conTr.transportes.total, 84100);
+  assert.equal(conTr.transportes.n, 2);
+  assert.equal(conTr.resultado, 100000 - 82000);
+  const sinTr = reporteBasico({ periodo: "2026-10", facturas: [], origenes: [], idsAnulados: [], items: [], prNumero: {}, gastos: [], tcDia });
+  assert.deepEqual(sinTr.transportes, { neto: 0, iva: 0, total: 0, n: 0 });
+}
+
 console.log("test-finanzas-lazza OK");

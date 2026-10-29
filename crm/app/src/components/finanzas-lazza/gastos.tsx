@@ -17,8 +17,8 @@ import { useToast } from "@/components/ui/toast";
 import { Select } from "@/components/ui/input";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import {
-  GRUPOS, MEDIOS, nombreGrupo, armarFilasGastos, etiquetaMedio, filtrarGastos, fijosSinCargar, grupoDe, totalesPorGrupo,
-  type FijoRow, type FilaGasto, type GastoRow, type Grupo,
+  GRUPOS, GRUPOS_EDITABLES, MEDIOS, nombreGrupo, armarFilasGastos, filasDeTransportes, etiquetaMedio, filtrarGastos, fijosSinCargar, grupoDe, totalesPorGrupo,
+  type FacturaTransporteRow, type FijoRow, type FilaGasto, type GastoRow, type Grupo,
 } from "@/lib/gastos-lazza";
 import { montoSicore, sugerirGastoFijo } from "@/lib/gasto-fijo-factura";
 import { gastoConVep, type DatosVep } from "@/lib/vep";
@@ -26,18 +26,21 @@ import { sumarMeses } from "@/lib/reportes-comprobantes";
 import { rangoMes } from "./datos";
 import { linkArchivo } from "@/lib/archivo-link";
 import { PremiosCarga } from "./premios";
+import { PagoJose } from "./pago-jose";
 
 const db = supabase as any;
 const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
 const sel = "!h-8 !py-0 !px-2 text-sm";
 const opcionesGrupo = GRUPOS.map((g) => ({ value: g, label: nombreGrupo(g) }));
+// En la ventana del gasto no se elige Transportes: esas filas son facturas de transporte (se manejan en Transportes y en Pagar).
+const opcionesGrupoEditable = GRUPOS_EDITABLES.map((g) => ({ value: g, label: nombreGrupo(g) }));
 type ColOrden = "fecha" | "grupo" | "detalle" | "tipo" | "pago" | "monto";
 const COLUMNAS: { col: ColOrden; label: string }[] = [
   { col: "fecha", label: "Fecha" }, { col: "grupo", label: "Grupo" }, { col: "detalle", label: "Detalle" },
   { col: "tipo", label: "Tipo" }, { col: "pago", label: "Pago" }, { col: "monto", label: "Monto" },
 ];
-const opcionesMedio = Object.entries(MEDIOS).map(([value, label]) => ({ value, label }));
+const opcionesMedio = Object.entries(MEDIOS).filter(([value]) => value !== "factura_transporte").map(([value, label]) => ({ value, label }));
 const faltaFuncion = (e: any) => e && (e.code === "PGRST202" || e.code === "42883" || /Could not find the function|does not exist/i.test(String(e.message || "")));
 const plata = (m: { ARS: number; USD: number }) => [m.ARS > 0.005 || !m.USD ? formatCurrency(m.ARS) : "", m.USD > 0.005 ? formatCurrency(m.USD, "USD") : ""].filter(Boolean).join(" + ");
 
@@ -50,6 +53,7 @@ const nombreDeMes = (mes: string) => `${MESES[Number(mes.slice(5, 7)) - 1]} ${me
 export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: string; periodo: string }) {
   const { toast } = useToast();
   const [gastos, setGastos] = useState<GastoRow[] | null>(null);
+  const [transportes, setTransportes] = useState<FacturaTransporteRow[]>([]);
   const [fijos, setFijos] = useState<FijoRow[]>([]);
   const [pagos, setPagos] = useState<PagoGasto[]>([]);
   const [sicore, setSicore] = useState<Sicore | null>(null);
@@ -84,12 +88,14 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
       }
       const { desde, hasta } = rangoMes(periodo);
       const anterior = rangoMes(sumarMeses(periodo, -1));
-      const [gs, fs, ops, directos] = await Promise.all([
+      const [gs, fs, ops, directos, trs] = await Promise.all([
         traerTodo<GastoRow>(() => db.from("gastos_manuales").select("*").eq("sociedad_id", sociedadId).gte("fecha", desde).lt("fecha", hasta).order("id")),
         traerTodo<FijoRow>(() => db.from("gastos_fijos").select("*").eq("sociedad_id", sociedadId).order("id")),
         // Fijo "SICORE auto": retenciones de Ganancias del mes anterior, OP y pagos directos (como el TXT SICORE).
         traerTodo<any>(() => db.from("ordenes_pago").select("id, fecha, estado, retencion_ganancias_monto").eq("sociedad_id", sociedadId).gte("fecha", anterior.desde).lt("fecha", anterior.hasta).gt("retencion_ganancias_monto", 0).order("id")),
         traerTodo<any>(() => db.from("movimientos").select("id, fecha, anulado, retencion_ganancias_monto").eq("sociedad_id", sociedadId).eq("tipo", "pago").gte("fecha", anterior.desde).lt("fecha", anterior.hasta).gt("retencion_ganancias_monto", 0).order("id")),
+        // Grupo Transportes: las facturas de transporte del mes (solo se muestran; se pagan con OP).
+        traerTodo<any>(() => db.from("facturas_compra").select("id, fecha, numero_factura, total, moneda, estado, archivo_url, proveedores(razon_social)").eq("sociedad_id", sociedadId).eq("tipo", "transporte").neq("estado", "anulada").gte("fecha", desde).lt("fecha", hasta).order("id")),
       ]);
       const retenciones = [
         ...ops.map((o: any) => ({ fecha: String(o.fecha).slice(0, 10), estado: o.estado, retencion: Number(o.retencion_ganancias_monto) })),
@@ -108,13 +114,15 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
         for (const p of ps) if (cruz.has(p.id)) p.cruzado = true;
       }
       if (!vivo) return;
+      setTransportes(trs.map((f: any) => ({ ...f, proveedor: f.proveedores?.razon_social ?? null })));
       setGastos(gs); setFijos(fs); setPagos(ps); setSicore(montoSicore(retenciones, `${periodo}-01`));
     })().catch((e) => { console.error("Finanzas Lazza · Gastos:", e); if (vivo) setError("No se pudieron cargar los gastos. Recargá la página."); });
     return () => { vivo = false; };
   }, [sociedadId, periodo, esMesActual, recarga]);
 
   const recargar = () => setRecarga((n) => n + 1);
-  const filas = useMemo(() => armarFilasGastos(gastos || [], fijos), [gastos, fijos]);
+  const filas = useMemo(() => [...armarFilasGastos(gastos || [], fijos), ...filasDeTransportes(transportes)]
+    .sort((a, b) => b.fecha.localeCompare(a.fecha) || a.grupo.localeCompare(b.grupo) || a.detalle.localeCompare(b.detalle)), [gastos, fijos, transportes]);
   const visibles = useMemo(() => {
     const base = filtrarGastos(filas, { grupo, tipo, soloDebito, texto }).filter((x) => !moneda || x.moneda === moneda);
     const clave = (x: (typeof base)[number]): string | number => {
@@ -253,9 +261,11 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
 
       {/* Premios del mes anterior (solo Lazzari): sugiere y se cargan con el botón, confirmando. */}
       <PremiosCarga sociedadId={sociedadId} periodo={periodo} onCargado={recargar} />
+      {/* Pago mensual de José Alvarez (solo Lazzari): comisión del mes anterior + interés del préstamo. */}
+      <PagoJose sociedadId={sociedadId} periodo={periodo} onCargado={recargar} />
 
       {/* Totales por grupo: tocar uno filtra la lista. */}
-      <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4 lg:grid-cols-8">
+      <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4 lg:grid-cols-9">
         {totales.map((t) => (
           <button key={t.grupo} type="button" onClick={() => setGrupo((g) => (g === t.grupo ? "" : t.grupo))}
             className={`rounded-lg border px-2 py-1.5 text-left ${grupo === t.grupo ? "border-orange-400 bg-orange-50 dark:bg-orange-950/30" : "border-zinc-200 bg-white hover:border-orange-300 dark:border-zinc-700 dark:bg-zinc-900"}`}>
@@ -305,7 +315,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
                   aviso={pagosDe(f.id).some((p) => p.cruzado || p.conciliado) ? "Ya está cruzado con el banco: si cambiás el monto, la línea del banco no va a coincidir (se puede guardar igual)." : undefined}
                   fijos={fijos} original={f} /></td></tr>
               ) : (
-                <tr key={f.id} onClick={() => setBorrador(desdeFila(f))} className="cursor-pointer border-t border-zinc-100 hover:bg-orange-50/40 dark:border-zinc-800 dark:hover:bg-zinc-800/50">
+                <tr key={f.id} onClick={() => { if (!f.facturaCompraId) setBorrador(desdeFila(f)); }} title={f.facturaCompraId ? "Factura de transporte: se liquida en Transportes y se paga en Pagar" : undefined} className={`${f.facturaCompraId ? "" : "cursor-pointer "}border-t border-zinc-100 hover:bg-orange-50/40 dark:border-zinc-800 dark:hover:bg-zinc-800/50`}>
                   <td className="whitespace-nowrap px-2 py-1.5">{formatDate(f.fecha)}</td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-xs">{nombreGrupo(f.grupo)}</td>
                   <td className="px-2 py-1.5">{f.detalle}{f.cargadoSolo && <span className="ml-1 text-[10px] text-blue-600">(cargado solo)</span>}
@@ -313,9 +323,9 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
                   <td className="px-2 py-1.5 text-xs">{f.fijo ? "Fijo" : "Eventual"}</td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-xs">{etiquetaMedio(f.medio)}{pagosDe(f.id).some((p) => p.cruzado || p.conciliado) && <span className="ml-1 text-emerald-600" title="Cruzado con el banco">✓ banco</span>}</td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-right font-mono font-semibold">{formatCurrency(f.monto, f.moneda)}</td>
-                  <td className="px-1 py-1 text-right">
+                  <td className="px-1 py-1 text-right">{f.facturaCompraId ? <span className="text-[10px] text-zinc-400">factura</span> : <>
                     <button type="button" title="Editar" onClick={(e) => { e.stopPropagation(); setBorrador(desdeFila(f)); }} className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-orange-600 dark:hover:bg-zinc-800"><Pencil className="h-3.5 w-3.5" /></button>
-                    <button type="button" title="Borrar (el pago se anula)" onClick={(e) => { e.stopPropagation(); void borrar([f.id]); }} className="rounded p-1 text-zinc-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/30"><Trash2 className="h-3.5 w-3.5" /></button>
+                    <button type="button" title="Borrar (el pago se anula)" onClick={(e) => { e.stopPropagation(); void borrar([f.id]); }} className="rounded p-1 text-zinc-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/30"><Trash2 className="h-3.5 w-3.5" /></button></>}
                   </td>
                 </tr>
               ))}
@@ -417,7 +427,7 @@ function Editor({ b, cambiar, guardar, cancelar, guardando, titulo, aviso, fijos
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         <input type="date" value={b.fecha} onChange={(e) => set({ fecha: e.target.value })} className={control} />
-        <div className="w-44"><Select value={b.grupo} onChange={(e) => set({ grupo: e.target.value as Grupo })} options={opcionesGrupo} className={sel} /></div>
+        <div className="w-44"><Select value={b.grupo} onChange={(e) => set({ grupo: e.target.value as Grupo })} options={opcionesGrupoEditable} className={sel} /></div>
         <input value={b.detalle} onChange={(e) => set({ detalle: e.target.value })} placeholder="Detalle" className={`${control} min-w-[220px] flex-1`} autoFocus />
         <div className="w-28"><Select value={b.fijo ? "fijo" : "eventual"} onChange={(e) => set({ fijo: e.target.value === "fijo" })} options={[{ value: "fijo", label: "Fijo" }, { value: "eventual", label: "Eventual" }]} className={sel} /></div>
         <div className="w-48"><Select value={b.medio} onChange={(e) => set({ medio: e.target.value })} options={opcionesMedio} className={sel} /></div>
@@ -475,7 +485,7 @@ function FijosEditables({ fijos, sociedadId, onCambio, sicore, tituloSicore }: {
           {lista.map((f) => (
             <tr key={f.id} className={`border-t border-zinc-100 dark:border-zinc-800 ${val(f, "activo") === false ? "opacity-50" : ""}`}>
               <td className="px-1 py-1"><input type="checkbox" checked={val(f, "activo") !== false} onChange={(e) => set(f.id, { activo: e.target.checked })} className="h-4 w-4 accent-orange-500" /></td>
-              <td className="px-1 py-1"><div className="w-44"><Select value={grupoDe({ grupo: val(f, "grupo"), categoria: f.categoria })} onChange={(e) => set(f.id, { grupo: e.target.value })} options={opcionesGrupo} className={sel} /></div></td>
+              <td className="px-1 py-1"><div className="w-44"><Select value={grupoDe({ grupo: val(f, "grupo"), categoria: f.categoria })} onChange={(e) => set(f.id, { grupo: e.target.value })} options={opcionesGrupoEditable} className={sel} /></div></td>
               <td className="px-1 py-1"><input value={String(val(f, "descripcion") || "")} onChange={(e) => set(f.id, { descripcion: e.target.value })} className={`${control} w-full min-w-[220px]`} /></td>
               <td className="px-1 py-1"><div className="w-48"><Select value={String(val(f, "medio_pago") || "")} onChange={(e) => set(f.id, { medio_pago: e.target.value || null })} options={opcionesMedio} placeholder="Sin definir" className={sel} /></div></td>
               <td className="px-1 py-1"><input type="number" min={1} max={31} value={val(f, "dia_vencimiento") ?? ""} onChange={(e) => set(f.id, { dia_vencimiento: e.target.value ? Number(e.target.value) : null })} className={`${control} w-16`} /></td>

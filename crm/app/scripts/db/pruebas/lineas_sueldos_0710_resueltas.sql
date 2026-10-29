@@ -1,0 +1,1 @@
+select id, estado::text, left(nota,60) nota from public.extracto_movimientos where id in ('020d8e52-52c1-4850-bcf2-716b7cb59832','1a22e8f6-3a75-4d60-8936-9ca31046a71e','3eff963e-9084-4788-aba4-f373a91e7d1f')

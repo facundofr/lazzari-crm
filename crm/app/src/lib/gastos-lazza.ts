@@ -2,8 +2,16 @@
 // débito automático como forma de pago. Funciones puras (prueba: scripts/test-gastos-lazza.ts).
 // Grupo: el que tenga el gasto (columna `grupo`, migración 20261020150000); si no tiene (cargado desde Finanzas vieja), sale de su categoría.
 
-export const GRUPOS = ["Personal", "Premios", "Local y servicios", "Profesionales", "Impuestos", "Bancos y financieros", "Operativos", "Personales"] as const;
+export const GRUPOS = ["Personal", "Premios", "Transportes", "Local y servicios", "Profesionales", "Impuestos", "Bancos y financieros", "Operativos", "Personales"] as const;
 export type Grupo = (typeof GRUPOS)[number];
+/**
+ * "Transportes" (Augusto 29/10/2026): las facturas de transporte (de transportistas y liquidaciones internas, como las de José)
+ * se MUESTRAN en Gastos con ese grupo, pero no son gastos cargados acá: se liquidan en Transportes y se pagan con OP.
+ * Por eso no se elige en la ventana del gasto (no se puede cargar un gasto a mano en Transportes). Mismo nombre en Reportes
+ * y en la Contabilidad (Costo → Transportes).
+ */
+export const GRUPO_TRANSPORTES = "Transportes" as const;
+export const GRUPOS_EDITABLES = GRUPOS.filter((g) => g !== GRUPO_TRANSPORTES);
 
 /** Nombre que se ve en pantalla (Augusto 23/10: "Sueldos" y "Augusto"). El valor guardado en la base no cambia: lo restringe un check de la tabla. */
 const NOMBRE_GRUPO: Record<string, string> = { Personal: "Sueldos", Personales: "Augusto" };
@@ -32,6 +40,7 @@ export function grupoDe(g: { grupo?: string | null; categoria?: string | null })
 export const MEDIOS: Record<string, string> = {
   transferencia: "Transferencia", efectivo: "Efectivo", tarjeta: "Tarjeta", tarjeta_visa_1582: "Tarjeta Visa 1582", tarjeta_mastercard_4775: "Tarjeta Mastercard 4775", cheque: "Cheque", vep: "VEP",
   debito: "Débito en cuenta", debito_automatico: "🔁 Débito automático",
+  factura_transporte: "Factura (se paga en Pagar)",
 };
 export const etiquetaMedio = (m: string | null | undefined) => MEDIOS[String(m || "")] || (m ? String(m) : "—");
 
@@ -48,6 +57,14 @@ export interface FijoRow {
 export interface FilaGasto {
   id: string; fecha: string; grupo: Grupo; detalle: string; fijo: boolean; medio: string; monto: number; moneda: "ARS" | "USD";
   fijoId: string | null; cargadoSolo: boolean; comprobante: string | null;
+  /** Fila de una factura de transporte (solo lectura en Gastos: se maneja en Transportes y en Pagar). */
+  facturaCompraId?: string | null;
+}
+
+/** Factura de compra tipo "transporte" (tabla facturas_compra), para mostrarla en Gastos. */
+export interface FacturaTransporteRow {
+  id: string; fecha: string; numero_factura: string | null; total: number | string | null; moneda: string | null;
+  archivo_url?: string | null; proveedor?: string | null;
 }
 
 const num = (v: unknown) => Number(v || 0) || 0;
@@ -72,6 +89,16 @@ export function armarFilasGastos(gastos: GastoRow[], fijos: FijoRow[]): FilaGast
       comprobante: g.comprobante_url || null, // el VEP o comprobante adjunto (Leer VEP)
     };
   }).sort((a, b) => b.fecha.localeCompare(a.fecha) || a.grupo.localeCompare(b.grupo) || a.detalle.localeCompare(b.detalle));
+}
+
+/** Las facturas de transporte del mes como filas del grupo Transportes (por la fecha de la factura y su total). */
+export function filasDeTransportes(facturas: FacturaTransporteRow[]): FilaGasto[] {
+  return facturas.map((f) => ({
+    id: `fc:${f.id}`, fecha: String(f.fecha).slice(0, 10), grupo: GRUPO_TRANSPORTES,
+    detalle: [f.proveedor || "Transportista", f.numero_factura ? `factura ${f.numero_factura}` : ""].filter(Boolean).join(" — "),
+    fijo: false, medio: "factura_transporte", monto: r2(num(f.total)), moneda: mon(f.moneda), fijoId: null, cargadoSolo: false,
+    comprobante: f.archivo_url || null, facturaCompraId: f.id,
+  }));
 }
 
 export interface FiltroGastos { grupo?: "" | Grupo; tipo?: "" | "fijo" | "eventual"; soloDebito?: boolean; texto?: string }

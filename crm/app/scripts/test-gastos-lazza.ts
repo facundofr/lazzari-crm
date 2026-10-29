@@ -1,6 +1,6 @@
 // npx tsx scripts/test-gastos-lazza.ts
 import assert from "node:assert/strict";
-import { esGastoFijo, nombreGrupo, armarFilasGastos, filtrarGastos, fijosSinCargar, grupoDe, grupoDeCategoria, totalesPorGrupo, venceEnMes, type FijoRow, type GastoRow } from "../src/lib/gastos-lazza";
+import { filasDeTransportes, GRUPOS_EDITABLES, esGastoFijo, nombreGrupo, armarFilasGastos, filtrarGastos, fijosSinCargar, grupoDe, grupoDeCategoria, totalesPorGrupo, venceEnMes, type FijoRow, type GastoRow } from "../src/lib/gastos-lazza";
 
 assert.equal(grupoDeCategoria("Sueldos"), "Personal");
 assert.equal(grupoDeCategoria("Premios"), "Premios"); // 28/10: grupo nuevo, seguido a Sueldos
@@ -37,7 +37,7 @@ assert.deepEqual(filtrarGastos(filas, { grupo: "Impuestos" }).map((f) => f.id), 
 assert.deepEqual(filtrarGastos(filas, { texto: "debito automatico" }).map((f) => f.id), ["g1"]);
 
 const t = totalesPorGrupo(filas);
-assert.equal(t.length, 8); // 7 grupos + Premios (28/10)
+assert.equal(t.length, 9); // 7 grupos + Premios (28/10) + Transportes (29/10)
 assert.deepEqual(t.find((x) => x.grupo === "Impuestos"), { grupo: "Impuestos", n: 1, ARS: 2520000, USD: 0 });
 assert.deepEqual(t.find((x) => x.grupo === "Personales"), { grupo: "Personales", n: 1, ARS: 0, USD: 800 });
 
@@ -61,5 +61,24 @@ assert.equal(esGastoFijo({ tipo_recurrencia: "fijo" }), true);
 assert.equal(esGastoFijo({ tipo_recurrencia: "eventual", gasto_fijo_id: "gf" }), true, "atado a un fijo");
 assert.equal(esGastoFijo({ tipo_recurrencia: "eventual" }), false);
 assert.equal(esGastoFijo({}), false);
+
+// Transportes (29/10/2026): las facturas de transporte se muestran como filas del grupo Transportes, solo lectura
+{
+  const tr = filasDeTransportes([
+    { id: "f1", fecha: "2026-10-20T03:00:00Z", numero_factura: "0000-00000016", total: "72000", moneda: "ARS", proveedor: "JOSE ALVAREZ" },
+    { id: "f2", fecha: "2026-10-05", numero_factura: null, total: 1000, moneda: "usd", archivo_url: "x.pdf", proveedor: null },
+  ]);
+  assert.equal(tr[0].grupo, "Transportes");
+  assert.equal(tr[0].id, "fc:f1");
+  assert.equal(tr[0].facturaCompraId, "f1");
+  assert.equal(tr[0].fecha, "2026-10-20");
+  assert.equal(tr[0].detalle, "JOSE ALVAREZ — factura 0000-00000016");
+  assert.equal(tr[0].monto, 72000);
+  assert.equal(tr[1].moneda, "USD");
+  assert.equal(tr[1].detalle, "Transportista");
+  const tot = totalesPorGrupo([...filas, ...tr]);
+  assert.deepEqual(tot.find((x) => x.grupo === "Transportes"), { grupo: "Transportes", n: 2, ARS: 72000, USD: 1000 });
+  assert.ok(!GRUPOS_EDITABLES.includes("Transportes" as never), "Transportes no se elige al cargar un gasto");
+}
 
 console.log("test-gastos-lazza OK");

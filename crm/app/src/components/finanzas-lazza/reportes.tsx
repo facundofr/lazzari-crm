@@ -57,6 +57,7 @@ export function FinanzasLazzaReportes({ sociedadId, periodo }: { sociedadId: str
           <tbody>
             {fila("Facturado", r.facturado, "Facturas del mes − NC (US$ al TC de cada factura)")}
             {fila("Costo de lo vendido", r.costo, "Costo de los artículos de los PR facturados")}
+            {fila("Transportes", r.transportes, `Facturas de transporte del mes (${r.transportes.n}): transportistas y liquidaciones internas`)}
           </tbody>
         </table>
         <div className="mt-2 grid grid-cols-1 gap-1 border-t border-zinc-200 pt-2 text-sm sm:grid-cols-3 dark:border-zinc-700">
@@ -67,13 +68,13 @@ export function FinanzasLazzaReportes({ sociedadId, periodo }: { sociedadId: str
         {r.gastos.enUsdSinCotizacion > 0 && <p className="mt-1 text-[11px] text-amber-600">Hay gastos en US$ por {formatCurrency(r.gastos.enUsdSinCotizacion, "USD")} sin cotización del día: no suman.</p>}
       </div>
 
-      {/* Resultado del mes: neto de venta − neto de costo − gastos del mes */}
+      {/* Resultado del mes: neto de venta − neto de costo − transportes − gastos del mes */}
       <div className={`rounded-xl border-2 p-3 text-sm ${r.resultado >= 0 ? "border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/20" : "border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/20"}`}>
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <span className="font-semibold text-zinc-700 dark:text-zinc-200">Resultado del mes</span>
           <span className={`font-mono text-lg font-bold ${r.resultado >= 0 ? "text-emerald-700 dark:text-emerald-400" : "text-red-600"}`}>{formatCurrency(r.resultado)}</span>
         </div>
-        <p className="mt-0.5 font-mono text-[11px] text-zinc-500">{formatCurrency(r.facturado.neto)} neto de venta − {formatCurrency(r.costo.neto)} neto de costo − {formatCurrency(r.gastos.total)} gastos del mes</p>
+        <p className="mt-0.5 font-mono text-[11px] text-zinc-500">{formatCurrency(r.facturado.neto)} neto de venta − {formatCurrency(r.costo.neto)} neto de costo − {formatCurrency(r.transportes.neto)} transportes − {formatCurrency(r.gastos.total)} gastos del mes</p>
       </div>
 
       {(r.avisos.length > 0 || r.sinCotizacion.length > 0) && (

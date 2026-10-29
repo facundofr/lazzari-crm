@@ -1,7 +1,7 @@
 // Finanzas Lazza: lecturas de la base (solo SELECT, nada se guarda). Las cuentas están en lib/finanzas-lazza.
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
-import { armarTcDelDia, armarVencimientos, comprobanteVenta, saldoFacturaCompra, type FacturaCompraFL, type FacturaVentaFL, type FilaVencimiento, type GastoFL, type GastoVepFL, type ItemCostoFL, type ItemFacturaFL, type PagoDirectoFC, type RetencionIvaFL, type TcDelDia } from "@/lib/finanzas-lazza";
+import { armarTcDelDia, armarVencimientos, comprobanteVenta, saldoFacturaCompra, type FacturaCompraFL, type FacturaVentaFL, type FilaVencimiento, type GastoFL, type GastoVepFL, type ItemCostoFL, type ItemFacturaFL, type TransporteFL, type PagoDirectoFC, type RetencionIvaFL, type TcDelDia } from "@/lib/finanzas-lazza";
 import type { LineaMov } from "@/lib/movimientos-banco";
 import { calcularSaldosClientes, cobradoPorFactura, saldoFacturaVenta, traerDatosSaldoClientes, type SaldoCliente } from "@/lib/saldo-clientes";
 import { calcularSaldosProveedores, traerCreditosProveedores, type SaldoProveedor } from "@/lib/saldo-proveedores";
@@ -49,11 +49,15 @@ export async function traerVentasDelMes(sociedadId: string, periodo: string): Pr
 
 export async function traerDatosReporte(sociedadId: string, periodo: string) {
   const { desde, hasta } = rangoMes(periodo);
-  const [facturas, gastosRaw] = await Promise.all([
+  const [facturas, gastosRaw, transportesRaw] = await Promise.all([
     traerVentasDelMes(sociedadId, periodo),
     traerTodo<any>(() => db.from("gastos_manuales").select("id, fecha, monto, moneda, tipo_recurrencia, gasto_fijo_id")
       .eq("sociedad_id", sociedadId).gte("fecha", desde).lt("fecha", hasta).order("id")),
+    // Transportes (29/10/2026): las facturas de transporte del mes (las mismas que muestra Gastos en el grupo Transportes).
+    traerTodo<any>(() => db.from("facturas_compra").select("id, fecha, subtotal, iva, total, moneda")
+      .eq("sociedad_id", sociedadId).eq("tipo", "transporte").neq("estado", "anulada").gte("fecha", desde).lt("fecha", hasta).order("id")),
   ]);
+  const transportes: TransporteFL[] = transportesRaw.map((x: any) => ({ ...x, fecha: String(x.fecha).slice(0, 10) }));
   // Facturas de origen de las NC que son de otro mes.
   const enMes = new Set(facturas.map((f) => f.id));
   const idsOrigen = [...new Set(facturas.map((f) => f.factura_origen_id).filter((x): x is string => !!x && !enMes.has(x)))];
@@ -86,7 +90,7 @@ export async function traerDatosReporte(sociedadId: string, periodo: string) {
   }
   const idsAnulados = [...facturas, ...origenes].filter((f) => f.estado === "anulada").map((f) => f.id);
   const gastos: GastoFL[] = gastosRaw.map((g) => ({ ...g, fecha: String(g.fecha).slice(0, 10) }));
-  return { facturas, origenes, idsAnulados, items, itemsFactura, prNumero, gastos, tcDia };
+  return { facturas, origenes, idsAnulados, items, itemsFactura, prNumero, gastos, transportes, tcDia };
 }
 
 export async function traerComprasDelMes(sociedadId: string, periodo: string): Promise<FacturaCompraFL[]> {

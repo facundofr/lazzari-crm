@@ -83,6 +83,15 @@ export interface ItemCostoFL {
   iva_porcentaje?: number | string | null;
 }
 
+/** Factura de transporte (facturas_compra tipo "transporte": transportistas y liquidaciones internas). Reportes la resta como Transportes. */
+export interface TransporteFL {
+  fecha: string;
+  subtotal: number | string | null;
+  iva?: number | string | null;
+  total: number | string | null;
+  moneda: string | null;
+}
+
 /** Renglón de una factura de venta (tabla factura_items): sirve para tomar el costo solo de lo que se facturó. */
 export interface ItemFacturaFL {
   factura_id: string;
@@ -128,8 +137,10 @@ export interface ReporteBasico {
   facturado: NetoIva;
   costo: NetoIva;
   gastos: { fijos: number; eventuales: number; total: number; enUsdSinCotizacion: number };
+  /** Facturas de transporte del mes (29/10/2026, Augusto: mismo nombre que en Gastos y en la Contabilidad). */
+  transportes: NetoIva & { n: number };
   objetivo: { neto: number; nivel: NivelObjetivo; proximo: { nombre: string; monto: number; falta: number } | null };
-  /** Neto de venta − neto de costo − gastos del mes (Augusto 18/10). */
+  /** Neto de venta − neto de costo − neto de transportes − gastos del mes (Augusto 18/10 y 29/10). */
   resultado: number;
   filas: FilaReporte[];
   /** PR sin costo, facturas sin PR, NC sin factura de origen. */
@@ -233,6 +244,8 @@ export function reporteBasico(input: {
   itemsFactura?: ItemFacturaFL[];
   prNumero: Record<string, string>;
   gastos: GastoFL[];
+  /** Facturas de transporte del mes (opcional: sin ellas, Transportes en 0). */
+  transportes?: TransporteFL[];
   tcDia: TcDelDia;
 }): ReporteBasico {
   const { periodo, tcDia } = input;
@@ -312,13 +325,27 @@ export function reporteBasico(input: {
     if (esGastoFijo(g)) fijos += monto; else eventuales += monto;
   }
 
+  // Transportes (29/10/2026): facturas de transporte del mes, en $ (US$ al dólar del día de la factura).
+  const transportes = vacioNI();
+  let transportesN = 0;
+  for (const tr of input.transportes || []) {
+    if (periodoDeFecha(tr.fecha) !== periodo) continue;
+    const tc = tcComprobante(tr.moneda, null, tr.fecha, tcDia);
+    if (!tc) continue;
+    const total = num(tr.total);
+    const neto = tr.subtotal !== null && tr.subtotal !== undefined && tr.subtotal !== "" && num(tr.subtotal) > 0 ? num(tr.subtotal) : total;
+    sumarNI(transportes, { neto: neto * tc, iva: Math.max(0, total - neto) * tc, total: total * tc });
+    transportesN += 1;
+  }
+
   const fact = redondearNI(facturado);
   return {
     facturado: fact,
     costo: redondearNI(costoTot),
     gastos: { fijos: r2(fijos), eventuales: r2(eventuales), total: r2(fijos + eventuales), enUsdSinCotizacion: r2(enUsdSinCotizacion) },
+    transportes: { ...redondearNI(transportes), n: transportesN },
     objetivo: nivelObjetivo(fact.neto),
-    resultado: r2(fact.neto - r2(costoTot.neto) - r2(fijos + eventuales)),
+    resultado: r2(fact.neto - r2(costoTot.neto) - r2(transportes.neto) - r2(fijos + eventuales)),
     filas,
     avisos,
     sinCotizacion,
