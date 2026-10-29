@@ -3,7 +3,7 @@
 // Consulta de facturas (SOLO LECTURA), para todos los roles: facturas de venta y de compra.
 // Venta: ver detalle, PDF y reenviarla al cliente por mail. Compra: ver detalle y el archivo del proveedor.
 // No emite, no cobra, no paga, no anula: eso sigue en Finanzas (solo administración).
-// La usan el menú "Facturas" (/consulta-facturas) y Finanzas Lazza (`completa`: pestaña "Todas" + filtros de estado, moneda y fechas,
+// La lista (FacturasConsulta) quedó sin uso al borrarse /consulta-facturas (29/10); las fichas las usan Facturas y Finanzas Lazza (`completa`: pestaña "Todas" + filtros de estado, moneda y fechas,
 // y en compras la columna "OP" al final para descargar la orden de pago que la pagó — Augusto 19/10/2026).
 // En Finanzas Lazza (`completa`) las facturas de venta con saldo tienen "Cobrar": la misma liquidación de Finanzas (finanzas-lazza/cobrar.tsx).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -22,7 +22,7 @@ import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { estadoVisibleFactura } from "@/lib/estado-factura-venta";
 import { emisorDeSociedad } from "@/lib/emisor-sociedad";
 import { cargarOPsDeFacturas, abrirOrdenPagoPDF, opsPorFactura, type OPResumen } from "@/lib/orden-pago-pdf";
-import { Ban, CreditCard, Download, Eye, FileText, HandCoins, Mail, Paperclip, Search, Wallet, X } from "lucide-react";
+import { Ban, CreditCard, Download, Eye, FileText, HandCoins, Mail, Paperclip, RotateCcw, Search, Wallet, X, XCircle } from "lucide-react";
 import { movimientoPagoTarjeta, registrarPagoTarjeta, tarjetaSugerida, traerTarjetas, type Tarjeta } from "@/lib/pago-tarjeta";
 import { CobrarCliente } from "@/components/finanzas-lazza/cobrar";
 import { EnviarOrdenPago, verOP } from "@/components/finanzas-lazza/orden-pago-doc";
@@ -402,6 +402,71 @@ function useFactura<T>(tabla: string, select: string, factura?: T | null, factur
 }
 
 /**
+ * Anular / Revertir anulación de una factura sin CAE (manual), traído de Facturación vieja (Augusto 29/10/2026).
+ * Va en la base en una transacción (gestionar_factura_manual, auditoría H31): lo cobrado queda a favor del cliente
+ * y el PR vuelve a "facturar" (y al revés al revertir). Las facturas con CAE no se anulan: se hace NC.
+ */
+function AnularFacturaManual({ venta, onHecho }: { venta: FacturaVenta; onHecho: () => void }) {
+  const [trabajando, setTrabajando] = useState(false);
+  const anulada = venta.estado === "anulada";
+  async function hacer() {
+    const pregunta = anulada
+      ? "¿Revertir la anulación? La factura vuelve a quedar vigente (si tenía cobros, vuelven a ella)."
+      : "¿Seguro que querés anular esta factura? Si tiene cobros, quedan a favor del cliente.";
+    if (!confirm(pregunta)) return;
+    setTrabajando(true);
+    const { data, error } = await (supabase as any).rpc("gestionar_factura_manual", { p_factura_id: venta.id, p_accion: anulada ? "revertir" : "anular" });
+    setTrabajando(false);
+    if (error) { alert(`No se pudo ${anulada ? "revertir la anulación" : "anular"}: ${error.message}`); return; }
+    const avisos = Array.isArray(data?.avisos) ? data.avisos.map(String) : [];
+    alert([anulada ? "Anulación revertida." : "Factura anulada.", ...avisos].join("\n"));
+    onHecho();
+  }
+  return (
+    <button type="button" disabled={trabajando} onClick={() => void hacer()}
+      title={anulada ? "La factura vuelve a quedar vigente" : "Solo facturas sin CAE (manuales); lo cobrado queda a favor del cliente"}
+      className="inline-flex items-center gap-1 rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
+      {anulada ? <><RotateCcw className="h-4 w-4" /> {trabajando ? "Revirtiendo…" : "Revertir anulación"}</> : <><XCircle className="h-4 w-4" /> {trabajando ? "Anulando…" : "Anular"}</>}
+    </button>
+  );
+}
+
+/** Estado de una FCE en el Registro de ARCA (solo lectura), traído de Facturación vieja (29/10/2026). */
+function RegistroFce({ facturaId }: { facturaId: string }) {
+  const { sociedadActiva } = useUser();
+  const [r, setR] = useState<{ loading?: boolean; error?: string; estado?: string; historial?: { estado: string; fechaHora?: string }[]; checkedAt?: string } | null>(null);
+  async function consultar() {
+    if (!sociedadActiva?.id) return;
+    setR({ loading: true });
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const params = new URLSearchParams({ action: "fce-status", sociedad_id: sociedadActiva.id, factura_id: facturaId });
+      const response = await fetch(`/api/facturacion?${params}`, { cache: "no-store", headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {} });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "No se pudo consultar el Registro FCE.");
+      setR({ estado: data.estado || "Sin estado informado", historial: Array.isArray(data.historial) ? data.historial : [], checkedAt: new Date().toLocaleString("es-AR") });
+    } catch (error) {
+      setR({ error: error instanceof Error ? error.message : "No se pudo consultar el Registro FCE." });
+    }
+  }
+  return (
+    <div className="mb-3 space-y-1 rounded-lg border border-blue-200 p-2.5 dark:border-blue-900">
+      <div className="flex items-center justify-between gap-2">
+        <h4 className="text-sm font-semibold dark:text-zinc-200">Registro FCE de ARCA</h4>
+        <button type="button" onClick={() => void consultar()} disabled={r?.loading} className="text-sm text-blue-600 underline disabled:opacity-50">{r?.loading ? "Consultando…" : "Consultar estado en ARCA"}</button>
+      </div>
+      <p className="text-xs text-zinc-500">Solo lectura. Este estado no es el estado de cobro del CRM.</p>
+      {r && !r.loading && (r.error ? <p className="text-sm text-red-600">{r.error}</p> : (
+        <div className="text-sm dark:text-zinc-300" role="status">
+          <p>Estado informado: <b>{r.estado}</b> <span className="text-xs text-zinc-500">· consultado {r.checkedAt}</span></p>
+          {(r.historial || []).map((h, i) => <p key={i} className="text-xs">{h.fechaHora || "Sin fecha"} — {h.estado}</p>)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
  * Ficha de una factura de venta: datos, renglones, Ver / Descargar el PDF y Enviar al cliente (marca de enviada).
  * `extra`: lo que se muestra abajo (en Finanzas Lazza: "Cobrada con", los recibos con Ver / Descargar / Enviar).
  * `soloMail`: abre directo la ventana de mail, sin la ficha (botón "Enviar" de la lista; al cerrarla se cierra todo).
@@ -526,7 +591,9 @@ export function FichaFacturaVenta({ factura, facturaId, cobrable = false, onCobr
                 {!soloLectura && venta.estado !== "anulada" && !/^NC/i.test(venta.tipo) && <button type="button" onClick={() => setHacerNc(true)} title="Hacer una nota de crédito de esta factura" className="inline-flex items-center gap-1 rounded-lg border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/30"><Ban className="h-4 w-4" /> Hacer NC</button>}
                 {hacerNc && <NotaCreditoVentaModal facturaId={venta.id} onClose={() => { setHacerNc(false); if (ncEmitida.current) onClose(); }} onEmitida={() => { ncEmitida.current = true; onEnviada?.(); }} />}
                 {cobrable && onCobrar && <button type="button" onClick={onCobrar} className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700"><HandCoins className="h-4 w-4" /> Cobrar</button>}
+                {!soloLectura && !venta.cae && !/^NC/i.test(venta.tipo) && <AnularFacturaManual venta={venta} onHecho={() => { onEnviada?.(); onClose(); }} />}
               </div>
+              {!soloLectura && /^FCE/i.test(venta.tipo) && venta.estado !== "anulada" && <RegistroFce facturaId={venta.id} />}
               <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
                 {filaFicha("Fecha", formatDate(venta.fecha))}
                 {filaFicha("Vencimiento", venta.fecha_vencimiento ? formatDate(venta.fecha_vencimiento) : "—")}

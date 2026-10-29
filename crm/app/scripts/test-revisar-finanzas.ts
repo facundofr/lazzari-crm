@@ -38,7 +38,7 @@ assert.deepEqual(ordenarRevisar(items, hoy).map((i) => i.id), ["c", "d", "b", "a
 assert.equal(estaPospuesto(items[3], hoy), true);
 assert.equal(estaPospuesto(items[2], hoy), false);
 
-assert.deepEqual(destinoEntidad("factura_venta", "f1"), { href: "/facturacion?factura=f1" });
+assert.deepEqual(destinoEntidad("factura_venta", "f1"), { href: "/facturas?factura=f1" });
 assert.deepEqual(destinoEntidad("cheque", "x"), { tab: "echeqs" });
 assert.equal(destinoEntidad("otro", null), null);
 assert.equal(motivoLabel("diferencia_cobro"), "Diferencia en un cobro");

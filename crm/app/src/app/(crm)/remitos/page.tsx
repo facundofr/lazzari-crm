@@ -1262,9 +1262,9 @@ export default function RemitosPage() {
                     {detailFacturas.map((f) => (
                       <button
                         key={f.id}
-                        onClick={() => window.open(`/facturacion?factura=${f.id}`, "_self")}
+                        onClick={() => window.open(`/facturas?factura=${f.id}`, "_self")}
                         className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 px-2.5 py-1.5 text-xs hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
-                        title="Ir a facturacion"
+                        title="Ver la factura"
                       >
                         <Badge variant={f.estado === "pagada" ? "success" : f.estado === "anulada" ? "warning" : "info"}>
                           {f.tipo} {f.numero}

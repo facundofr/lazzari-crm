@@ -24,9 +24,12 @@ const TAB_A_SECCION: Record<string, SeccionLazza> = {
   echeqs: "cheques", cheques_tercero: "cheques", lineas_credito: "bancos", informes: "cuentas", cuentas: "bancos",
 };
 
-/** Link a una factura de venta puntual (cobro o nota de crédito): la pantalla de Facturación de siempre, que abre esa factura. */
-export function linkFactura(facturaId: string, accion?: "cobro" | "nc"): string {
-  return `/facturacion?factura=${encodeURIComponent(facturaId)}${accion ? `&accion=${accion}` : ""}`;
+/**
+ * Link a una factura de venta puntual: Facturas con su ficha abierta (ahí están Cobrar, Hacer NC, Anular, Ver y Enviar).
+ * 29/10/2026: la Facturación vieja (/facturacion) se borró; antes el link iba ahí con &accion=cobro|nc.
+ */
+export function linkFactura(facturaId: string): string {
+  return `/facturas?factura=${encodeURIComponent(facturaId)}`;
 }
 
 /** A dónde lleva hoy un link viejo `/finanzas?tab=<tab>`. Sin tab: el inicio de Finanzas. */
@@ -42,10 +45,7 @@ export function linkFinanzas(tab?: string | null): string {
  */
 export function traducirLinkViejo(params: URLSearchParams): string | null {
   const factura = params.get("factura");
-  if (factura && !params.get("seccion")) {
-    const a = params.get("accion");
-    return linkFactura(factura, a === "cobro" || a === "nc" ? a : undefined);
-  }
+  if (factura && !params.get("seccion")) return linkFactura(factura);
   const tab = params.get("tab");
   if (tab && !params.get("seccion")) return linkFinanzas(tab);
   return null;

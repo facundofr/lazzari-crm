@@ -56,10 +56,12 @@ const boton = (activo: boolean) => `rounded-md px-3 py-1 text-sm font-medium ${a
 
 type Datos = { filas: FilaFactura[]; recibos: Recibo[]; todas: boolean };
 
-export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta", soloLectura = false }: {
+export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta", soloLectura = false, facturaInicial }: {
   sociedadId: string; ladoInicial?: LadoFactura | "facturar";
   /** Vendedores (Facturas del menú, Augusto 20/10): ven Ventas y Compras, descargan y envían; no facturan, no cobran/pagan ni cambian vencimientos. */
   soloLectura?: boolean;
+  /** Factura de venta a abrir al entrar (links `/facturas?factura=<id>` de Remitos, el buscador y la campana; 29/10/2026). */
+  facturaInicial?: string | null;
 }) {
   const { sociedadActiva } = useUser();
   // "Facturar" (Augusto 20/10): primera pestaña, los PR que faltan facturar (facturar.tsx).
@@ -73,6 +75,8 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta", soloL
   const [recarga, setRecarga] = useState(0);
   const [tildadas, setTildadas] = useState<string[]>([]);
   const [ficha, setFicha] = useState<FilaFactura | null>(null);
+  // Factura pedida por link: si está en la lista se abre su ficha completa; si no (cobrada, anulada), la ficha sola.
+  const [fichaLink, setFichaLink] = useState<string | null>(facturaInicial || null);
   // "Enviar" en la columna Enviada: abre directo la ventana de mail (sin la ficha).
   const [enviarDe, setEnviarDe] = useState<FilaFactura | null>(null);
   const [editando, setEditando] = useState<FilaFactura | null>(null);
@@ -120,6 +124,11 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta", soloL
   const porId = useMemo(() => new Map((datos?.filas || []).map((f) => [f.id, f])), [datos]);
   const seleccion = useMemo(() => prepararSeleccion(tildadas.map((id) => porId.get(id)).filter(Boolean) as FilaFactura[], lado), [tildadas, porId, lado]);
   const recibosPorId = useMemo(() => new Map((datos?.recibos || []).map((r) => [r.id, r])), [datos]);
+  useEffect(() => {
+    if (!fichaLink || !datos) return;
+    const fila = porId.get(fichaLink);
+    if (fila) { setFicha(fila); setFichaLink(null); }
+  }, [fichaLink, datos, porId]);
 
   const tildar = (id: string, si: boolean) => setTildadas((prev) => (si ? (prev.includes(id) ? prev : [...prev, id]) : prev.filter((x) => x !== id)));
   const tildables = visibles.filter(sePuedeTildar);
@@ -353,6 +362,9 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta", soloL
       )}
 
       {enviarDe && <FichaFacturaVenta facturaId={enviarDe.id} soloMail onClose={() => setEnviarDe(null)} onEnviada={recargar} />}
+      {fichaLink && datos && !porId.has(fichaLink) && (
+        <FichaFacturaVenta facturaId={fichaLink} onClose={() => setFichaLink(null)} soloLectura={soloLectura} onEnviada={recargar} />
+      )}
       {ficha && (esVenta ? (
         <FichaFacturaVenta facturaId={ficha.id} onClose={() => setFicha(null)} cobrable={!soloLectura && sePuedeTildar(ficha)} soloLectura={soloLectura} onEnviada={recargar}
           onCobrar={() => { const f = ficha; setFicha(null); setPagando({ entidadId: f.entidadId, nombre: f.nombre, ids: [f.id] }); }}

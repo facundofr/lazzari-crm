@@ -57,9 +57,9 @@ export const GUIA_SECCIONES: SeccionGuia[] = [
     "id": "vender-facturas",
     "grupo": "Vender",
     "titulo": "Facturas",
-    "ruta": "/consulta-facturas",
+    "ruta": "/facturas",
     "modulo": "consulta_facturas",
-    "texto": "**Para qué sirve:** consultar facturas de venta y de compra (solo lectura).\n**Cómo se hace:** 1) **De venta** / **De compra**; buscar por cliente o proveedor, CUIT, número, PR u OC. 2) Venta: **Ver / bajar PDF**, **Reenviar al cliente**. 3) Compra: **Ver factura del proveedor**.\n**Ojo:** acá no se emite, cobra, paga ni anula (eso es Finanzas Lazza)."
+    "texto": "**Para qué sirve:** ver las facturas de venta y de compra (la misma lista de Finanzas > Facturas).\n**Cómo se hace:** 1) **Ventas** / **Compras**; buscar por cliente o proveedor, CUIT, número, PR u OC. 2) Venta: **Ver** / **Descargar** el PDF y **Enviar** al cliente (queda la marca de enviada). 3) Compra: ver la factura del proveedor y la OP que la pagó, con sus adjuntos.\n**Ojo:** los vendedores solo miran, bajan y envían; facturar, cobrar, pagar y hacer NC es de Finanzas. La consulta vieja (/consulta-facturas) se borró y lleva acá."
   },
   {
     "id": "comprar-proveedores",

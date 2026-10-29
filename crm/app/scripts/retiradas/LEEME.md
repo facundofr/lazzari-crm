@@ -39,3 +39,17 @@ Las dos de facturas de compra salieron de `test:regressions`.
 | test-purchase-credit-note.mjs | NC de compra desde la carga de factura vieja |
 | test-purchase-invoice-parser.cjs | Lectura de facturas de compra en la carga vieja |
 | test-purchase-invoice-reconciliation.cjs | Cruce factura ↔ OC de la carga vieja |
+
+## 29/10/2026: se borró la Facturación vieja (/facturacion)
+
+Estas 5 leían `facturacion/facturacion-content.tsx`, que ya no existe (anular sin CAE, revertir y el Registro FCE pasaron
+a la ficha de la factura, `components/facturas-consulta.tsx`). Varias ya fallaban antes porque leían `ventas/page.tsx`,
+borrada el 28/10. Salieron de `test:regressions` (cobros-cheques, notes-nc-date) y de `test:fce` (fce-ui, invoice-intent).
+
+| Prueba | Qué cuidaba |
+|---|---|
+| test-checklist-email-credit.mjs | Aviso de límite de crédito en Facturación y textos de Finanzas vieja |
+| test-cobros-cheques-atomicos.mjs | Que el cobro de Facturación vieja usara la RPC atómica de cobros con cheques |
+| test-fce-ui.cjs | Controles FCE en las pantallas (además leía Ventas) |
+| test-invoice-intent.cjs | Que Facturación y Ventas emitieran con el candado entre pestañas (la ventana de emitir lo sigue usando) |
+| test-invoice-notes-nc-date.cjs | Fecha de la NC y observaciones en el PDF desde Facturación vieja |

@@ -51,7 +51,7 @@ const navigation: { grupo: string; items: { name: string; href: string; icon: ty
     { name: "Presupuestos nuevo", href: "/presupuestos-nuevo", icon: Sparkles, module: "presupuestos_nuevo", oculto: true }, // Augusto 20/10: ahora es Presupuestos (el link redirige)
     { name: "Presupuestos", href: "/presupuestos", icon: FileText, module: "presupuestos" },
     { name: "Muestras", href: "/muestras", icon: Shirt, module: "muestras", oculto: true }, // Augusto 20/10: fuera del menú (sigue por link)
-    { name: "Facturas", href: "/facturas", icon: FileSearch, module: "consulta_facturas" }, // Augusto 20/10: Facturas de Finanzas Lazza (vendedores solo mirar); la vieja sigue en /consulta-facturas
+    { name: "Facturas", href: "/facturas", icon: FileSearch, module: "consulta_facturas" }, // Augusto 20/10: Facturas de Finanzas Lazza (vendedores solo mirar); la vieja (/consulta-facturas) se borró 29/10 y redirige acá
   ] },
   { grupo: "Comprar", items: [
     { name: "Proveedores", href: "/proveedores", icon: Factory, module: "proveedores" },

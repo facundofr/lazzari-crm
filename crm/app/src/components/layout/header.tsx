@@ -347,7 +347,7 @@ export function Header({ title, subtitle, action }: HeaderProps) {
     const moduleRoutes: Record<string, string> = {
       clientes: "/clientes",
       presupuestos: "/presupuestos",
-      facturacion: "/facturacion",
+      facturacion: "/facturas",
       stock: "/stock",
       finanzas: "/finanzas",
       remitos: "/remitos",
@@ -539,7 +539,7 @@ export function Header({ title, subtitle, action }: HeaderProps) {
                       {searchResults.facturas.map((f) => (
                         <button
                           key={f.id}
-                          onClick={() => navigateTo(`/facturacion?factura=${f.id}`)}
+                          onClick={() => navigateTo(`/facturas?factura=${f.id}`)}
                           className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-zinc-50 dark:hover:bg-zinc-800"
                         >
                           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-green-50 text-green-600 dark:bg-green-950 dark:text-green-400">

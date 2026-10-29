@@ -9,13 +9,12 @@ assert.equal(linkFinanzas("cc_clientes"), "/finanzas?seccion=cuentas");
 assert.equal(linkFinanzas("extractos"), "/finanzas");
 assert.equal(linkFinanzas("revisar"), "/finanzas");
 assert.equal(linkFinanzas("correo"), "/finanzas");
-assert.equal(linkFactura("abc"), "/facturacion?factura=abc");
-assert.equal(linkFactura("abc", "nc"), "/facturacion?factura=abc&accion=nc");
+assert.equal(linkFactura("abc"), "/facturas?factura=abc");
 
 const p = (s: string) => new URLSearchParams(s);
 assert.equal(traducirLinkViejo(p("tab=objetivos")), "/finanzas?seccion=objetivos");
-assert.equal(traducirLinkViejo(p("tab=facturacion&grupo=cobrar&factura=F1&accion=cobro")), "/facturacion?factura=F1&accion=cobro");
-assert.equal(traducirLinkViejo(p("factura=F2")), "/facturacion?factura=F2");
+assert.equal(traducirLinkViejo(p("tab=facturacion&grupo=cobrar&factura=F1&accion=cobro")), "/facturas?factura=F1");
+assert.equal(traducirLinkViejo(p("factura=F2")), "/facturas?factura=F2");
 assert.equal(traducirLinkViejo(p("tab=extractos")), "/finanzas");
 assert.equal(traducirLinkViejo(p("")), null);
 assert.equal(traducirLinkViejo(p("seccion=iva")), null);
