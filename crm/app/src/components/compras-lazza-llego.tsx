@@ -5,6 +5,8 @@
  * [Completo] marca todo llegado. [Parcial] muestra cada artículo con "llegaron ___" (arranca en lo que falta) y suma
  * a lo que ya había llegado. Se puede volver a abrir hasta completar. No hace remito de recepción ni toca stock.
  * [Corregir cantidades]: si se marcó de más (ej. Completo por error), se pone el total que llegó de verdad.
+ * Se guarda todo junto con registrar_llegada_oc (migración 20261029170000, auditoría H48): suma sobre lo que hay en la base,
+ * así dos personas a la vez no se pisan. Sin la migración guarda como antes, renglón por renglón.
  */
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
@@ -16,6 +18,7 @@ import { Check, Loader2, X } from "lucide-react";
 
 const db = supabase as any;
 const round2 = (n: number) => Math.round(n * 100) / 100;
+const faltaFuncion = (e: any) => e && (e.code === "PGRST202" || e.code === "42883" || /function .* does not exist|Could not find the function/i.test(String(e.message || "")));
 type Item = { id: string; codigo: string | null; descripcion: string; cantidad: number; cantidad_recibida: number | null; orden: number | null };
 
 export default function ComprasLazzaLlego({ sociedadId, oc, onClose }: { sociedadId: string; oc: { id: string; numero: string }; onClose: () => void }) {
@@ -45,6 +48,14 @@ export default function ComprasLazzaLlego({ sociedadId, oc, onClose }: { socieda
   const falta = (i: Item) => Math.max(0, round2(Number(i.cantidad) - Number(i.cantidad_recibida || 0)));
   const pendientes = items.filter(i => falta(i) > 0);
 
+  /** Todo junto en la base. null = falta la migración (se guarda como antes). */
+  async function llegadaEnBase(renglones: { item_id: string; cantidad: number }[], modo: "sumar" | "corregir"): Promise<{ faltan: number } | null> {
+    const { data, error: e } = await db.rpc("registrar_llegada_oc", { p_oc_id: oc.id, p_sociedad_id: sociedadId, p_renglones: renglones, p_modo: modo });
+    if (e && faltaFuncion(e)) return null;
+    if (e) throw new Error(`No se pudo guardar lo que llegó (${e.message}); no quedó nada cargado`);
+    return { faltan: Number(data?.faltan || 0) };
+  }
+
   /** Corregir: el número es el TOTAL que llegó (puede bajar). */
   async function guardarCorreccion() {
     setGuardando(true); setError("");
@@ -52,6 +63,12 @@ export default function ComprasLazzaLlego({ sociedadId, oc, onClose }: { socieda
       const cambios = items.map(i => ({ i, nuevo: Math.min(Number(i.cantidad), Math.max(0, Number(String(cant_[i.id] ?? "").replace(",", ".")) || 0)) }))
         .filter(x => Math.abs(x.nuevo - Number(x.i.cantidad_recibida || 0)) > 0.0001);
       if (!cambios.length) { setError("No cambiaste ninguna cantidad."); return; }
+      if (await llegadaEnBase(cambios.map(c => ({ item_id: c.i.id, cantidad: c.nuevo })), "corregir")) {
+        toast.success(`${oc.numero}: cantidades corregidas`);
+        window.dispatchEvent(new Event(EVENTO_FACTURAS_COMPRA));
+        onClose();
+        return;
+      }
       for (const { i, nuevo } of cambios) {
         const { error: e } = await db.from("orden_compra_items").update({ cantidad_recibida: nuevo }).eq("id", i.id).eq("orden_id", oc.id);
         if (e) throw new Error(`No se pudo corregir «${i.descripcion}» (${e.message})`);
@@ -76,6 +93,13 @@ export default function ComprasLazzaLlego({ sociedadId, oc, onClose }: { socieda
         : pendientes.map(i => ({ item_id: i.id, cantidad: Number(String(cant_[i.id] || "").replace(",", ".")) || 0 })).filter(l => l.cantidad > 0);
       const rec = armarRecepcion(items, leidos);
       if (!rec.cargas.length) { setError("No pusiste ninguna cantidad."); return; }
+      const enBase = await llegadaEnBase(rec.cargas.map(c => ({ item_id: c.item_id, cantidad: c.cantidad })), "sumar");
+      if (enBase) {
+        toast.success(`${oc.numero}: ${enBase.faltan ? `llegó una parte, faltan ${enBase.faltan} artículo(s)` : "llegó todo"}`);
+        window.dispatchEvent(new Event(EVENTO_FACTURAS_COMPRA));
+        onClose();
+        return;
+      }
       const hechas: typeof rec.cargas = [];
       for (const c of rec.cargas) {
         const { error: e } = await db.from("orden_compra_items").update({ cantidad_recibida: c.despues }).eq("id", c.item_id).eq("orden_id", oc.id);

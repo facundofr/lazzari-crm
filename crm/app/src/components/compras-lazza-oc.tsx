@@ -12,6 +12,8 @@
  *   del proveedor nuevo del mismo PR, o a una OC nueva. La OC que queda vacía se cancela (no se borra).
  *   Se muestra y se confirma antes de guardar. El proveedor también cambia en el PR.
  * Con factura cargada o algo ya llegado: avisa, nunca traba.
+ * Guardar va todo junto con guardar_oc_lazza (migración 20261029171000, auditoría H11): si algo falla no se cambia nada y avisa
+ * si alguien cambió la OC mientras estaba abierta. Sin la migración guarda como antes, paso por paso.
  * Augusto 19/10 (al sacar del menú la pantalla vieja de Compras): se cambia el operador de la OC (`created_by`) y se puede
  * Anular la OC (queda cancelada, no se borra, con nota de quién y cuándo) o Reactivarla desde la pestaña "Anuladas".
  */
@@ -27,6 +29,7 @@ import { monedaRenglonOc, prDeRenglones, totalesOc } from "@/lib/compras-lazza";
 import { Ban, Check, Loader2, Plus, RotateCcw, Trash2, Undo2, X } from "lucide-react";
 
 const db = supabase as any;
+const faltaFuncion = (e: any) => e && (e.code === "PGRST202" || e.code === "42883" || /function .* does not exist|Could not find the function/i.test(String(e.message || "")));
 // "1.234,56" o "1234.56" → número.
 const num = (t: string | number) => { const s = String(t ?? "").trim(); return Number(s.includes(",") ? s.replace(/\./g, "").replace(",", ".") : s) || 0; };
 type Moneda = "ARS" | "USD";
@@ -40,7 +43,7 @@ type Item = {
 type Renglon = { id: string; codigo: string; descripcion: string; cantidad: string; precio: string; moneda: Moneda; recibida: number; iva: number | null; prov?: string; nuevo?: boolean };
 type Oc = {
   id: string; numero: string; estado: string; moneda: string | null; iva: number | null; proveedor_id: string | null;
-  fecha_entrega_estimada: string | null; observaciones: string | null; presupuesto_origen_id: string | null; created_by: string | null;
+  fecha_entrega_estimada: string | null; observaciones: string | null; presupuesto_origen_id: string | null; created_by: string | null; updated_at?: string | null;
   presupuesto_origen: { numero: string; modalidad_emision: string | null; created_by: string | null } | null;
 };
 type Proveedor = { id: string; razon_social: string; nombre_fantasia: string | null; cuit: string | null };
@@ -78,7 +81,7 @@ export default function ComprasLazzaOc({ sociedadId, oc: ocRef, onClose }: { soc
       try {
         const traerItems = (sel: string) => db.from("orden_compra_items").select(sel).eq("orden_id", ocRef.id).order("orden");
         const [o, provs, links, viejas, perfs] = await Promise.all([
-          db.from("ordenes_compra").select("id, numero, estado, moneda, iva, proveedor_id, fecha_entrega_estimada, observaciones, presupuesto_origen_id, created_by, presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision, created_by)")
+          db.from("ordenes_compra").select("id, numero, estado, moneda, iva, proveedor_id, fecha_entrega_estimada, observaciones, presupuesto_origen_id, created_by, updated_at, presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision, created_by)")
             .eq("id", ocRef.id).eq("sociedad_id", sociedadId).single(),
           db.from("proveedores").select("id, razon_social, nombre_fantasia, cuit").eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social"),
           db.from("factura_compra_ocs").select("facturas_compra(id, estado)").eq("orden_compra_id", ocRef.id),
@@ -171,13 +174,10 @@ export default function ComprasLazzaOc({ sociedadId, oc: ocRef, onClose }: { soc
       const conPr = !!oc.presupuesto_origen_id && !String(oc.observaciones || "").includes("[PR_ITEMS:");
       const enPr = conPr ? prDeRenglones(items, prItems, oc.proveedor_id) : new Map<string, string>();
 
-      // 1. Sacar renglones
-      for (const i of items.filter(i => !quedan.has(i.id))) {
-        const { error: e } = await db.from("orden_compra_items").delete().eq("id", i.id).eq("orden_id", oc.id);
-        if (e) throw new Error(`No se pudo sacar «${i.descripcion}» (${e.message})`);
-      }
-      // 2. Cambios en los que quedan (y en los que se van, antes de moverlos)
+      // Qué cambia (lo arma la pantalla, como siempre). Después se guarda todo junto.
+      const sacarItems = items.filter(i => !quedan.has(i.id));
       const costosPr: { prId: string; precio: number; moneda: Moneda }[] = [];
+      const cambios: { id: string; descripcion: string; cambio: Record<string, unknown> }[] = [];
       for (const r of validos.filter(r => !r.nuevo)) {
         const o = originales.get(r.id)!;
         const prId = enPr.get(r.id);
@@ -193,61 +193,104 @@ export default function ComprasLazzaOc({ sociedadId, oc: ocRef, onClose }: { soc
         if (prId && (num(r.precio) !== Number(o.precio_unitario) || r.moneda !== monedaAntes)) costosPr.push({ prId, precio: num(r.precio), moneda: r.moneda });
         if (idsSeVan.has(r.id)) cambio.proveedor_id = r.prov;
         else if (provCambio) cambio.proveedor_id = proveedorId || null;
-        if (Object.keys(cambio).length) {
-          const { error: e } = await db.from("orden_compra_items").update(cambio).eq("id", r.id).eq("orden_id", oc.id);
-          if (e) throw new Error(`No se pudo guardar «${r.descripcion}» (${e.message})`);
-        }
+        if (Object.keys(cambio).length) cambios.push({ id: r.id, descripcion: r.descripcion, cambio });
       }
-      // 3. Renglones nuevos
-      const nuevos = validos.filter(r => r.nuevo);
-      if (nuevos.length) {
-        const ultimo = Math.max(0, ...items.map(i => Number(i.orden || 0)));
-        const { error: e } = await db.from("orden_compra_items").insert(nuevos.map((r, k) => ({
-          orden_id: oc.id, codigo: r.codigo.trim(), descripcion: r.descripcion.trim(), cantidad: num(r.cantidad), cantidad_recibida: 0,
-          unidad: "u", precio_unitario: num(r.precio), iva_porcentaje: sinIva ? 0 : (r.iva ?? 21), orden: ultimo + k + 1, proveedor_id: proveedorId || null,
-          ...(conMoneda ? { moneda: r.moneda } : {}),
-        })));
-        if (e) throw new Error(`No se pudieron agregar los artículos nuevos (${e.message})`);
-      }
-      // 4. Encabezado: estado por lo que llegó, proveedor, entrega, observaciones.
-      //    El total no se muestra más (cada artículo en su moneda); se sigue guardando para las otras pantallas.
+      const ultimo = Math.max(0, ...items.map(i => Number(i.orden || 0)));
+      const nuevos = validos.filter(r => r.nuevo).map((r, k) => ({
+        codigo: r.codigo.trim(), descripcion: r.descripcion.trim(), cantidad: num(r.cantidad), precio_unitario: num(r.precio),
+        iva_porcentaje: sinIva ? 0 : (r.iva ?? 21), orden: ultimo + k + 1, proveedor_id: proveedorId || null, ...(conMoneda ? { moneda: r.moneda } : {}),
+      }));
+      // Encabezado: estado por lo que llegó, proveedor, entrega, observaciones.
+      // El total no se muestra más (cada artículo en su moneda); se sigue guardando para las otras pantallas.
       const tot = totalesOc(quedanEnOc.map(r => ({ cantidad: num(r.cantidad), precio: num(r.precio), iva: r.iva })), sinIva);
       const estado = quedanEnOc.length ? estadoPorRecibido(quedanEnOc.map(r => ({ id: r.id, cantidad: num(r.cantidad), cantidad_recibida: r.recibida })), oc.estado) : oc.estado;
-      const { error: e4 } = await db.from("ordenes_compra").update({
-        proveedor_id: proveedorId || null, subtotal: tot.subtotal, iva: tot.iva, total: tot.total, estado,
+      const encabezado = {
+        proveedor_id: proveedorId || null, subtotal: tot.subtotal, iva: tot.iva, total: tot.total,
         fecha_entrega_estimada: entrega || null, observaciones: obs,
         ...(operador !== (oc.created_by || oc.presupuesto_origen?.created_by || "") ? { created_by: operador || null } : {}),
-      }).eq("id", oc.id).eq("sociedad_id", sociedadId);
+      };
+      const porProv = new Map<string, Renglon[]>();
+      for (const r of seVan) porProv.set(r.prov!, [...(porProv.get(r.prov!) || []), r]);
+      // PR de origen: proveedor (de toda la OC o de cada artículo) y costo con su moneda.
+      const provPr = new Map<string, string | null>();
+      if (provCambio) for (const r of quedanEnOc) { const id = enPr.get(r.id); if (id) provPr.set(id, proveedorId || null); }
+      for (const r of seVan) { const id = enPr.get(r.id); if (id) provPr.set(id, r.prov!); }
+      const porDestino = new Map<string, string[]>();
+      for (const [prId, pid] of provPr) porDestino.set(pid || "", [...(porDestino.get(pid || "") || []), prId]);
+      const costosQueCambian = costosPr.filter(c => {
+        const pr = prItems.find(p => p.id === c.prId);
+        return !(Number(pr?.precio_costo) === c.precio && (pr?.costo_moneda || "ARS") === c.moneda);
+      });
+
+      // Todo junto en la base (migración 20261029171000, auditoría H11): si algo falla no se guarda nada.
+      const datos = {
+        antes: { updated_at: oc.updated_at, items: items.map(i => ({ id: i.id, codigo: i.codigo, descripcion: i.descripcion, cantidad: i.cantidad, precio_unitario: i.precio_unitario })) },
+        sacar: sacarItems.map(i => i.id),
+        cambios: cambios.map(c => ({ id: c.id, ...c.cambio })),
+        nuevos,
+        encabezado,
+        mover: [...porProv].map(([pid, rs]) => ({ proveedor_id: pid, proveedor_nombre: provPorId.get(pid)?.razon_social || "", item_ids: rs.map(r => r.id) })),
+        motivo: "al cambiarles el proveedor en la OC",
+        pr: {
+          proveedores: [...porDestino].map(([pid, ids]) => ({ proveedor_id: pid || null, proveedor_nombre: provPorId.get(pid)?.razon_social || "", ids })),
+          costos: costosQueCambian.map(c => ({ id: c.prId, precio_costo: c.precio, costo_moneda: c.moneda })),
+        },
+      };
+      let res = await db.rpc("guardar_oc_lazza", { p_oc_id: oc.id, p_sociedad_id: sociedadId, p_datos: datos, p_confirmado: false });
+      if (!res.error && res.data?.confirmar?.length) {
+        // Avisos de la base (alguien la cambió mientras tanto, artículo atado a una factura): avisa, nunca traba.
+        if (!confirm(`${(res.data.confirmar as string[]).join("\n\n")}\n\n¿Guardás igual?`)) return;
+        res = await db.rpc("guardar_oc_lazza", { p_oc_id: oc.id, p_sociedad_id: sociedadId, p_datos: datos, p_confirmado: true });
+      }
+      if (res.error && !faltaFuncion(res.error)) throw new Error(`No se pudo guardar ${oc.numero} (${res.error.message}). No se cambió nada.`);
+      if (!res.error) {
+        const ds = (res.data?.destinos || []) as string[];
+        toast.success(`${oc.numero} guardada${ds.length ? ` · ${seVan.length} artículo(s) pasaron a ${ds.join(", ")}` : ""}`);
+        for (const a of (res.data?.avisos || []) as string[]) toast.warning(a);
+        window.dispatchEvent(new Event(EVENTO_FACTURAS_COMPRA));
+        onClose();
+        return;
+      }
+
+      // Sin la migración 20261029171000: como antes, paso por paso.
+      // 1. Sacar renglones
+      for (const i of sacarItems) {
+        const { error: e } = await db.from("orden_compra_items").delete().eq("id", i.id).eq("orden_id", oc.id);
+        if (e) throw new Error(`No se pudo sacar «${i.descripcion}» (${e.message})`);
+      }
+      // 2. Cambios en los que quedan (y en los que se van, antes de moverlos)
+      for (const c of cambios) {
+        const { error: e } = await db.from("orden_compra_items").update(c.cambio).eq("id", c.id).eq("orden_id", oc.id);
+        if (e) throw new Error(`No se pudo guardar «${c.descripcion}» (${e.message})`);
+      }
+      // 3. Renglones nuevos
+      if (nuevos.length) {
+        const { error: e } = await db.from("orden_compra_items").insert(nuevos.map(n => ({ ...n, orden_id: oc.id, cantidad_recibida: 0, unidad: "u" })));
+        if (e) throw new Error(`No se pudieron agregar los artículos nuevos (${e.message})`);
+      }
+      // 4. Encabezado
+      const { error: e4 } = await db.from("ordenes_compra").update({ ...encabezado, estado }).eq("id", oc.id).eq("sociedad_id", sociedadId);
       if (e4) throw new Error(`No se pudo guardar la OC (${e4.message})`);
 
       // 5. Artículos a otro proveedor: a una OC sin pedir de ese proveedor del mismo PR, o a una nueva. La vacía se cancela.
       const destinos: string[] = [];
-      const porProv = new Map<string, Renglon[]>();
-      for (const r of seVan) porProv.set(r.prov!, [...(porProv.get(r.prov!) || []), r]);
       for (const [pid, rs] of porProv) {
         const p = provPorId.get(pid);
-        const res = await asignarRenglonesAProveedor(db, {
+        const r5 = await asignarRenglonesAProveedor(db, {
           sociedadId, userId: profile?.id, itemIds: rs.map(r => r.id), proveedorId: pid, proveedorNombre: p?.razon_social || "",
           motivo: "al cambiarles el proveedor en la OC", conRecibido: true,
         });
-        destinos.push(...res.ocDestino);
+        destinos.push(...r5.ocDestino);
       }
 
-      // 6. PR de origen: proveedor (de toda la OC o de cada artículo) y costo con su moneda. Si falla, avisa: la OC ya quedó bien.
+      // 6. PR de origen. Si falla, avisa: la OC ya quedó bien.
       let avisoPr = "";
       try {
-        const provPr = new Map<string, string | null>();
-        if (provCambio) for (const r of quedanEnOc) { const id = enPr.get(r.id); if (id) provPr.set(id, proveedorId || null); }
-        for (const r of seVan) { const id = enPr.get(r.id); if (id) provPr.set(id, r.prov!); }
-        const porDestino = new Map<string, string[]>();
-        for (const [prId, pid] of provPr) porDestino.set(pid || "", [...(porDestino.get(pid || "") || []), prId]);
         for (const [pid, ids] of porDestino) {
           const { error: e } = await db.from("presupuesto_items").update({ proveedor_id: pid || null, proveedor_nombre: provPorId.get(pid)?.razon_social || "" }).in("id", ids);
           if (e) throw e;
         }
-        for (const c of costosPr) {
-          const pr = prItems.find(p => p.id === c.prId);
-          if (Number(pr?.precio_costo) === c.precio && (pr?.costo_moneda || "ARS") === c.moneda) continue;
+        for (const c of costosQueCambian) {
           const { error: e } = await db.from("presupuesto_items").update({ precio_costo: c.precio, costo_moneda: c.moneda }).eq("id", c.prId);
           if (e) throw e;
         }

@@ -1,10 +1,14 @@
 # Traspaso: Compras (Compras Lazza + Compras nueva)
 
-29/10/2026: pantallas viejas de Compras borradas, PUBLICADO en V1.1.617 (ver abajo). 27/10/2026: última de Compras V1.1.591 (sin saldo a favor en Cargar factura). 26/10/2026: revisado en la base. Actualizado el 26/10/2026 para seguir desde otra cuenta sin el historial del chat. Producción va por V1.1.559 o más (la última de Compras es la V1.1.559, commit a02069f).
+29/10/2026: pantallas viejas borradas (V1.1.617) y Llegó / Editar OC todo junto (V1.1.618, migraciones corridas). 27/10/2026: última de Compras V1.1.591 (sin saldo a favor en Cargar factura). 26/10/2026: revisado en la base. Actualizado el 26/10/2026 para seguir desde otra cuenta sin el historial del chat. Producción va por V1.1.559 o más (la última de Compras es la V1.1.559, commit a02069f).
 
 ## 29/10: Compras nueva, Compras (vieja) e Importaciones BORRADAS (PUBLICADO en V1.1.617)
 - Detalle en docs/ESTADO.md (entrada "COMPRAS — PANTALLAS VIEJAS BORRADAS"). Las 3 direcciones redirigen a /compras-lazza; se borraron la carga masiva vieja, cargar-factura-oc y demás ventanas sin uso, y las rutas api/compras/* y api/conciliar-compra. Personalización queda (oculta). Publicado desde una copia limpia de origin/main (worktree detached en el scratchpad, ya borrado).
-- Sigue (Tanda 5): RPC atómica para Llegó y Editar OC (H11, H48), plan ya explicado a Augusto, esperando su OK.
+
+## 29/10: Tanda 5 (H11, H48): Llegó y Editar OC todo junto (PUBLICADO en V1.1.618; migraciones CORRIDAS 29/10)
+- Detalle en docs/ESTADO.md ("COMPRAS — TANDA 5, H11 y H48"). Migraciones `20261029170000_llegada_oc_atomica` y `20261029171000_guardar_oc_lazza` (con rollback y prueba en scripts/db/pruebas; `--probar` OK). Pantallas `compras-lazza-llego.tsx` y `compras-lazza-oc.tsx` con respaldo: sin migración guardan como antes.
+- Publicado desde una copia limpia de origin/main (ya borrada).
+- Falta: Personalización (liquidar en una sola transacción) solo si Augusto decide que la pantalla sigue.
 
 ## 27/10: sin "Aplicar saldo a favor" en Cargar factura (PUBLICADO en V1.1.591, commit 492b4c8, Vercel Ready)
 - Augusto: la ventana es solo para cargar facturas. Se sacó la casilla de `components/compras-lazza-factura.tsx`, junto con todo lo que la acompañaba. El saldo a favor va en la cuenta corriente y al pagar: se lo pasé al chat Agente de IA de Finanzas (lo hace y publica él). tsc 0, hooks OK. Publicado solo ese archivo + versión, con una copia del script en una carpeta nueva (`lz-pub-compras3`, ya borrada). No se probó en pantalla: la primera vez, que Augusto mire que no aparezca la casilla verde.
