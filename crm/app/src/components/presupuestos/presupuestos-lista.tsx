@@ -45,6 +45,7 @@ import { traerSaldoUnCliente } from "@/lib/cuenta-corriente-cliente";
 import { VentaCaidaOCs } from "@/components/presupuestos/venta-caida-ocs";
 import { superaLimiteCredito } from "@/lib/saldo-clientes";
 import { enviosPorPR, textoEnvio, type EnvioPR } from "@/lib/presupuesto-envios";
+import { ETIQUETA_ESTADO, type EstadoMail } from "@/lib/correos-enviados";
 import { parseCantidadAR, textoCantidadValido, numeroAEditable, formatCantidad, avisosRenglon, renglonesSinPrecio } from "@/lib/numero-ar";
 import { convertirCostoPR, leerDolaresGuardados, fechaDolarPresupuesto, dolarAtrasado, etiquetaDolar, esCostoUsd, esCostoDivisa, tcParaCosto, type DolaresGuardados } from "@/lib/dolar-presupuesto";
 
@@ -500,7 +501,7 @@ export default function PresupuestosLista() {
   const [vendedorFilter, setVendedorFilter] = useState<string>("");
   const [operadorFilter, setOperadorFilter] = useState<string>("");
   const [vendedores, setVendedores] = useState<{id: string; full_name: string}[]>([]);
-  // Envíos por mail de cada PR (presupuesto_envios, Augusto 28/10): todos, el más nuevo primero.
+  // Envíos por mail de cada PR (mails_enviados, Augusto 28/10): todos, el más nuevo primero, con su estado verificado.
   const [envios, setEnvios] = useState<Map<string, EnvioPR[]>>(new Map());
   const nombreUsuario = (id: string | null) => (id ? vendedores.find(v => v.id === id)?.full_name : null);
 
@@ -906,9 +907,11 @@ export default function PresupuestosLista() {
     if (!ids.length) return;
     const filas: EnvioPR[] = [];
     for (let i = 0; i < ids.length; i += 150) {
-      const { data } = await (supabase as any).from("presupuesto_envios")
-        .select("presupuesto_id, enviado_at, enviado_por, enviado_a").in("presupuesto_id", ids.slice(i, i + 150));
-      filas.push(...((data || []) as EnvioPR[]));
+      const { data } = await (supabase as any).from("mails_enviados")
+        .select("documento_id, enviado_at, enviado_por, enviado_a, estado").eq("documento_tipo", "presupuesto").in("documento_id", ids.slice(i, i + 150));
+      for (const m of (data || []) as { documento_id: string; enviado_at: string; enviado_por: string | null; enviado_a: string; estado: EstadoMail }[]) {
+        filas.push({ presupuesto_id: m.documento_id, enviado_at: m.enviado_at, enviado_por: m.enviado_por, enviado_a: m.enviado_a, estadoTexto: ETIQUETA_ESTADO[m.estado] });
+      }
     }
     const nuevos = enviosPorPR(filas);
     setEnvios(prev => {
@@ -2966,7 +2969,7 @@ export default function PresupuestosLista() {
                     {row.estado === "solicitud" ? <Inbox className="h-3.5 w-3.5 text-blue-400" /> : <FileText className="h-3.5 w-3.5 text-zinc-400" />}
                     <span className="font-mono text-xs font-bold whitespace-nowrap">{row.estado === "solicitud" ? row.numero.replace("PR-", "SOL-") : row.numero}</span>
                     {(envios.get(row.id)?.length ?? 0) > 0 && (
-                      <span className="flex items-center gap-0.5 text-[10px] text-emerald-600 dark:text-emerald-400" title={`Enviado por mail:\n${envios.get(row.id)!.map(e => textoEnvio(e, nombreUsuario)).join("\n")}`}>
+                      <span className={`flex items-center gap-0.5 text-[10px] ${["Rebotó", ETIQUETA_ESTADO.spam].includes(envios.get(row.id)![0].estadoTexto || "") ? "text-red-600" : "text-emerald-600 dark:text-emerald-400"}`} title={`Enviado por mail:\n${envios.get(row.id)!.map(e => textoEnvio(e, nombreUsuario)).join("\n")}`}>
                         <Mail className="h-3 w-3" />{envios.get(row.id)!.length > 1 ? envios.get(row.id)!.length : ""}
                       </span>
                     )}

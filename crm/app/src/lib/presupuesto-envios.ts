@@ -1,4 +1,4 @@
-// Envíos por mail de un PR (tabla presupuesto_envios, Augusto 28/10/2026): quién, cuándo y a quién. Funciones puras.
+// Envíos por mail de un PR (tabla mails_enviados, Augusto 28/10/2026): quién, cuándo, a quién y si llegó. Funciones puras.
 // Prueba: npx tsx scripts/test-presupuesto-envios.ts
 
 export interface EnvioPR {
@@ -6,6 +6,8 @@ export interface EnvioPR {
   enviado_at: string;
   enviado_por: string | null;
   enviado_a: string;
+  /** Estado verificado en Resend (Correos enviados), ya en palabras: "Entregado", "Rebotó"… */
+  estadoTexto?: string | null;
 }
 
 /** Fecha y hora de Argentina: "28/10/2026 14:32". */
@@ -18,9 +20,9 @@ export function fechaHoraAR(iso: string): string {
   return `${p.day}/${p.month}/${p.year} ${p.hour}:${p.minute}`;
 }
 
-/** "28/10/2026 14:32 · Sebastian → compras@cliente.com" */
+/** "28/10/2026 14:32 · Sebastian → compras@cliente.com · Entregado" */
 export function textoEnvio(e: EnvioPR, nombreDe: (id: string | null) => string | null | undefined): string {
-  return `${fechaHoraAR(e.enviado_at)} · ${nombreDe(e.enviado_por) || "—"} → ${e.enviado_a}`;
+  return `${fechaHoraAR(e.enviado_at)} · ${nombreDe(e.enviado_por) || "—"} → ${e.enviado_a}${e.estadoTexto ? ` · ${e.estadoTexto}` : ""}`;
 }
 
 /** Envíos agrupados por PR, el más nuevo primero. */

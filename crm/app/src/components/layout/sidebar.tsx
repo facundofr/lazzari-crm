@@ -25,6 +25,7 @@ import {
   X,
   ArrowRightLeft,
   Calendar,
+  MailCheck,
   Shirt,
   Zap,
   Scissors,
@@ -48,6 +49,7 @@ const navigation: { grupo: string; items: { name: string; href: string; icon: ty
   { grupo: "Inicio", items: [
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, module: "dashboard", oculto: true }, // Augusto 20/10: fuera del menú (sigue por link); el sistema abre en Presupuestos
     { name: "Calendario", href: "/calendario", icon: Calendar, module: "calendario" },
+    { name: "Correos enviados", href: "/correos", icon: MailCheck, module: "calendario" }, // Augusto 28/10: cada mail que sale del CRM y si llegó (todos los usuarios)
   ] },
   { grupo: "Vender", items: [
     { name: "Clientes", href: "/clientes", icon: Users, module: "clientes" },

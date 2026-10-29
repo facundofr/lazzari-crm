@@ -281,6 +281,8 @@ export function Header({ title, subtitle, action }: HeaderProps) {
             if (alert.module === "calendario") return true;
             // Avisos de plata (cheque rechazado, etc.): se muestran siempre, sin importar las preferencias.
             if (alert.module === "finanzas") return true;
+            // Mail que no llegó (Correos enviados): se muestra siempre.
+            if (alert.module === "correos") return true;
             const prefKey = ALERT_TIPO_TO_PREF[alert.tipo];
             // If we have a mapping and the pref is explicitly false, filter it out
             if (prefKey && prefs[prefKey] === false) return false;
@@ -300,6 +302,22 @@ export function Header({ title, subtitle, action }: HeaderProps) {
   useEffect(() => {
     if (!profile?.id) return;
     fetchAlerts();
+  }, [fetchAlerts, profile?.id]);
+
+  // Correos enviados: cada 10 minutos se verifica en Resend el estado de los mails propios; si alguno no llegó,
+  // aparece el aviso en la campana (Augusto 28/10). Nunca frena nada.
+  useEffect(() => {
+    if (!profile?.id) return;
+    const verificar = async () => {
+      try {
+        const r = await fetch("/api/email/verificar", { method: "POST" });
+        const d = r.ok ? await r.json() : null;
+        if (d?.avisos > 0) fetchAlerts();
+      } catch { /* se vuelve a intentar */ }
+    };
+    const primero = window.setTimeout(verificar, 15_000);
+    const cada = window.setInterval(verificar, 10 * 60_000);
+    return () => { window.clearTimeout(primero); window.clearInterval(cada); };
   }, [fetchAlerts, profile?.id]);
 
   // Recoge recordatorios de calendario creados por Supabase sin exigir recarga.

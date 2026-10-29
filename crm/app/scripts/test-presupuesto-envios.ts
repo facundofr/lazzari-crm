@@ -13,6 +13,9 @@ assert.equal(textoEnvio({ presupuesto_id: "p", enviado_at: "2026-10-28T17:32:00Z
 assert.equal(textoEnvio({ presupuesto_id: "p", enviado_at: "2026-10-28T17:32:00Z", enviado_por: "otro", enviado_a: "a@b.com" }, nombre),
   "28/10/2026 14:32 · — → a@b.com");
 
+assert.equal(textoEnvio({ presupuesto_id: "p", enviado_at: "2026-10-28T17:32:00Z", enviado_por: "u1", enviado_a: "a@b.com", estadoTexto: "Rebotó" }, nombre),
+  "28/10/2026 14:32 · Sebastian → a@b.com · Rebotó");
+
 // Varios envíos del mismo PR: quedan todos, el más nuevo primero
 const m = enviosPorPR([
   { presupuesto_id: "p1", enviado_at: "2026-10-27T10:00:00Z", enviado_por: "u1", enviado_a: "x@y.com" },

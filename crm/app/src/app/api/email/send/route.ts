@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
       pdfFilename: string;
       sociedadId?: string;
       documentType?: string;
-      /** PR que se manda: el envío queda anotado en presupuesto_envios. */
+      /** Documento que se manda (PR): queda en el registro del mail. */
       documentId?: string;
       userEmail?: string;
       extraAttachments?: { filename: string; url: string }[];
@@ -121,21 +121,25 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Error al enviar email: ${emailError.message}` }, { status: 500 });
     }
 
-    // PR: cada envío queda anotado (quién, cuándo y a quién; Augusto 28/10). El mail ya salió: si esto falla, solo se avisa.
+    // Correos enviados (Augusto 28/10): cada mail queda anotado (quién, cuándo, a quién, documento) para verificar su
+    // estado en Resend. Los PR leen sus envíos de acá. El mail ya salió: si esto falla, solo se avisa.
     let envio: { enviado_at: string } | null = null;
     let avisoRegistro: string | undefined;
-    if (documentType === "presupuesto" && documentId && user) {
-      const { data: fila, error: errEnvio } = await (supabase as any).from("presupuesto_envios").insert({
-        presupuesto_id: documentId,
-        sociedad_id: sociedadId || null,
+    if (user) {
+      const { data: fila, error: errEnvio } = await (supabase as any).from("mails_enviados").insert({
         enviado_por: user.id,
-        enviado_a: to.join(", "),
+        sociedad_id: sociedadId || null,
         remitente: fromEmail,
+        enviado_a: to.join(", "),
+        asunto: subject,
+        documento_tipo: documentType || null,
+        documento_id: documentId || null,
+        documento_nombre: pdfFilename,
         resend_id: emailResult?.id || null,
       }).select("enviado_at").single();
       if (errEnvio) {
-        console.error("No se pudo anotar el envío del PR:", errEnvio);
-        avisoRegistro = "El mail salió, pero no quedó anotado en el PR.";
+        console.error("No se pudo anotar el mail enviado:", errEnvio);
+        avisoRegistro = "El mail salió, pero no quedó anotado en Correos enviados.";
       } else envio = fila;
     }
 
