@@ -10,6 +10,7 @@ import { mayusculasNecesarias } from "./texto-mayusculas";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { readFceMetadata, importeEnLetras } from "@/lib/fce-invoice";
 import { scopePdfStyles } from "@/lib/pdf-style-scope";
+import { acomodarCortesDeHoja } from "@/lib/pdf-cortes";
 import { pctTexto, type DetalleRetencion } from "@/lib/certificado-retencion";
 
 // ── Sociedad info (static data not in the Sociedad type) ─────────
@@ -1676,6 +1677,11 @@ export async function htmlToPdfBase64(html: string): Promise<string> {
   }));
   await new Promise(r => setTimeout(r, 100));
 
+  // Los que ya arman sus hojas (PR, certificado de la OP) siguen como antes. El resto se corta
+  // acá por renglón: el avoid-all de html2pdf mete <div> adentro de las tablas y las desarma.
+  const hojasPropias = /page-break-before\s*:\s*always/i.test(html);
+  if (!hojasPropias) acomodarCortesDeHoja(container, Math.floor((794 * 297) / 210));
+
     worker = html2pdf()
       .set({
         margin: [0, 0, 0, 0],
@@ -1688,7 +1694,7 @@ export async function htmlToPdfBase64(html: string): Promise<string> {
           width: 794,
           windowWidth: 794,
         },
-        pagebreak: { mode: ["avoid-all", "css", "legacy"] },
+        pagebreak: { mode: hojasPropias ? ["avoid-all", "css", "legacy"] : ["legacy"] },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
       } as any)
       .from(container);
