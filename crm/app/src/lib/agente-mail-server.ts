@@ -1,4 +1,5 @@
 import { limpiarPdfBuffer } from "@/lib/pdf-limpiar";
+import { saldosDeFacturas } from "@/lib/saldo-clientes";
 // Agente de correo y cobros (SOLO servidor). Lee la casilla administracion@ con la API de Gmail (solo lectura),
 // clasifica cada mail con IA barata, lee adjuntos (texto primero, visión si hace falta) y cruza avisos de pago con facturas abiertas.
 // Solo SUGIERE: no responde mails, no registra cobros, no toca facturas ni movimientos. Escribe únicamente en sus 2 tablas y en notificaciones.
@@ -153,17 +154,14 @@ async function cargarFacturasAbiertas(db: any): Promise<(FacturaAbierta & { soci
   const { data: fs } = await db.from("facturas")
     .select("id, tipo, punto_venta, numero, cliente_id, total, total_acreditado, moneda, tipo_cambio, sociedad_id, estado, clientes(razon_social, cuit)")
     .in("estado", ["emitida", "parcial", "vencida", "pagada"]).gte("fecha", "2026-01-01").limit(3000);
-  const ids = (fs || []).map((f: any) => f.id);
-  const aplicado = new Map<string, number>();
-  for (let i = 0; i < ids.length; i += 200) {
-    const { data: ap } = await db.from("cobro_aplicaciones").select("factura_id, monto").in("factura_id", ids.slice(i, i + 200));
-    for (const a of ap || []) aplicado.set(a.factura_id, (aplicado.get(a.factura_id) || 0) + Number(a.monto || 0));
-  }
-  return (fs || []).map((f: any) => ({
+  // Las NC no son deuda del cliente: no se cruzan con cobros. Saldo con la misma cuenta que Cuentas corrientes (lib/saldo-clientes).
+  const facturas = (fs || []).filter((f: any) => !String(f.tipo || "").toUpperCase().startsWith("NC"));
+  const saldo = await saldosDeFacturas(db, facturas);
+  return facturas.map((f: any) => ({
     id: f.id, tipo: f.tipo, punto_venta: f.punto_venta, numero: f.numero, cliente_id: f.cliente_id,
     cliente_nombre: f.clientes?.razon_social ?? null, cliente_cuit: f.clientes?.cuit ?? null,
     total: Number(f.total), moneda: f.moneda, tipo_cambio: f.tipo_cambio ? Number(f.tipo_cambio) : null, sociedad_id: f.sociedad_id, estado: f.estado,
-    saldo: Math.max(0, Number(f.total) - (aplicado.get(f.id) || 0) - Number(f.total_acreditado || 0)),
+    saldo: saldo[f.id] || 0,
   }));
 }
 

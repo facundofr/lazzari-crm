@@ -1,7 +1,7 @@
 // npx tsx scripts/test-saldo-clientes.ts
 // B3: saldo real de cuenta corriente de clientes (ARS y USD por separado).
 import assert from "node:assert/strict";
-import { calcularSaldosClientes, cobradoPorFactura, saldoFacturaVenta, saldoClienteEn, superaLimiteCredito } from "../src/lib/saldo-clientes";
+import { calcularSaldosClientes, cobradoPorFactura, saldoFacturaVenta, saldoClienteEn, superaLimiteCredito, saldosDeFacturas } from "../src/lib/saldo-clientes";
 
 const facturas = [
   // Cliente A, ARS
@@ -67,4 +67,24 @@ const conAjustes = calcularSaldosClientes([], [], [], [
 assert.deepEqual(conAjustes.D.ARS, { deuda: 252493.75, aFavor: 1000, saldo: 251493.75 });
 assert.deepEqual(conAjustes.D.USD, { deuda: 0, aFavor: 0, saldo: 0 });
 
-console.log("test-saldo-clientes OK");
+// H28 (asistente de Finanzas y agente de correo): la NC no es deuda y el cobro anulado no cuenta.
+{
+  const tablas: Record<string, any[]> = {
+    movimientos: [
+      { id: "m1", factura_id: "fa1", monto: 300, moneda: "ARS", anulado: false }, // cobro directo
+      { id: "m2", factura_id: "fa1", monto: 500, moneda: "ARS", anulado: true },  // anulado
+    ],
+    cobro_aplicaciones: [
+      { movimiento_id: "m3", factura_id: "fa1", monto: 200, movimientos: { anulado: false } },
+      { movimiento_id: "m4", factura_id: "fa1", monto: 400, movimientos: { anulado: true } }, // cobro anulado
+    ],
+  };
+  const db = { from: (t: string) => ({ select: () => ({ in: (_c: string, ids: string[]) => Promise.resolve({ data: tablas[t].filter(r => ids.includes(r.factura_id)), error: null }) }) }) };
+  void saldosDeFacturas(db, [
+    { id: "fa1", tipo: "FA", total: 1000, total_acreditado: 100, moneda: "ARS", estado: "parcial" },
+    { id: "nc1", tipo: "NCA", total: 26954340.91, total_acreditado: 0, moneda: "ARS", estado: "emitida" },
+  ]).then((s) => {
+    assert.deepEqual(s, { fa1: 400, nc1: 0 }); // 1000 − 100 NC − 300 directo − 200 aplicado
+    console.log("test-saldo-clientes OK");
+  });
+}

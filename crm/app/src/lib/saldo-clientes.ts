@@ -110,6 +110,27 @@ export function saldoFacturaVenta(f: FacturaCC, cobrado: number): number {
   return r2(Math.max(0, (Number(f.total) || 0) - (Number(f.total_acreditado) || 0) - (cobrado || 0)));
 }
 
+/**
+ * Saldo de cada factura, trayendo sus cobros de la base (directos y aplicaciones, sin los anulados). NC y anuladas = 0.
+ * Lo usan el asistente de Finanzas y el agente de correo (auditoría 28/10/2026, H28: tenían su propia cuenta y listaban las NC como deuda).
+ */
+export async function saldosDeFacturas(db: any, facturas: (Pick<FacturaCC, "id" | "tipo" | "total" | "total_acreditado" | "moneda" | "estado">)[]): Promise<Record<string, number>> {
+  const ids = facturas.filter(f => f.estado !== "anulada" && !esNC(f.tipo)).map(f => f.id);
+  const movs: MovimientoCC[] = [], apls: AplicacionCC[] = [];
+  for (let i = 0; i < ids.length; i += 200) {
+    const parte = ids.slice(i, i + 200);
+    const [m, a] = await Promise.all([
+      db.from("movimientos").select("id, factura_id, monto, moneda, anulado").in("factura_id", parte),
+      db.from("cobro_aplicaciones").select("movimiento_id, factura_id, monto, movimientos(anulado)").in("factura_id", parte),
+    ]);
+    if (m.error) throw new Error(m.error.message);
+    if (a.error) throw new Error(a.error.message);
+    movs.push(...(m.data || [])); apls.push(...(a.data || []));
+  }
+  const cobrado = cobradoPorFactura(facturas, movs, apls);
+  return Object.fromEntries(facturas.map(f => [f.id, saldoFacturaVenta(f as FacturaCC, cobrado[f.id] || 0)]));
+}
+
 /** Saldo de cuenta corriente por cliente, ARS y USD por separado. */
 export function calcularSaldosClientes(
   facturas: FacturaCC[],

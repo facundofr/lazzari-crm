@@ -5,6 +5,7 @@ import { createSupabaseServer } from "@/lib/supabase/server";
 import { registrarUsoIA } from "@/lib/ia-uso";
 import { buscarEnCorreo, correrAgenteMail } from "@/lib/agente-mail-server";
 import { SUBTIPO_LABEL, CLASIFICACION_LABEL, type ClasificacionLinea } from "@/lib/extracto-bbva";
+import { saldosDeFacturas } from "@/lib/saldo-clientes";
 
 /**
  * Asistente de Finanzas (16/10/2026): chat con IA experta en finanzas que contesta con los datos reales del CRM.
@@ -62,17 +63,13 @@ async function traer(q: any, max = 5000): Promise<any[]> {
 async function saldosFacturas(db: any, soc: string, cliente?: string) {
   const fs = await traer(() => db.from("facturas").select("id, tipo, punto_venta, numero, fecha, fecha_vencimiento, total, total_acreditado, moneda, estado, clientes(razon_social)")
     .eq("sociedad_id", soc).in("estado", ["emitida", "parcial", "vencida"]).order("id"));
-  const ids = fs.map((f) => f.id);
-  const ap = new Map<string, number>();
-  for (let i = 0; i < ids.length; i += 200) {
-    const { data } = await db.from("cobro_aplicaciones").select("factura_id, monto").in("factura_id", ids.slice(i, i + 200));
-    for (const a of data || []) ap.set(a.factura_id, (ap.get(a.factura_id) || 0) + Number(a.monto || 0));
-  }
+  // Misma cuenta que Cuentas corrientes (lib/saldo-clientes): las NC no son deuda y los cobros anulados no cuentan.
+  const saldo = await saldosDeFacturas(db, fs);
   const q = String(cliente || "").toLowerCase();
   return fs.map((f) => ({
     numero: `${f.tipo || ""} ${String(f.punto_venta).padStart(5, "0")}-${String(f.numero).padStart(8, "0")}`,
     cliente: f.clientes?.razon_social || "—", fecha: f.fecha, vence: f.fecha_vencimiento, moneda: f.moneda || "ARS",
-    saldo: r2(Number(f.total) - (ap.get(f.id) || 0) - Number(f.total_acreditado || 0)),
+    saldo: saldo[f.id] || 0,
   })).filter((f) => f.saldo >= 1 && (!q || f.cliente.toLowerCase().includes(q)));
 }
 
