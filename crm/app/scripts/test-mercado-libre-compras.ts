@@ -1,6 +1,6 @@
 // Prueba de src/lib/mercado-libre-compras.ts (pestaña Mercado Libre de Compras Lazza). Correr: npx tsx scripts/test-mercado-libre-compras.ts
 import assert from "node:assert/strict";
-import { armarFilasML, importeRenglon, ordenarCandidatas, resumenML, esMercadoLibre, type FacturaML } from "../src/lib/mercado-libre-compras";
+import { armarFilasML, faltaFactura, importeRenglon, ordenarCandidatas, resumenML, esMercadoLibre, type FacturaML } from "../src/lib/mercado-libre-compras";
 
 assert.ok(esMercadoLibre("Mercado Libre") && esMercadoLibre("MERCADOLIBRE S.R.L.") && !esMercadoLibre("Prisina S.A."));
 
@@ -47,5 +47,18 @@ assert.equal(c[1].coincide, false);
 // Otra moneda va al final aunque el número se parezca.
 const usd: FacturaML = { ...jbl, id: "f3", moneda: "USD", total: 84232.94 };
 assert.equal(ordenarCandidatas([usd, cabsha], 84232.94, "ARS")[0].id, "f2");
+
+// «No tiene factura» (Synthon, pagó Seba): deja de faltar y no suma.
+const conMarca = armarFilasML([
+  { id: "oc3", numero: "OC-2026-1151", fecha: "2026-09-23", moneda: "ARS", prNumero: "PR-2026-1143", cliente: "Synthon", items: [
+    { id: "i5", descripcion: "ALTAVOZ JABRA", cantidad: 2, precio_unitario: 259225.27, iva_porcentaje: 21 },
+    { id: "i6", descripcion: "otro", cantidad: 1, precio_unitario: 100, iva_porcentaje: 21 },
+  ] },
+], [], [], [{ ocItemId: "i5", motivo: "Pagó Seba" }]);
+assert.equal(conMarca.find((f) => f.ocItemId === "i5")!.noTiene, "Pagó Seba");
+assert.equal(faltaFactura(conMarca.find((f) => f.ocItemId === "i5")!), false);
+assert.equal(faltaFactura(conMarca.find((f) => f.ocItemId === "i6")!), true);
+assert.equal(resumenML(conMarca).sinFactura, 1);
+assert.equal(resumenML(conMarca).importeSinFactura, 121);
 
 console.log("test-mercado-libre-compras OK");

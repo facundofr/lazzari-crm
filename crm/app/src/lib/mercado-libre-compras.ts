@@ -16,6 +16,8 @@ export type FacturaML = {
   proveedor: string; archivoUrl: string | null;
 };
 export type AsignacionML = { ocItemId: string; facturaId: string; origen: string };
+/** Artículo marcado «No tiene factura» (ej. lo pagó alguien con su plata): deja de faltar. */
+export type SinFacturaML = { ocItemId: string; motivo: string };
 
 export type FilaML = {
   ocItemId: string; ocId: string; ocNumero: string; fecha: string | null; prNumero: string; cliente: string;
@@ -23,7 +25,12 @@ export type FilaML = {
   /** Lo que se pagó con IVA (cantidad × precio × (1 + IVA)). */
   importe: number;
   facturas: (FacturaML & { origen: string })[];
+  /** Motivo si se marcó «No tiene factura»; null si no. */
+  noTiene: string | null;
 };
+
+/** Le falta la factura: no tiene ninguna unida y no se marcó «No tiene factura». */
+export const faltaFactura = (f: FilaML) => !f.facturas.length && !f.noTiene;
 
 /** Importe con IVA de un renglón de OC. */
 export function importeRenglon(it: ItemOcML): number {
@@ -32,7 +39,8 @@ export function importeRenglon(it: ItemOcML): number {
 }
 
 /** Una fila por artículo (renglón de OC), con las facturas que ya tiene unidas. Más nuevas primero. */
-export function armarFilasML(ocs: OcML[], asignaciones: AsignacionML[], facturas: FacturaML[]): FilaML[] {
+export function armarFilasML(ocs: OcML[], asignaciones: AsignacionML[], facturas: FacturaML[], sinFactura: SinFacturaML[] = []): FilaML[] {
+  const noTiene = new Map(sinFactura.map((x) => [x.ocItemId, x.motivo]));
   const porId = new Map(facturas.map((f) => [f.id, f]));
   const porItem = new Map<string, (FacturaML & { origen: string })[]>();
   for (const a of asignaciones) {
@@ -50,7 +58,7 @@ export function armarFilasML(ocs: OcML[], asignaciones: AsignacionML[], facturas
         ocItemId: it.id, ocId: o.id, ocNumero: o.numero, fecha: o.fecha, prNumero: o.prNumero, cliente: o.cliente,
         descripcion: String(it.descripcion || "").trim(), cantidad: Number(it.cantidad) || 0, precioUnitario: Number(it.precio_unitario) || 0,
         moneda: (it.moneda || o.moneda || "ARS") === "USD" ? "USD" : "ARS",
-        importe: importeRenglon(it), facturas: porItem.get(it.id) || [],
+        importe: importeRenglon(it), facturas: porItem.get(it.id) || [], noTiene: noTiene.get(it.id) ?? null,
       });
     }
   }
@@ -59,7 +67,7 @@ export function armarFilasML(ocs: OcML[], asignaciones: AsignacionML[], facturas
 
 /** Cuántos artículos y cuánta plata (en $; los de US$ aparte) falta facturar. */
 export function resumenML(filas: FilaML[]) {
-  const falta = filas.filter((f) => !f.facturas.length);
+  const falta = filas.filter(faltaFactura);
   return {
     total: filas.length,
     sinFactura: falta.length,

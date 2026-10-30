@@ -7,6 +7,8 @@
  *    queda unida a ese artículo y a los otros tildados (una factura puede cubrir varios artículos).
  *  - "Elegir una ya cargada": para las facturas que ya están en el sistema (así no se cargan dos veces).
  *  - La ✕ de la factura deshace la unión (la factura no cambia).
+ *  - "No tiene" (Augusto 30/10): el artículo no va a tener factura nunca (ej. lo pagó Seba): se marca con un motivo y deja de
+ *    sumar en "Falta la factura"; la ✕ lo desmarca (no se borra). Tabla mercado_libre_sin_factura (migración 20261030170000).
  * La unión se guarda con unir_factura_mercado_libre / quitar_factura_mercado_libre (migración 20261030160000).
  * Lógica pura en lib/mercado-libre-compras (prueba: scripts/test-mercado-libre-compras.ts).
  */
@@ -22,8 +24,8 @@ import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { coincideTodas, normalizarTexto, palabrasBusqueda } from "@/lib/buscar-texto";
 import { linkArchivo, rutaDeLinkArchivo } from "@/lib/archivo-link";
-import { armarFilasML, ordenarCandidatas, resumenML, type FacturaML, type FilaML, type OcML } from "@/lib/mercado-libre-compras";
-import { FileUp, ListChecks, Loader2, RefreshCw, Search, X } from "lucide-react";
+import { armarFilasML, faltaFactura, ordenarCandidatas, resumenML, type FacturaML, type FilaML, type OcML, type SinFacturaML } from "@/lib/mercado-libre-compras";
+import { Ban, FileUp, ListChecks, Loader2, RefreshCw, Search, X } from "lucide-react";
 
 const db = supabase as any;
 type Vista = FilaML & { id: string; texto: string };
@@ -81,10 +83,17 @@ export default function ComprasMercadoLibre({ sociedadId }: { sociedadId: string
       const asig = await enTandas<{ orden_compra_item_id: string; factura_compra_id: string; origen: string }>(itemIds,
         t => db.from("factura_compra_asignaciones").select("orden_compra_item_id, factura_compra_id, origen").in("orden_compra_item_id", t));
       const fcs = await enTandas<any>(asig.map(a => a.factura_compra_id), t => db.from("facturas_compra").select(SEL_FC).in("id", t).neq("estado", "anulada"));
-      const armadas = armarFilasML(ocsML, asig.map(a => ({ ocItemId: a.orden_compra_item_id, facturaId: a.factura_compra_id, origen: a.origen })), fcs.map(aFactura));
+      // «No tiene factura»: si la tabla todavía no está (migración sin correr), se sigue sin las marcas.
+      let sinF: SinFacturaML[] = [];
+      try {
+        sinF = (await enTandas<{ orden_compra_item_id: string; motivo: string }>(itemIds,
+          t => db.from("mercado_libre_sin_factura").select("orden_compra_item_id, motivo").eq("anulado", false).in("orden_compra_item_id", t)))
+          .map(x => ({ ocItemId: x.orden_compra_item_id, motivo: x.motivo }));
+      } catch { sinF = []; }
+      const armadas = armarFilasML(ocsML, asig.map(a => ({ ocItemId: a.orden_compra_item_id, facturaId: a.factura_compra_id, origen: a.origen })), fcs.map(aFactura), sinF);
       setFilas(armadas.map(f => ({
         ...f, id: f.ocItemId,
-        texto: normalizarTexto([f.ocNumero, f.prNumero, f.cliente, f.descripcion, ...f.facturas.flatMap(x => [x.numero, x.proveedor])].join(" ")),
+        texto: normalizarTexto([f.ocNumero, f.prNumero, f.cliente, f.descripcion, f.noTiene || "", ...f.facturas.flatMap(x => [x.numero, x.proveedor])].join(" ")),
       })));
     } catch (e: any) {
       setError(e?.message || "No se pudieron traer las compras de Mercado Libre");
@@ -115,7 +124,7 @@ export default function ComprasMercadoLibre({ sociedadId }: { sociedadId: string
     if (palabras.length && !coincideTodas(f.texto, palabras)) return false;
     return true;
   }), [filas, rango, palabras]);
-  const visibles = useMemo(() => (soloFalta ? enPeriodo.filter(f => !f.facturas.length) : enPeriodo), [enPeriodo, soloFalta]);
+  const visibles = useMemo(() => (soloFalta ? enPeriodo.filter(faltaFactura) : enPeriodo), [enPeriodo, soloFalta]);
   const resumen = useMemo(() => resumenML(enPeriodo), [enPeriodo]);
 
   /** Lo que va a llevar la factura: la fila tocada más las tildadas. */
@@ -143,6 +152,24 @@ export default function ComprasMercadoLibre({ sociedadId }: { sociedadId: string
     const { error: e } = await db.rpc("quitar_factura_mercado_libre", { p_factura_id: f.id, p_oc_item_id: fila.ocItemId });
     if (e) { toast.error(`No se pudo sacar: ${e.message}`); return; }
     toast.success(`Factura ${f.numero} sacada de ${fila.descripcion}`);
+    void cargar();
+  }
+
+  async function marcarNoTiene(fila: Vista) {
+    const motivo = window.prompt(`«${fila.descripcion}» no va a tener factura. ¿Por qué? (ej. Pagó Seba con su plata)`, "");
+    if (motivo === null) return;
+    if (!motivo.trim()) { toast.error("Escribí el motivo para marcarlo."); return; }
+    const { error: e } = await db.rpc("marcar_mercado_libre_sin_factura", { p_oc_item_id: fila.ocItemId, p_motivo: motivo.trim() });
+    if (e) { toast.error(`No se pudo marcar: ${e.message}`); return; }
+    toast.success(`${fila.descripcion}: no tiene factura (${motivo.trim()})`);
+    void cargar();
+  }
+
+  async function desmarcarNoTiene(fila: Vista) {
+    if (!window.confirm(`¿Volver a pedir la factura de «${fila.descripcion}»?`)) return;
+    const { error: e } = await db.rpc("desmarcar_mercado_libre_sin_factura", { p_oc_item_id: fila.ocItemId });
+    if (e) { toast.error(`No se pudo desmarcar: ${e.message}`); return; }
+    toast.success(`${fila.descripcion}: vuelve a faltar la factura`);
     void cargar();
   }
 
@@ -194,7 +221,14 @@ export default function ComprasMercadoLibre({ sociedadId }: { sociedadId: string
             )}
           </span>
         ))}
-        {!f.facturas.length && <span className="whitespace-nowrap text-[11px] font-medium text-amber-600 dark:text-amber-400">⚠ Falta la factura</span>}
+        {f.noTiene && (
+          <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300" title="Marcado «No tiene factura»: no suma en Falta la factura">
+            Sin factura: {f.noTiene}
+            <button onClick={e => { e.stopPropagation(); void desmarcarNoTiene(f); }} title="Volver a pedir la factura"
+              className="rounded-full p-0.5 hover:bg-zinc-200 hover:text-red-600 dark:hover:bg-zinc-700"><X className="h-3 w-3" /></button>
+          </span>
+        )}
+        {faltaFactura(f) && <span className="whitespace-nowrap text-[11px] font-medium text-amber-600 dark:text-amber-400">⚠ Falta la factura</span>}
       </span>
     ) },
     { key: "acciones", label: "", sortable: false, render: f => (
@@ -209,6 +243,12 @@ export default function ComprasMercadoLibre({ sociedadId }: { sociedadId: string
           className="inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-zinc-300 px-2 py-0.5 text-xs hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800">
           <ListChecks className="h-3.5 w-3.5" /> Elegir
         </button>
+        {faltaFactura(f) && (
+          <button onClick={e => { e.stopPropagation(); void marcarNoTiene(f); }} title="Este artículo no va a tener factura (ej. lo pagó alguien con su plata): deja de sumar en Falta la factura"
+            className="inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800">
+            <Ban className="h-3.5 w-3.5" /> No tiene
+          </button>
+        )}
       </span>
     ) },
   ];
