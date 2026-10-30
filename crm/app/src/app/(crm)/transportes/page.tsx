@@ -15,6 +15,7 @@ import { Select } from "@/components/ui/input";
 import { DataTable } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { supabase } from "@/lib/supabase/client";
+import { filtrarPorNombreODestino } from "@/lib/transportes-destinos";
 import {
   Minus, Plus, X, Loader2, CheckCircle2, Building2,
   MapPin, Phone, Mail, User, Package, Hash, Upload, Receipt,
@@ -49,6 +50,7 @@ interface TransportistaRow {
   activo: boolean;
   precio_viaje_fijo?: number | null;
   no_factura?: boolean;
+  destinos?: string | null;
   created_at: string;
 }
 
@@ -97,6 +99,7 @@ export default function TransportesPage() {
   const socId = sociedadActiva?.id;
 
   const [activeTab, setActiveTab] = useState<"viajes" | "catalogo">("viajes");
+  const [busquedaCatalogo, setBusquedaCatalogo] = useState("");
 
   // ─── Datos ───
   const [viajes, setViajes] = useState<ViajeRow[]>([]);
@@ -521,6 +524,15 @@ export default function TransportesPage() {
   };
 
   // ── Columnas del catálogo ───────────────────────────────────────────
+  const guardarDestinos = async (t: TransportistaRow, texto: string) => {
+    const valor = texto.trim();
+    if (valor === (t.destinos || "")) return;
+    const { error } = await (supabase as any).from("transportistas").update({ destinos: valor || null }).eq("id", t.id);
+    if (error) { toast.error(`No se pudo guardar: ${error.message}`); return; }
+    setTransportistas((prev) => prev.map((x) => (x.id === t.id ? { ...x, destinos: valor || null } : x)));
+    toast.success(`${t.nombre}: destinos guardados`);
+  };
+
   const cambiarNoFactura = async (t: TransportistaRow, valor: boolean) => {
     const { error } = await (supabase as any).from("transportistas").update({ no_factura: valor }).eq("id", t.id);
     if (error) { toast.error(`No se pudo guardar: ${error.message}`); return; }
@@ -535,6 +547,17 @@ export default function TransportesPage() {
     { key: "cuit" as const, label: "CUIT", render: (t: TransportistaRow) => t.cuit || "—" },
     { key: "telefono" as const, label: "Teléfono", render: (t: TransportistaRow) => t.telefono || "—" },
     { key: "precio_viaje_fijo" as const, label: "$ fijo por viaje", render: (t: TransportistaRow) => t.precio_viaje_fijo != null ? formatCurrency(t.precio_viaje_fijo, "ARS") : "—" },
+    { key: "destinos" as const, label: "Destinos", render: (t: TransportistaRow) => (
+      <input
+        key={`${t.id}:${t.destinos || ""}`}
+        defaultValue={t.destinos || ""}
+        onClick={(e) => e.stopPropagation()}
+        onBlur={(e) => guardarDestinos(t, e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+        placeholder="Ej: Córdoba, Rosario"
+        className="w-52 rounded border border-transparent bg-transparent px-1.5 py-1 text-xs hover:border-zinc-300 focus:border-orange-500 focus:bg-white focus:outline-none dark:hover:border-zinc-600 dark:focus:bg-zinc-800"
+      />
+    )},
     { key: "no_factura" as const, label: "¿Nos factura?", render: (t: TransportistaRow) => (
       <div className="w-24" onClick={(e) => e.stopPropagation()} title="No: no nos hace factura, se le crea una factura manual desde Transportes. Sí: su factura se carga en Compras">
         <Select
@@ -787,11 +810,21 @@ export default function TransportesPage() {
                     description="Marcá un proveedor como transportista para que aparezca automáticamente acá"
                   />
                 ) : (
+                  <>
+                    <div className="border-b border-zinc-200 p-3 dark:border-zinc-800">
+                      <input
+                        value={busquedaCatalogo}
+                        onChange={(e) => setBusquedaCatalogo(e.target.value)}
+                        placeholder="Buscar por nombre o destino (ej: córdoba)"
+                        className="w-full max-w-sm rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
+                      />
+                    </div>
                   <DataTable
                     columns={transportistaColumns}
-                    data={transportistas}
+                    data={filtrarPorNombreODestino(transportistas, busquedaCatalogo)}
                     onRowClick={(t) => setSelectedTransportista(t.id === selectedTransportista?.id ? null : t)}
                   />
+                  </>
                 )}
               </Card>
             </div>
