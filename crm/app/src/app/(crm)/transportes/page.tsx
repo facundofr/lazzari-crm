@@ -13,6 +13,7 @@ import { mostrarWhatsApp } from "@/lib/whatsapp-ar";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select } from "@/components/ui/input";
+import { TransportesFacturas } from "@/components/transportes-facturas";
 import { DataTable } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { supabase } from "@/lib/supabase/client";
@@ -99,7 +100,7 @@ export default function TransportesPage() {
   const { toast } = useToast();
   const socId = sociedadActiva?.id;
 
-  const [activeTab, setActiveTab] = useState<"viajes" | "catalogo">("viajes");
+  const [activeTab, setActiveTab] = useState<"viajes" | "catalogo" | "facturas">("viajes");
   const [busquedaCatalogo, setBusquedaCatalogo] = useState("");
 
   // ─── Datos ───
@@ -603,6 +604,12 @@ export default function TransportesPage() {
           >
             <span className="flex items-center gap-2"><Building2 size={16} /> Catálogo transportistas</span>
           </button>
+          <button
+            onClick={() => setActiveTab("facturas")}
+            className={`rounded-md px-4 py-1.5 text-sm font-medium transition-colors ${activeTab === "facturas" ? "bg-white text-zinc-900 shadow dark:bg-zinc-700 dark:text-white" : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white"}`}
+          >
+            <span className="flex items-center gap-2"><Receipt size={16} /> Facturas</span>
+          </button>
         </div>
 
         {activeTab === "viajes" && (loadingViajes && viajes.length === 0 ? (
@@ -796,6 +803,8 @@ export default function TransportesPage() {
         {/* ══════════════════════════════════════════════════════════════════
             TAB: CATÁLOGO TRANSPORTISTAS
            ══════════════════════════════════════════════════════════════════ */}
+        {activeTab === "facturas" && socId && <TransportesFacturas socId={socId} />}
+
         {activeTab === "catalogo" && (
           <div className="flex gap-6">
             <div className={`transition-all ${selectedTransportista ? "w-3/5" : "w-full"}`}>
