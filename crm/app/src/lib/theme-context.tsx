@@ -7,7 +7,8 @@ type Theme = "light" | "dark";
 interface ThemeContextValue {
   theme: Theme;
   toggleTheme: () => void;
-  /** Diseño nuevo en prueba (Augusto 29/10): se prende en Configuración y vale solo para esta compu. */
+  /** Diseño nuevo (Augusto 30/10): lo prende él en Configuración y vale para todos (/api/diseno-nuevo).
+   *  La compu recuerda el último valor para que no parpadee al abrir. */
   disenoNuevo: boolean;
   setDisenoNuevo: (v: boolean) => void;
 }
@@ -40,6 +41,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     }
     setDisenoNuevo(localStorage.getItem(DISENO_NUEVO_KEY) === "1");
     setMounted(true);
+    // Sin sesión (login) da 401 y queda lo que recordaba la compu.
+    fetch("/api/diseno-nuevo").then((r) => (r.ok ? r.json() : null))
+      .then((d: { todos: boolean } | null) => { if (d) setDisenoNuevo(d.todos); })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {

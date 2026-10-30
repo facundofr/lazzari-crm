@@ -10,10 +10,15 @@
  * - renglones de tabla: un <tr> vacío del alto que falta y se repite el encabezado de la tabla;
  * - bloques sueltos (datos, firmas, CAI, totales): un <div> antes, solo afuera de las tablas;
  * - títulos chicos (ej. "Detalle de mercadería"): no quedan solos al pie de la hoja.
+ *
+ * Cada hoja nueva repite arriba lo marcado con `.pdf-repetir` en la plantilla (encabezado del documento y,
+ * en el remito, el destinatario), y si hay más de una hoja dice "Hoja N de M" abajo (Augusto, 30/10/2026:
+ * "si el remito tiene 2 hojas, en la parte de arriba le faltan todos los datos").
  */
 
 const MARGEN_HOJA = 45; // ≈ 12 mm, el mismo margen de arriba que tiene .page
 const TABLA_LARGA = 260; // tablas más altas que esto se cortan por renglón
+const PIE_HOJA = 28; // lugar libre abajo de cada hoja para "Hoja N de M"
 
 function arriba(el: Element, base: number) {
   return el.getBoundingClientRect().top - base;
@@ -29,7 +34,42 @@ function faltaParaElCorte(y: number, altoHoja: number) {
 }
 
 function cruzaElCorte(top: number, bottom: number, altoHoja: number) {
-  return Math.floor(top / altoHoja) !== Math.floor((bottom - 1) / altoHoja) && bottom - top <= altoHoja;
+  return Math.floor(top / altoHoja) !== Math.floor((bottom - 1 + PIE_HOJA) / altoHoja) && bottom - top <= altoHoja;
+}
+
+/** Lo que se repite arriba de cada hoja nueva, armado una sola vez antes de cortar. */
+function encabezadoDeHoja(pagina: HTMLElement): HTMLElement | null {
+  const partes = Array.from(pagina.children).filter((el) => el.classList.contains("pdf-repetir"));
+  if (!partes.length) return null;
+  const caja = document.createElement("div");
+  caja.className = "pdf-encabezado-hoja";
+  partes.forEach((p) => caja.appendChild(p.cloneNode(true)));
+  return caja;
+}
+
+/** El encabezado de hoja metido en un renglón que ocupa toda la tabla (un <div> suelto la desarma). */
+function renglonConEncabezado(columnas: number, encabezado: HTMLElement) {
+  const tr = document.createElement("tr");
+  tr.className = "pdf-corte";
+  const td = document.createElement("td");
+  td.colSpan = columnas;
+  td.style.cssText = "padding:0;border:0;background:transparent;";
+  td.appendChild(encabezado);
+  tr.appendChild(td);
+  return tr;
+}
+
+function numerarHojas(contenedor: HTMLElement, altoHoja: number) {
+  const hojas = Math.ceil(contenedor.scrollHeight / altoHoja);
+  if (hojas < 2) return;
+  contenedor.style.position = "relative";
+  for (let i = 0; i < hojas; i++) {
+    const n = document.createElement("div");
+    n.className = "pdf-numero-hoja";
+    n.textContent = `Hoja ${i + 1} de ${hojas}`;
+    n.style.cssText = `position:absolute;right:57px;top:${(i + 1) * altoHoja - 22}px;font-size:9px;color:#555;`;
+    contenedor.appendChild(n);
+  }
 }
 
 /** Lo que falta para dejar el margen de arriba si el elemento quedó pegado al borde de una hoja nueva. */
@@ -75,7 +115,7 @@ function encabezadoRepetido(tabla: HTMLTableElement): HTMLTableRowElement | null
   return copia;
 }
 
-function cortarTabla(tabla: HTMLTableElement, base: number, altoHoja: number) {
+function cortarTabla(tabla: HTMLTableElement, base: number, altoHoja: number, encabezado: HTMLElement | null) {
   const cuerpo = tabla.tBodies[0];
   if (!cuerpo) return;
   const columnas = tabla.tHead?.rows[0]?.cells.length || cuerpo.rows[0]?.cells.length || 1;
@@ -88,6 +128,7 @@ function cortarTabla(tabla: HTMLTableElement, base: number, altoHoja: number) {
       : faltaMargenArriba(top, altoHoja);
     if (!alto) continue;
     cuerpo.insertBefore(rengloVacio(columnas, alto), fila);
+    if (encabezado) cuerpo.insertBefore(renglonConEncabezado(columnas, encabezado.cloneNode(true) as HTMLElement), fila);
     const enc = encabezadoRepetido(tabla);
     if (enc) cuerpo.insertBefore(enc, fila);
   }
@@ -101,6 +142,12 @@ export function acomodarCortesDeHoja(contenedor: HTMLElement, altoHoja: number) 
   const pagina = (contenedor.querySelector(".page") as HTMLElement | null) || contenedor;
   const base = contenedor.getBoundingClientRect().top;
   const bloques = Array.from(pagina.children).filter((el) => !(el instanceof HTMLStyleElement));
+  const encabezado = encabezadoDeHoja(pagina);
+  // Empuja `el` a la hoja siguiente y le pone arriba el encabezado de hoja.
+  const empujar = (el: Element, alto: number) => {
+    el.parentNode?.insertBefore(relleno(alto), el);
+    if (encabezado) el.parentNode?.insertBefore(encabezado.cloneNode(true), el);
+  };
 
   bloques.forEach((el, i) => {
     const top = arriba(el, base);
@@ -109,7 +156,7 @@ export function acomodarCortesDeHoja(contenedor: HTMLElement, altoHoja: number) 
     if (alto <= 0) return;
 
     if (el instanceof HTMLTableElement && alto > TABLA_LARGA) {
-      cortarTabla(el, base, altoHoja);
+      cortarTabla(el, base, altoHoja, encabezado);
       return;
     }
 
@@ -119,7 +166,7 @@ export function acomodarCortesDeHoja(contenedor: HTMLElement, altoHoja: number) 
       const finHoja = (Math.floor(top / altoHoja) + 1) * altoHoja;
       const primeraParte = siguiente instanceof HTMLTableElement ? (siguiente.rows[1] || siguiente.rows[0]) : siguiente;
       if (primeraParte && abajo(primeraParte, base) > finHoja && top < finHoja) {
-        el.parentNode?.insertBefore(relleno(faltaParaElCorte(top, altoHoja) + MARGEN_HOJA), el);
+        empujar(el, faltaParaElCorte(top, altoHoja) + MARGEN_HOJA);
         return;
       }
     }
@@ -127,6 +174,8 @@ export function acomodarCortesDeHoja(contenedor: HTMLElement, altoHoja: number) 
     const falta = cruzaElCorte(top, bottom, altoHoja)
       ? faltaParaElCorte(top, altoHoja) + MARGEN_HOJA
       : faltaMargenArriba(top, altoHoja);
-    if (falta) el.parentNode?.insertBefore(relleno(falta), el);
+    if (falta) empujar(el, falta);
   });
+
+  numerarHojas(contenedor, altoHoja);
 }

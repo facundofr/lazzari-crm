@@ -209,8 +209,8 @@ interface DocumentHeaderOptions {
 function documentHeader(soc: SociedadPDF, options: DocumentHeaderOptions): string {
   const contactEmail = options.contactEmail || soc.email;
   return `
-    <div class="header-bar"></div>
-    <div class="doc-header-wrap">
+    <div class="header-bar pdf-repetir"></div>
+    <div class="doc-header-wrap pdf-repetir">
     ${options.marker && options.centerMarker ? `<div class="doc-marker-overlay"><div class="doc-marker"${options.marker.length > 2 ? ` style="font-size:17px"` : ""}>${options.marker}</div>${options.markerCode ? `<div class="doc-marker-code">${options.markerCode}</div>` : ""}</div>` : ""}
     <table class="doc-header-table">
       <tr>
@@ -906,7 +906,7 @@ ${documentHeader(soc, {
   contactEmail: soc.commercialEmail,
 })}
 
-<table class="compact-strip">
+<table class="compact-strip pdf-repetir">
   <tr>
     <td style="width:64%">
       <div class="compact-title">Destinatario</div>
