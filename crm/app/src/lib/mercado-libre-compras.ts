@@ -3,6 +3,20 @@
 
 export const esMercadoLibre = (t: string | null | undefined) => /mercado\s*libre/i.test(String(t || ""));
 
+/**
+ * Vendedor de Mercado Libre que no está cargado (Augusto 30/10: "no me pidas cargar el proveedor"): se crea solo al guardar la factura.
+ * Nombre: el de ARCA, si no el leído de la factura, si no "Vendedor Mercado Libre CUIT …".
+ * Condición IVA: la de ARCA; si no se sabe, sale del tipo (factura C = monotributo, A/B = inscripto).
+ */
+export function vendedorML(o: { cuit: string; tipo: string; arca?: { razon_social?: string | null; condicion_iva?: string | null } | null; leido?: string | null }) {
+  const cuit = String(o.cuit || "").replace(/\D/g, "");
+  const iva = String(o.arca?.condicion_iva || "").trim().toUpperCase();
+  const condicion_iva = iva === "RI" || iva.includes("INSCRIPTO") ? "RI" : iva.startsWith("MONOTRIBUT") ? "Monotributo" : iva === "EXENTO" ? "Exento" : iva === "CF" ? "CF"
+    : /\sC$/i.test(String(o.tipo || "").trim()) ? "Monotributo" : "RI";
+  const razon_social = String(o.arca?.razon_social || "").trim() || String(o.leido || "").trim() || `Vendedor Mercado Libre CUIT ${cuit}`;
+  return { razon_social, cuit, condicion_iva, cuit_titular_cuenta: cuit, medio_pago_preferido: "tarjeta", notas: "Vendedor de Mercado Libre: se creó solo al cargar su factura." };
+}
+
 const round2 = (n: number) => Math.round(n * 100) / 100;
 export type Moneda = "ARS" | "USD";
 

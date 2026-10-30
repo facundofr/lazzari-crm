@@ -1,6 +1,6 @@
 // Prueba de src/lib/mercado-libre-compras.ts (pestaña Mercado Libre de Compras Lazza). Correr: npx tsx scripts/test-mercado-libre-compras.ts
 import assert from "node:assert/strict";
-import { armarFilasML, faltaFactura, importeRenglon, ordenarCandidatas, resumenML, esMercadoLibre, type FacturaML } from "../src/lib/mercado-libre-compras";
+import { armarFilasML, faltaFactura, importeRenglon, ordenarCandidatas, resumenML, esMercadoLibre, vendedorML, type FacturaML } from "../src/lib/mercado-libre-compras";
 
 assert.ok(esMercadoLibre("Mercado Libre") && esMercadoLibre("MERCADOLIBRE S.R.L.") && !esMercadoLibre("Prisina S.A."));
 
@@ -60,5 +60,15 @@ assert.equal(faltaFactura(conMarca.find((f) => f.ocItemId === "i5")!), false);
 assert.equal(faltaFactura(conMarca.find((f) => f.ocItemId === "i6")!), true);
 assert.equal(resumenML(conMarca).sinFactura, 1);
 assert.equal(resumenML(conMarca).importeSinFactura, 121);
+
+// Vendedor que no está cargado (OC-2026-1261, pilotín, CUIT 30717434788): se crea solo con lo de ARCA.
+assert.deepEqual(
+  (({ razon_social, cuit, condicion_iva }) => ({ razon_social, cuit, condicion_iva }))(vendedorML({ cuit: "30-71743478-8", tipo: "FC A", arca: { razon_social: "PILOTINES S.A.", condicion_iva: "RI" } })),
+  { razon_social: "PILOTINES S.A.", cuit: "30717434788", condicion_iva: "RI" });
+// ARCA no respondió: nombre leído de la factura; condición por el tipo.
+assert.equal(vendedorML({ cuit: "20111111112", tipo: "FC C", leido: "Juan Pérez" }).razon_social, "Juan Pérez");
+assert.equal(vendedorML({ cuit: "20111111112", tipo: "FC C" }).condicion_iva, "Monotributo");
+assert.equal(vendedorML({ cuit: "30717434788", tipo: "FC A", arca: null }).razon_social, "Vendedor Mercado Libre CUIT 30717434788");
+assert.equal(vendedorML({ cuit: "30717434788", tipo: "FC A", arca: { condicion_iva: "Monotributo" } }).condicion_iva, "Monotributo");
 
 console.log("test-mercado-libre-compras OK");

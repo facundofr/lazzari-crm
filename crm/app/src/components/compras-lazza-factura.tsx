@@ -18,6 +18,7 @@
  *    factura fue de transporte o si los renglones son flete; se cambia a mano. Transporte cuenta en Transportes (Gastos y Reportes).
  * 7. Pestaña Mercado Libre (Augusto 30/10): abre esta misma ventana con "Ya pagada con Visa" elegido y, al guardar, la une a los
  *    artículos elegidos (onGuardada → unir_factura_mercado_libre). Si la unión falla, la factura ya quedó cargada.
+ *    Si el vendedor no está cargado, no se pide crearlo: se crea solo al guardar con los datos de ARCA (vendedorML).
  * Guardar usa guardar_conciliacion_compra (la de siempre), sin OC, sin aceptar costos ni aprender equivalencias.
  */
 import { useEffect, useRef, useState } from "react";
@@ -36,6 +37,7 @@ import { Autocompletar } from "@/components/ui/autocompletar";
 import { AlertTriangle, Check, CreditCard, FileUp, Loader2, Sparkles, UserPlus, X } from "lucide-react";
 import { linkArchivo } from "@/lib/archivo-link";
 import { sugerenciaTransporte } from "@/lib/factura-tipo";
+import { vendedorML } from "@/lib/mercado-libre-compras";
 
 const db = supabase as any;
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -56,6 +58,7 @@ const tipoSinIva = (t: string) => t === TIPO_SIN_FACTURA || /\sC$/i.test(t);
 const renglonVacio = (iva = 21): ItemFactura => ({ codigo: "", descripcion: "", cantidad: 1, precio_unitario: 0, descuento_porcentaje: 0, iva_porcentaje: iva, unidad: "UN" });
 const netoRenglon = (it: ItemFactura) => round2((Number(it.cantidad) || 0) * (Number(it.precio_unitario) || 0) * (1 - (Number(it.descuento_porcentaje) || 0) / 100));
 const esMercadoLibre = (t: string | null | undefined) => /mercado\s*libre/i.test(String(t || ""));
+const COLS_PROVEEDOR = "id, razon_social, cuit, talles_especiales, medio_pago_preferido, plazo_cheque_dias, dias_pago, email, cbu, alias_bancario, es_transportista";
 
 type Proveedor = { id: string; razon_social: string; cuit: string | null; talles_especiales?: string[] | null; medio_pago_preferido?: string | null; plazo_cheque_dias?: number | null; dias_pago?: number | null; email?: string | null; cbu?: string | null; alias_bancario?: string | null; es_transportista?: boolean | null };
 type FormaPago = "transferencia" | "echeq";
@@ -91,6 +94,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
   const [otraSociedad, setOtraSociedad] = useState("");
   const [duplicada, setDuplicada] = useState(false);
   const [proveedor, setProveedor] = useState<Proveedor | null>(null);
+  const proveedorElegido = proveedor;
   // Mientras se busca el proveedor por CUIT no se muestra "no está cargado" (salía un instante y se corregía solo).
   const [buscandoProv, setBuscandoProv] = useState(false);
   const [crearProv, setCrearProv] = useState(false);
@@ -116,6 +120,10 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
   // Compra o Transporte (null = lo sugerido). ultimoTipo = tipo de la última factura del proveedor.
   const [tipoElegido, setTipoElegido] = useState<"mercaderia" | "transporte" | null>(tipoInicial ?? null);
   const [ultimoTipo, setUltimoTipo] = useState<string | null>(null);
+  // Pestaña Mercado Libre: el vendedor que no está cargado se busca en ARCA y se crea solo al guardar.
+  const deMercadoLibre = !!para;
+  const [vendedorArca, setVendedorArca] = useState<{ razon_social?: string | null; condicion_iva?: string | null } | null>(null);
+  const arcaVendedor = useRef<Promise<{ razon_social?: string | null; condicion_iva?: string | null } | null> | null>(null);
 
   const plata = (n: number) => formatCurrency(n, factura?.moneda || "ARS");
   useEffect(() => { void empezarManual(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
@@ -125,7 +133,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
     ncKey.current = null;
     setError(""); setFactura(null); setProveedor(null); setBuscandoProv(false);
     setConVisa(conVisaInicial ?? null); setFaltaElegirPago(false); setForma(null); setDiasTxt(null); setNotaPago(""); setDuplicada(false); setEsNota(false); setOtraSociedad(""); setNoSeLeyo(false); setOrigen("");
-    setPercTxt(""); setTotalTxt(""); setTipoElegido(tipoInicial ?? null); setUltimoTipo(null);
+    setPercTxt(""); setTotalTxt(""); setTipoElegido(tipoInicial ?? null); setUltimoTipo(null); setVendedorArca(null); arcaVendedor.current = null;
   }
 
   async function leer(file: File) {
@@ -160,7 +168,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
       subtotal: 0, iva: 0, ivaPorcentaje: 21, percepciones: 0, total: 0, items: [renglonVacio()], cuit: "" });
     setNetoTxt("");
     if (!provsLista.length) {
-      const { data: ps } = await db.from("proveedores").select("id, razon_social, cuit, talles_especiales, medio_pago_preferido, plazo_cheque_dias, dias_pago, email, cbu, alias_bancario, es_transportista").eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social");
+      const { data: ps } = await db.from("proveedores").select(COLS_PROVEEDOR).eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social");
       setProvsLista((ps || []) as Proveedor[]);
     }
   }
@@ -215,9 +223,14 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
     setOtraSociedad(soc && soc.id !== sociedadId ? soc.nombre : "");
     if (!buscar) return; // releída con IA: mismo proveedor
     try {
-      const { data: ps } = await db.from("proveedores").select("id, razon_social, cuit, talles_especiales, medio_pago_preferido, plazo_cheque_dias, dias_pago, email, cbu, alias_bancario, es_transportista").eq("sociedad_id", sociedadId).eq("activo", true);
+      const { data: ps } = await db.from("proveedores").select(COLS_PROVEEDOR).eq("sociedad_id", sociedadId).eq("activo", true);
       const p = ((ps || []) as Proveedor[]).find(x => digitos(x.cuit) === f.cuit);
       if (p) await elegirProveedor(p, f);
+      else if (deMercadoLibre) {
+        const promesa = fetch(`/api/cuit-lookup?cuit=${f.cuit}`).then(r => r.ok ? r.json() : null).then(d => d && !d.error ? d : null).catch(() => null);
+        arcaVendedor.current = promesa;
+        void promesa.then(d => { if (arcaVendedor.current === promesa) setVendedorArca(d); }); // si se leyó otra factura, no se pisa
+      }
     } finally { setBuscandoProv(false); }
   }
 
@@ -272,7 +285,10 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
     } finally { setGuardandoProv(false); }
   }
   const textoPago = `Pago: ${formaPago === "echeq" ? "eCheq" : "transferencia"}${dias.trim() ? ` a ${Math.round(num(dias))} días` : ""}`;
-  const listo = !!factura && !!proveedor && !esNota && factura.total > 0;
+  const vendedorNuevo = deMercadoLibre && !!factura && !proveedor && !buscandoProv && !esNota && factura.cuit.length === 11;
+  const datosVendedor = vendedorNuevo ? vendedorML({ cuit: factura!.cuit, tipo: factura!.tipo, arca: vendedorArca, leido: factura!.razonSocialLeida }) : null;
+  const nombreProveedor = proveedor?.razon_social ?? datosVendedor?.razon_social ?? "";
+  const listo = !!factura && (!!proveedor || vendedorNuevo) && !esNota && factura.total > 0;
   const esNC = !!factura && factura.tipo.startsWith("NC");
   const motivoTransporte = proveedor && factura ? sugerenciaTransporte({ esTransportista: proveedor.es_transportista, ultimoTipo, descripciones: factura.items.map(it => it.descripcion) }) : null;
   const tipoFactura = tipoElegido ?? (motivoTransporte ? "transporte" : "mercaderia");
@@ -288,9 +304,21 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
     if (u?.publicUrl) await db.from("facturas_compra").update({ archivo_url: u.publicUrl, archivo_nombre: archivo.name }).eq("id", facturaId);
   }
 
+  /** Vendedor de Mercado Libre que no está cargado: si ya existe con ese CUIT (aunque esté inactivo) se usa; si no, se crea. */
+  async function crearVendedorML(): Promise<Proveedor> {
+    const arca = vendedorArca ?? (arcaVendedor.current ? await arcaVendedor.current : null);
+    const datos = vendedorML({ cuit: factura!.cuit, tipo: factura!.tipo, arca, leido: factura!.razonSocialLeida });
+    const conGuiones = `${datos.cuit.slice(0, 2)}-${datos.cuit.slice(2, 10)}-${datos.cuit.slice(10)}`;
+    const { data: ya } = await db.from("proveedores").select(COLS_PROVEEDOR).eq("sociedad_id", sociedadId).in("cuit", [datos.cuit, conGuiones]).limit(1);
+    if (ya?.[0]) return ya[0] as Proveedor;
+    const { data, error: e } = await db.from("proveedores").insert({ ...datos, sociedad_id: sociedadId, talles_especiales: [], tolerancia_precio_pct: 1 }).select(COLS_PROVEEDOR).single();
+    if (e) throw new Error(e.message);
+    return data as Proveedor;
+  }
+
   // Nota de crédito: sin pago; queda como crédito en la cuenta corriente del proveedor (se usa al pagarle).
-  async function guardarNC() {
-    if (!factura || !proveedor) return;
+  async function guardarNC(proveedor: Proveedor) {
+    if (!factura) return;
     const numero = factura.numero.trim();
     setGuardando(true); setError("");
     try {
@@ -321,10 +349,17 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
   }
 
   async function guardar() {
-    if (!factura || !proveedor) return;
+    if (!factura || !listo) return;
     if (!factura.numero.trim()) { setError("Falta el número de la factura."); return; }
-    if (esNC) return guardarNC();
-    if (conVisa === null) { setFaltaElegirPago(true); return; }
+    if (!esNC && conVisa === null) { setFaltaElegirPago(true); return; }
+    let proveedor = proveedorElegido;
+    if (!proveedor) {
+      setGuardando(true); setError("");
+      try { proveedor = await crearVendedorML(); setProveedor(proveedor); }
+      catch (e: any) { setError(`No se pudo cargar el vendedor como proveedor: ${e?.message || "error"}`); return; }
+      finally { setGuardando(false); }
+    }
+    if (esNC) return guardarNC(proveedor);
     setGuardando(true); setError("");
     const numero = factura.numero.trim();
     try {
@@ -486,7 +521,12 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
             {!proveedor && !esNota && buscandoProv && (
               <p className="flex items-center gap-2 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Buscando proveedor…</p>
             )}
-            {!proveedor && !esNota && !buscandoProv && !!factura.cuit && (
+            {vendedorNuevo && datosVendedor && (
+              <p className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300">
+                <UserPlus className="h-4 w-4 text-violet-600" /> Vendedor: <b>{datosVendedor.razon_social}</b> (CUIT {factura.cuit}). Se carga solo como proveedor al guardar.
+              </p>
+            )}
+            {!proveedor && !esNota && !buscandoProv && !!factura.cuit && !deMercadoLibre && (
               <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
                 <AlertTriangle className="h-4 w-4" /> El proveedor CUIT {factura.cuit} no está cargado.
                 <button onClick={() => setCrearProv(true)} className="ml-auto inline-flex items-center gap-1 rounded-md bg-amber-500 px-2 py-1 text-xs font-medium text-white"><UserPlus className="h-3.5 w-3.5" /> Crear proveedor</button>
@@ -496,12 +536,12 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
             {/* Nota de crédito: a la cuenta corriente del proveedor */}
             {listo && esNC && (
               <p className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
-                Nota de crédito: va a la cuenta corriente de <b>{proveedor!.razon_social}</b> como crédito (se usa al pagarle).
+                Nota de crédito: va a la cuenta corriente de <b>{nombreProveedor}</b> como crédito (se usa al pagarle).
               </p>
             )}
 
             {listo && !esNC && (
-              <p className="text-xs text-zinc-600 dark:text-zinc-300">La factura va directo a la cuenta corriente de <b>{proveedor!.razon_social}</b> (no se ata a ninguna OC).</p>
+              <p className="text-xs text-zinc-600 dark:text-zinc-300">La factura va directo a la cuenta corriente de <b>{nombreProveedor}</b> (no se ata a ninguna OC).</p>
             )}
             {listo && !esNC && (
               <div className="flex flex-wrap items-center gap-1.5 px-2 text-sm">
@@ -537,7 +577,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
                 {vencePago && <span className="text-xs text-zinc-500">vence {vencePago.split("-").reverse().join("/")}</span>}
               </div>
             )}
-            {listo && (faltaEmail || (faltaBanco && !pagaVisa && !esNC)) && (
+            {listo && !deMercadoLibre && (faltaEmail || (faltaBanco && !pagaVisa && !esNC)) && (
               <div className="flex flex-wrap items-center gap-1.5 text-xs">
                 <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
                 <span className="text-amber-700 dark:text-amber-400">A {proveedor!.razon_social} le falta {[faltaEmail && "el email", faltaBanco && !pagaVisa && !esNC && "los datos bancarios"].filter(Boolean).join(" y ")}:</span>
