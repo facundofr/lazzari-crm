@@ -1,4 +1,4 @@
-import { tipoSugerido, categoriaPorTexto } from "../src/lib/factura-tipo";
+import { tipoSugerido, categoriaPorTexto, sugerenciaTransporte } from "../src/lib/factura-tipo";
 const ok = (c: boolean, m: string) => { if (!c) { console.error("FALLA", m); process.exit(1); } console.log("ok", m); };
 ok(tipoSugerido({ ultimoTipo: "servicio", ultimaCategoria: "honorarios", descripciones: ["algo"] })?.categoria === "honorarios", "repite lo último del proveedor");
 ok(tipoSugerido({ ultimoTipo: "transporte", descripciones: [] })?.tipo === "transporte", "transporte del proveedor");
@@ -9,3 +9,12 @@ ok(tipoSugerido({ descripciones: ["BOTIN PAMPERO T42"] }) === null, "mercadería
 ok(tipoSugerido({ descripciones: [] }) === null, "sin renglones nada");
 ok(categoriaPorTexto("Servicio de internet fibra óptica") === "servicios_publicos", "internet");
 ok(categoriaPorTexto("Liquidación de sueldos 09/2026") === "honorarios", "liquidación de sueldos");
+// Fletes → Transporte (29/10/2026)
+ok(sugerenciaTransporte({ esTransportista: true, descripciones: ["Factura (sin detalle de artículos)"] }) === "proveedor", "transportista sin detalle");
+ok(sugerenciaTransporte({ ultimoTipo: "transporte", descripciones: [] }) === "proveedor", "última factura de transporte");
+ok(sugerenciaTransporte({ descripciones: ["Traslado interno s/guia 18-87"] }) === "texto", "traslado (Serger)");
+ok(sugerenciaTransporte({ descripciones: ["SEGURO POR VALOR DECLARADO", "FLETES GENERALES"] }) === "texto", "flete con seguro de la carga");
+ok(sugerenciaTransporte({ descripciones: ["Flete Zona 3", "Ripio con arena 5 m3"] }) === null, "mercadería con flete queda Compra");
+ok(sugerenciaTransporte({ descripciones: ["7.50-16 12T TRIPLE GUIA SOLID ROCK"] }) === null, "cubierta con «guía» no es flete");
+ok(sugerenciaTransporte({ descripciones: ["SEGURO DE VIDA"] }) === null, "seguro solo no es flete");
+ok(sugerenciaTransporte({ descripciones: ["Factura (sin detalle de artículos)"] }) === null, "sin detalle ni proveedor: nada");

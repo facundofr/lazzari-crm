@@ -14,6 +14,8 @@
  *    percepciones y total (el total se arma solo y se puede corregir); el PDF se puede adjuntar o no. Del pago para abajo es igual.
  * 5. Nota de crédito: sin forma de pago; va a la cuenta corriente del proveedor como crédito
  *    (registrar_nota_credito_compra_v2, la misma de Finanzas). La nota de débito no se carga acá.
+ * 6. Flete (Augusto 29/10): «Es: Compra / Transporte». Se sugiere Transporte si el proveedor es transportista, si su última
+ *    factura fue de transporte o si los renglones son flete; se cambia a mano. Transporte cuenta en Transportes (Gastos y Reportes).
  * Guardar usa guardar_conciliacion_compra (la de siempre), sin OC, sin aceptar costos ni aprender equivalencias.
  */
 import { useEffect, useRef, useState } from "react";
@@ -31,6 +33,7 @@ import { ivaYPercepciones, netoFactura, tipoNotaCredito, vencimientoPorDias } fr
 import { Autocompletar } from "@/components/ui/autocompletar";
 import { AlertTriangle, Check, CreditCard, FileUp, Loader2, Sparkles, UserPlus, X } from "lucide-react";
 import { linkArchivo } from "@/lib/archivo-link";
+import { sugerenciaTransporte } from "@/lib/factura-tipo";
 
 const db = supabase as any;
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -52,7 +55,7 @@ const renglonVacio = (iva = 21): ItemFactura => ({ codigo: "", descripcion: "", 
 const netoRenglon = (it: ItemFactura) => round2((Number(it.cantidad) || 0) * (Number(it.precio_unitario) || 0) * (1 - (Number(it.descuento_porcentaje) || 0) / 100));
 const esMercadoLibre = (t: string | null | undefined) => /mercado\s*libre/i.test(String(t || ""));
 
-type Proveedor = { id: string; razon_social: string; cuit: string | null; talles_especiales?: string[] | null; medio_pago_preferido?: string | null; plazo_cheque_dias?: number | null; dias_pago?: number | null; email?: string | null; cbu?: string | null; alias_bancario?: string | null };
+type Proveedor = { id: string; razon_social: string; cuit: string | null; talles_especiales?: string[] | null; medio_pago_preferido?: string | null; plazo_cheque_dias?: number | null; dias_pago?: number | null; email?: string | null; cbu?: string | null; alias_bancario?: string | null; es_transportista?: boolean | null };
 type FormaPago = "transferencia" | "echeq";
 const DIAS_RAPIDOS = [0, 15, 30, 45, 60];
 const btnSi = "rounded-md bg-violet-600 px-2 py-1 text-xs font-medium text-white hover:bg-violet-700";
@@ -100,6 +103,9 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
   const [totalTxt, setTotalTxt] = useState("");
   // Cambia al sacar/agregar renglones: los campos de texto de la tabla se rearman con los valores nuevos.
   const [filasKey, setFilasKey] = useState(0);
+  // Compra o Transporte (null = lo sugerido). ultimoTipo = tipo de la última factura del proveedor.
+  const [tipoElegido, setTipoElegido] = useState<"mercaderia" | "transporte" | null>(null);
+  const [ultimoTipo, setUltimoTipo] = useState<string | null>(null);
 
   const plata = (n: number) => formatCurrency(n, factura?.moneda || "ARS");
   useEffect(() => { void empezarManual(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
@@ -109,7 +115,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
     ncKey.current = null;
     setError(""); setFactura(null); setProveedor(null); setBuscandoProv(false);
     setConVisa(null); setFaltaElegirPago(false); setForma(null); setDiasTxt(null); setNotaPago(""); setDuplicada(false); setEsNota(false); setOtraSociedad(""); setNoSeLeyo(false); setOrigen("");
-    setPercTxt(""); setTotalTxt("");
+    setPercTxt(""); setTotalTxt(""); setTipoElegido(null); setUltimoTipo(null);
   }
 
   async function leer(file: File) {
@@ -144,7 +150,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
       subtotal: 0, iva: 0, ivaPorcentaje: 21, percepciones: 0, total: 0, items: [renglonVacio()], cuit: "" });
     setNetoTxt("");
     if (!provsLista.length) {
-      const { data: ps } = await db.from("proveedores").select("id, razon_social, cuit, talles_especiales, medio_pago_preferido, plazo_cheque_dias, dias_pago, email, cbu, alias_bancario").eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social");
+      const { data: ps } = await db.from("proveedores").select("id, razon_social, cuit, talles_especiales, medio_pago_preferido, plazo_cheque_dias, dias_pago, email, cbu, alias_bancario, es_transportista").eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social");
       setProvsLista((ps || []) as Proveedor[]);
     }
   }
@@ -199,7 +205,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
     setOtraSociedad(soc && soc.id !== sociedadId ? soc.nombre : "");
     if (!buscar) return; // releída con IA: mismo proveedor
     try {
-      const { data: ps } = await db.from("proveedores").select("id, razon_social, cuit, talles_especiales, medio_pago_preferido, plazo_cheque_dias, dias_pago, email, cbu, alias_bancario").eq("sociedad_id", sociedadId).eq("activo", true);
+      const { data: ps } = await db.from("proveedores").select("id, razon_social, cuit, talles_especiales, medio_pago_preferido, plazo_cheque_dias, dias_pago, email, cbu, alias_bancario, es_transportista").eq("sociedad_id", sociedadId).eq("activo", true);
       const p = ((ps || []) as Proveedor[]).find(x => digitos(x.cuit) === f.cuit);
       if (p) await elegirProveedor(p, f);
     } finally { setBuscandoProv(false); }
@@ -207,7 +213,9 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
 
   // ── 2. Proveedor (y aviso si la factura ya está cargada) ──
   async function elegirProveedor(p: Proveedor, f: FacturaCarga) {
-    const { data: dups } = await db.from("facturas_compra").select("numero_factura, tipo_comprobante").eq("sociedad_id", sociedadId).eq("proveedor_id", p.id).neq("estado", "anulada");
+    const { data: dups } = await db.from("facturas_compra").select("numero_factura, tipo_comprobante, tipo, created_at").eq("sociedad_id", sociedadId).eq("proveedor_id", p.id).neq("estado", "anulada");
+    const ultima = [...(dups || [])].filter((x: any) => !String(x.tipo_comprobante || "").startsWith("NC")).sort((a: any, b: any) => String(b.created_at).localeCompare(String(a.created_at)))[0];
+    setUltimoTipo(ultima?.tipo ?? null); setTipoElegido(null);
     const norm = (n: string) => { const m = String(n || "").replace(/\s+/g, "").match(/^(\d{1,5})[-/](\d{1,8})$/); return m ? `${m[1].padStart(5, "0")}-${m[2].padStart(8, "0")}` : String(n || "").replace(/\s+/g, "").toUpperCase(); };
     setDuplicada(!!f.numero && (dups || []).some((x: any) => norm(x.numero_factura) === norm(f.numero) && String(x.tipo_comprobante || "FC A").toUpperCase() === f.tipo.toUpperCase()));
     // Sin factura: si ya hay una del mismo proveedor y día, el número sigue con (2), (3)…
@@ -256,6 +264,8 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
   const textoPago = `Pago: ${formaPago === "echeq" ? "eCheq" : "transferencia"}${dias.trim() ? ` a ${Math.round(num(dias))} días` : ""}`;
   const listo = !!factura && !!proveedor && !esNota && factura.total > 0;
   const esNC = !!factura && factura.tipo.startsWith("NC");
+  const motivoTransporte = proveedor && factura ? sugerenciaTransporte({ esTransportista: proveedor.es_transportista, ultimoTipo, descripciones: factura.items.map(it => it.descripcion) }) : null;
+  const tipoFactura = tipoElegido ?? (motivoTransporte ? "transporte" : "mercaderia");
 
   // ── 4. Guardar ──
   /** PDF de la factura / NC al Storage (si falla, el comprobante ya quedó: no se avisa). */
@@ -333,6 +343,11 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
       });
       if (eRpc) throw new Error(eRpc.message);
       const facturaId = data?.factura_compra_id as string;
+      // Flete: la factura queda tipo "transporte" (la RPC la guarda como mercadería). Si falla, la factura ya quedó: solo se avisa.
+      if (facturaId && tipoFactura === "transporte") {
+        const { error: eTipo } = await db.from("facturas_compra").update({ tipo: "transporte" }).eq("id", facturaId);
+        if (eTipo) toast.warning(`La factura quedó como Compra, no como Transporte (${eTipo.message}).`);
+      }
 
       // d) PDF y pago (si algo de esto falla, la factura ya quedó: solo se avisa).
       if (facturaId) await subirArchivo(facturaId);
@@ -348,7 +363,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
       } else if (facturaId) {
         await db.from("facturas_compra").update({ estado: "pendiente" }).eq("id", facturaId).eq("estado", "pendiente_aprobacion");
       }
-      toast.success([`✔ FC ${numero} cargada`, pagoTxt].join(" · "));
+      toast.success([`✔ FC ${numero} cargada`, tipoFactura === "transporte" ? "Transporte" : "", pagoTxt].filter(Boolean).join(" · "));
       if (data?.aviso) toast.warning(String(data.aviso));
       window.dispatchEvent(new Event(EVENTO_FACTURAS_COMPRA));
       onClose();
@@ -468,6 +483,16 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
 
             {listo && !esNC && (
               <p className="text-xs text-zinc-600 dark:text-zinc-300">La factura va directo a la cuenta corriente de <b>{proveedor!.razon_social}</b> (no se ata a ninguna OC).</p>
+            )}
+            {listo && !esNC && (
+              <div className="flex flex-wrap items-center gap-1.5 px-2 text-sm">
+                <span className="mr-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Es</span>
+                {(["mercaderia", "transporte"] as const).map(t => (
+                  <button key={t} onClick={() => setTipoElegido(t)} className={`${btnNo} ${tipoFactura === t ? elegido : ""}`}>{t === "transporte" ? "Transporte (flete)" : "Compra"}</button>
+                ))}
+                {tipoElegido === null && motivoTransporte && <span className="text-xs text-zinc-500">sugerido: {motivoTransporte === "proveedor" ? "el proveedor hace fletes" : "los renglones son flete"}</span>}
+                {tipoFactura === "transporte" && <span className="text-xs text-zinc-500">· cuenta en Transportes (Gastos y Reportes)</span>}
+              </div>
             )}
 
             {listo && !esNC && (

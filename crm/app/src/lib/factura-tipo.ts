@@ -1,5 +1,6 @@
 // Tipo de una factura de compra: mercadería (va con OC), transporte, servicio / gasto (contador, alquiler, luz…) o solo IVA.
 // Todo es sugerencia: el usuario siempre puede cambiarlo.
+import { esRenglonEnvio } from "./envio-detectar";
 
 export type TipoFacturaCompra = "mercaderia" | "transporte" | "servicio" | "solo_iva";
 
@@ -56,4 +57,19 @@ export function tipoSugerido(o: {
   const cats = textos.map(categoriaPorTexto);
   if (cats.some((c) => !c)) return null;
   return { tipo: "servicio", categoria: cats[0], motivo: "texto" };
+}
+
+/**
+ * ¿La factura es de un flete? (Augusto 29/10/2026: el flete se carga en Transportes, con tipo "transporte").
+ * "proveedor": es transportista o su última factura fue de transporte.
+ * "texto": todos los renglones son flete / traslado (el seguro de la carga puede venir al lado).
+ * null: queda "Compra". Es solo sugerencia: se cambia a mano.
+ */
+export function sugerenciaTransporte(o: {
+  esTransportista?: boolean | null; ultimoTipo?: string | null; descripciones: string[];
+}): "proveedor" | "texto" | null {
+  if (o.esTransportista || o.ultimoTipo === "transporte") return "proveedor";
+  const textos = o.descripciones.map((d) => String(d || "").trim()).filter((d) => d && !/^factura \(sin detalle/i.test(d));
+  if (!textos.some((d) => esRenglonEnvio(d))) return null;
+  return textos.every((d) => esRenglonEnvio(d) || /\bseguro\b/i.test(d)) ? "texto" : null;
 }
