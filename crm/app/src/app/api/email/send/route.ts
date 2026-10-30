@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     // userEmail se ignora: el remitente lo arma el servidor con el usuario que entró (auditoría H38).
-    const { to, subject, bodyHtml, pdfBase64, pdfFilename, sociedadId, documentType, documentId, extraAttachments } = body as {
+    const { to, subject, bodyHtml, pdfBase64, pdfFilename, sociedadId, documentType, documentId, extraAttachments, pdfsExtra } = body as {
       to: string[];
       subject: string;
       bodyHtml: string;
@@ -29,6 +29,8 @@ export async function POST(req: NextRequest) {
       documentId?: string;
       userEmail?: string;
       extraAttachments?: { filename: string; url: string }[];
+      /** Más PDF armados en el navegador (avisos de cobranza: una factura por PDF). */
+      pdfsExtra?: { filename: string; base64: string }[];
     };
 
     // Validate required fields
@@ -63,11 +65,11 @@ export async function POST(req: NextRequest) {
     const resend = new Resend(resendKey);
 
     // Remitente:
-    // - Facturas, OP, Recibos y Resumen de cuenta → administracion@lazzari.com.ar (fijo)
+    // - Facturas, OP, Recibos, Resumen de cuenta y Avisos de cobranza → administracion@lazzari.com.ar (fijo)
     // - PR, Remitos y OC → el mail del usuario que entró, leído acá en el servidor (antes venía del navegador
     //   y se podía mandar como cualquier dirección: auditoría H38). Si no es @lazzari.com.ar, sale de administracion@.
     const ADMIN_EMAIL = "Lazzari Soluciones Industriales <administracion@lazzari.com.ar>";
-    const isAdminDoc = documentType === "factura" || documentType === "orden_pago" || documentType === "recibo" || documentType === "resumen_cuenta";
+    const isAdminDoc = documentType === "factura" || documentType === "orden_pago" || documentType === "recibo" || documentType === "resumen_cuenta" || documentType === "aviso_cobranza";
     const supabase = await createSupabaseServer();
     let fromEmail = process.env.EMAIL_FROM || ADMIN_EMAIL;
     const { data: { user } } = await supabase.auth.getUser();
@@ -84,6 +86,10 @@ export async function POST(req: NextRequest) {
     const attachments: { filename: string; content: Buffer }[] = [
       { filename: pdfFilename, content: pdfBuffer },
     ];
+    for (const p of pdfsExtra || []) {
+      const buf = p?.base64 ? Buffer.from(p.base64, "base64") : null;
+      if (buf && buf.length > 0 && p.filename) attachments.push({ filename: p.filename, content: buf });
+    }
 
     // Download extra attachments from URLs (e.g. comprobantes uploaded to Supabase Storage)
     if (extraAttachments?.length) {

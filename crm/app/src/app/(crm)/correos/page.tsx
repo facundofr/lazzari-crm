@@ -20,7 +20,7 @@ const COLOR_ESTADO: Record<EstadoMail, string> = {
   enviado: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
 };
 
-const LINK_DOC: Record<string, string> = { presupuesto: "/presupuestos", remito: "/remitos", orden_compra: "/compras-lazza", factura: "/facturas" };
+const LINK_DOC: Record<string, string> = { presupuesto: "/presupuestos", remito: "/remitos", orden_compra: "/compras-lazza", factura: "/facturas", aviso_cobranza: "/cobranzas" };
 
 export default function CorreosPage() {
   const { profile, role } = useUser();

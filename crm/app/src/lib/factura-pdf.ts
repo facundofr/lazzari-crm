@@ -1,7 +1,7 @@
 "use client";
 
 import { supabase } from "@/lib/supabase/client";
-import { generateFacturaPDF, getSociedadPDF, openPDFWindow, documentFilename } from "@/lib/pdf-templates";
+import { generateFacturaPDF, getSociedadPDF, htmlToPdfBase64, openPDFWindow, documentFilename } from "@/lib/pdf-templates";
 
 type SociedadPDF = Parameters<typeof getSociedadPDF>[0];
 
@@ -10,6 +10,17 @@ type SociedadPDF = Parameters<typeof getSociedadPDF>[0];
  * La usan Ventas y la ventana de emitir factura después de emitir.
  */
 export async function abrirFacturaPDF(facturaId: string, sociedad: SociedadPDF, preview?: boolean) {
+  const { html, filename } = await htmlFacturaVenta(facturaId, sociedad);
+  await openPDFWindow(html, filename, preview);
+}
+
+/** El PDF de una factura de venta en base64, para adjuntarlo a un mail (avisos de cobranza). */
+export async function facturaPDFBase64(facturaId: string, sociedad: SociedadPDF): Promise<{ base64: string; filename: string }> {
+  const { html, filename } = await htmlFacturaVenta(facturaId, sociedad);
+  return { base64: await htmlToPdfBase64(html), filename };
+}
+
+async function htmlFacturaVenta(facturaId: string, sociedad: SociedadPDF): Promise<{ html: string; filename: string }> {
   const [{ data: factura, error: facturaError }, { data: items, error: itemsError }] = await Promise.all([
     (supabase as any).from("facturas")
       .select("*, clientes(razon_social, cuit, condicion_iva, direccion, localidad, provincia, email, telefono)")
@@ -65,5 +76,5 @@ export async function abrirFacturaPDF(facturaId: string, sociedad: SociedadPDF, 
     domicilio: soc.domicilio,
     ptoVta: factura.punto_venta,
   }, soc);
-  await openPDFWindow(html, documentFilename(factura.tipo, factura.punto_venta, factura.numero, cli?.razon_social), preview);
+  return { html, filename: documentFilename(factura.tipo, factura.punto_venta, factura.numero, cli?.razon_social) };
 }

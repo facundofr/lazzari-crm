@@ -23,6 +23,7 @@ import {
   X,
   Calendar,
   MailCheck,
+  BellRing,
   Shirt,
   Zap,
   FileSearch,
@@ -56,6 +57,7 @@ const navigation: { grupo: string; items: { name: string; href: string; icon: ty
     { name: "Correos", href: "/correos", icon: MailCheck, module: "calendario" }, // Augusto 28/10: cada mail que sale del CRM y si llegó (todos los usuarios)
     { name: "Calendario", href: "/calendario", icon: Calendar, module: "calendario" },
     { name: "Finanzas", href: "/finanzas", icon: Wallet, module: "finanzas", soloRoles: ["super_admin", "administrativo"] }, // Mudanza 23/10: Finanzas es la nueva (ex Finanzas Lazza); la vieja quedó oculta en /finanzas-vieja
+    { name: "Cobranzas", href: "/cobranzas", icon: BellRing, module: "finanzas", soloRoles: ["super_admin", "administrativo"] }, // Augusto 29/10: avisos de facturas que vencen esta semana y vencidas
   ] },
 ];
 

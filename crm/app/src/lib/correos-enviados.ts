@@ -47,7 +47,7 @@ export const ETIQUETA_ESTADO: Record<EstadoMail, string> = {
 };
 
 const TIPO_CORTO: Record<string, string> = {
-  presupuesto: "PR", remito: "Remito", orden_compra: "OC", factura: "Factura", orden_pago: "OP", recibo: "Recibo", resumen_cuenta: "Resumen de cuenta",
+  presupuesto: "PR", remito: "Remito", orden_compra: "OC", factura: "Factura", orden_pago: "OP", recibo: "Recibo", resumen_cuenta: "Resumen de cuenta", aviso_cobranza: "Aviso de cobranza",
 };
 
 /** "PR-2026-1285" (del nombre del PDF) o el tipo de documento. */
