@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
   const desde = new Date(Date.now() - 7 * 86400000).toISOString();
   let q = supabase.from("mails_enviados")
     .select("id, enviado_at, enviado_por, sociedad_id, enviado_a, documento_tipo, documento_nombre, resend_id, estado, verificado_at, aviso_rebote")
-    .in("estado", ["enviado", "demorado"]).not("resend_id", "is", null).gte("enviado_at", desde)
+    .in("estado", ["enviado", "demorado", "programado"]).not("resend_id", "is", null).gte("enviado_at", desde)
     .order("enviado_at", { ascending: false }).limit(100);
   if (!todos) q = q.eq("enviado_por", user.id);
   const { data: filas, error } = await q;

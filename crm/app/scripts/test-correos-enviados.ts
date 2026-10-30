@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { estadoDesdeResend, estadoFinal, hayQueVerificar, nombreDocumento, avisoRebote } from "../src/lib/correos-enviados";
+import { estadoDesdeResend, estadoFinal, hayQueVerificar, nombreDocumento, avisoRebote, programarPara, validarProgramado, mananaALas9 } from "../src/lib/correos-enviados";
 
 // Estado de Resend → CRM
 assert.equal(estadoDesdeResend("delivered"), "entregado");
@@ -33,3 +33,20 @@ assert.match(a.description, /28\/10\/2026 14:32 mandaste PR-2026-1285 a x@y.com 
 assert.match(avisoRebote({ ...{ enviado_at: "2026-10-28T17:32:00Z", enviado_a: "x@y.com", documento_tipo: "remito", documento_nombre: null }, estado: "spam" }).description, /spam/);
 
 console.log("OK: correos enviados (estado de Resend, cuándo verificar, aviso de rebote).");
+
+// Mails programados (29/10/2026)
+assert.equal(estadoDesdeResend("scheduled"), "programado");
+assert.equal(estadoDesdeResend("canceled"), "cancelado");
+assert.equal(estadoFinal("cancelado"), true);
+assert.equal(estadoFinal("programado"), false);
+assert.equal(hayQueVerificar({ ...base, estado: "programado", enviado_at: "2026-10-29T12:00:00Z" }, ahora), false); // sale mañana
+assert.equal(hayQueVerificar({ ...base, estado: "programado", enviado_at: "2026-10-28T19:00:00Z" }, ahora), true); // ya tendría que haber salido
+// ahora = 28/10 17:00 en Argentina
+assert.deepEqual(programarPara("2026-10-29", "09:00", ahora), { iso: "2026-10-29T12:00:00.000Z" });
+assert.ok("error" in programarPara("2026-10-28", "16:00", ahora)); // ya pasó
+assert.ok("error" in programarPara("2026-10-28", "17:01", ahora)); // menos de 2 minutos
+assert.ok("error" in programarPara("2026-12-01", "09:00", ahora)); // más de 30 días
+assert.ok("error" in programarPara("", "09:00", ahora));
+assert.ok("error" in validarProgramado("cualquier cosa", ahora));
+assert.deepEqual(mananaALas9("2026-10-31"), { fecha: "2026-11-01", hora: "09:00" });
+console.log("programados OK");

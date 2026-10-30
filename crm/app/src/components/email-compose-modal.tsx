@@ -1,8 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { X, Send, Loader2, Paperclip, AlertTriangle, CheckCircle2, CheckCheck, Maximize2, Minimize2, UserPlus } from "lucide-react";
+import { X, Send, Loader2, Paperclip, AlertTriangle, CheckCircle2, CheckCheck, Maximize2, Minimize2, UserPlus, Clock } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
+import { todayAR } from "@/lib/utils";
+import { fechaHoraAR } from "@/lib/presupuesto-envios";
+import { mananaALas9, programarPara } from "@/lib/correos-enviados";
 
 export type EmailDocumentType = "presupuesto" | "factura" | "remito" | "orden_compra" | "orden_pago" | "recibo" | "resumen_cuenta";
 
@@ -84,6 +87,8 @@ export function EmailComposeModal({
   const [verMensaje, setVerMensaje] = useState(false);
   const [guardados, setGuardados] = useState<string[]>([]);
   const [guardando, setGuardando] = useState("");
+  // Programar (Augusto 29/10/2026: "que se pueda en todos los lugares donde se pueda mandar un correo"): null = sale ahora.
+  const [programar, setProgramar] = useState<{ fecha: string; hora: string } | null>(null);
   // Cómo estaba al abrir: si cambia, cerrar pregunta antes (ver pedirCierre).
   const [alAbrir, setAlAbrir] = useState({ to: defaultTo, subject: defaultSubject, body: defaultBody });
 
@@ -96,10 +101,13 @@ export function EmailComposeModal({
     setResult(null);
     setSending(false);
     setVerTodos(false); setVerMensaje(false); setGuardados([]);
+    setProgramar(null);
   }
   if (open !== prevOpen) setPrevOpen(open);
 
   if (!open) return null;
+
+  const horaProgramada = programar ? programarPara(programar.fecha, programar.hora) : null;
 
   // Mails escritos a mano que no están entre los contactos sugeridos ni se guardaron recién.
   const nuevos = guardarContacto
@@ -135,6 +143,8 @@ export function EmailComposeModal({
     // Parse multiple emails (comma or semicolon separated)
     const emails = to.split(/[,;]\s*/).map(e => e.trim()).filter(Boolean);
     if (emails.length === 0) { setResult({ success: false, message: "Ingresá al menos un email válido" }); return; }
+    if (horaProgramada && "error" in horaProgramada) { setResult({ success: false, message: horaProgramada.error }); return; }
+    const programadoPara = horaProgramada && "iso" in horaProgramada ? horaProgramada.iso : undefined;
 
     setSending(true);
     setResult(null);
@@ -170,6 +180,7 @@ export function EmailComposeModal({
           documentType,
           documentId,
           userEmail,
+          programadoPara,
           ...(extraAttachments.length > 0 ? { extraAttachments } : {}),
         }),
       });
@@ -180,7 +191,8 @@ export function EmailComposeModal({
         setResult({ success: false, message: data.error || "Error al enviar" });
       } else {
         await onSuccess?.(data.emailId, emails);
-        setResult({ success: true, message: `Email enviado correctamente a ${emails.join(", ")}${data.avisoRegistro ? `. ${data.avisoRegistro}` : ""}` });
+        const que = data.programado ? `Programado para el ${fechaHoraAR(data.programado)} a` : "Email enviado correctamente a";
+        setResult({ success: true, message: `${que} ${emails.join(", ")}${data.programado ? ". Se puede cancelar en Correos enviados" : ""}${data.avisoRegistro ? `. ${data.avisoRegistro}` : ""}` });
       }
     } catch (err: any) {
       setResult({ success: false, message: err.message || "Error de conexión" });
@@ -321,21 +333,49 @@ export function EmailComposeModal({
             ))}
           </div>
 
+          {/* Programar */}
+          {programar && !result?.success && (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm dark:border-sky-900 dark:bg-sky-950/30">
+              <Clock className="h-4 w-4 text-sky-600" />
+              <span className="text-zinc-700 dark:text-zinc-200">Que salga el</span>
+              <input type="date" value={programar.fecha} min={todayAR()} onChange={(e) => setProgramar(p => p && { ...p, fecha: e.target.value })}
+                className="rounded-lg border border-zinc-300 bg-white h-8 px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" />
+              <span className="text-zinc-700 dark:text-zinc-200">a las</span>
+              <input type="time" value={programar.hora} onChange={(e) => setProgramar(p => p && { ...p, hora: e.target.value })}
+                className="rounded-lg border border-zinc-300 bg-white h-8 px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" />
+              <button type="button" onClick={() => setProgramar(null)} className="ml-auto text-xs text-zinc-500 hover:underline">Mandar ahora</button>
+              {horaProgramada && "error" in horaProgramada && <p className="w-full text-xs text-red-600">{horaProgramada.error}</p>}
+            </div>
+          )}
+
           {/* Send button */}
           <div className="sticky bottom-0 -mx-4 -mb-4 flex gap-2 border-t border-zinc-200 bg-white px-4 py-3 dark:border-zinc-700 dark:bg-zinc-900">
             <button
               onClick={handleSend}
-              disabled={sending || (result?.success === true)}
+              disabled={sending || (result?.success === true) || !!(horaProgramada && "error" in horaProgramada)}
               className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {sending ? (
-                <><Loader2 className="h-4 w-4 animate-spin" /> Generando PDF y enviando...</>
+                <><Loader2 className="h-4 w-4 animate-spin" /> Generando PDF y {programar ? "programando" : "enviando"}...</>
               ) : result?.success ? (
-                <><CheckCircle2 className="h-4 w-4" /> Enviado</>
+                <><CheckCircle2 className="h-4 w-4" /> {programar ? "Programado" : "Enviado"}</>
+              ) : programar && horaProgramada && "iso" in horaProgramada ? (
+                <><Clock className="h-4 w-4" /> Programar para el {fechaHoraAR(horaProgramada.iso).slice(0, 5)} {fechaHoraAR(horaProgramada.iso).slice(11)}</>
               ) : (
-                <><Send className="h-4 w-4" /> Enviar email</>
+                <><Send className="h-4 w-4" /> {programar ? "Programar" : "Enviar email"}</>
               )}
             </button>
+            {!programar && !result?.success && (
+              <button
+                type="button"
+                onClick={() => setProgramar(mananaALas9(todayAR()))}
+                disabled={sending}
+                className="flex items-center justify-center gap-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 px-3 py-2.5 text-sm font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 disabled:opacity-50 transition-colors"
+                title="Elegir día y hora para que salga (como en Gmail)"
+              >
+                <Clock className="h-4 w-4" /> Programar
+              </button>
+            )}
             {onMarkSent && !result?.success && (
               <button
                 onClick={async () => {

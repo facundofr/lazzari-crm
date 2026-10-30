@@ -2,6 +2,7 @@
 
 // Correos enviados (Augusto 28/10/2026): cada mail que salió del CRM con su estado verificado en Resend.
 // Cada usuario ve los suyos; admin y super admin pueden ver los de todos. Al entrar se verifican los pendientes.
+// Programados (29/10): la fecha es cuándo sale; se pueden cancelar desde acá mientras no salieron.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Header } from "@/components/layout/header";
@@ -18,6 +19,8 @@ const COLOR_ESTADO: Record<EstadoMail, string> = {
   spam: "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-400",
   demorado: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-400",
   enviado: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
+  programado: "bg-sky-50 text-sky-700 dark:bg-sky-950 dark:text-sky-300",
+  cancelado: "bg-zinc-100 text-zinc-400 line-through dark:bg-zinc-800 dark:text-zinc-500",
 };
 
 const LINK_DOC: Record<string, string> = { presupuesto: "/presupuestos", remito: "/remitos", orden_compra: "/compras-lazza", factura: "/facturas", aviso_cobranza: "/cobranzas" };
@@ -32,6 +35,7 @@ export default function CorreosPage() {
   const [quien, setQuien] = useState<string>(""); // "" = los míos; "todos" = todos (admin)
   const [estado, setEstado] = useState<"" | EstadoMail>("");
   const [buscar, setBuscar] = useState("");
+  const [cancelando, setCancelando] = useState<string | null>(null);
 
   const cargar = useCallback(async () => {
     if (!profile?.id) return;
@@ -60,6 +64,19 @@ export default function CorreosPage() {
     if (!esAdmin) return;
     (supabase as any).from("profiles").select("id, full_name").order("full_name").then(({ data }: any) => setUsuarios(data || []));
   }, [esAdmin]);
+
+  async function cancelar(id: string) {
+    if (!window.confirm("¿Cancelar este mail programado? No sale y no se puede volver a programar (se manda de nuevo desde su pantalla).")) return;
+    setCancelando(id);
+    try {
+      const res = await fetch("/api/email/cancelar", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+      const r = await res.json().catch(() => ({}));
+      if (!res.ok || !r.ok) window.alert(r.error || "No se pudo cancelar");
+    } finally {
+      setCancelando(null);
+      await cargar();
+    }
+  }
 
   const nombre = (id: string | null) => (id === profile?.id ? "Vos" : usuarios.find(u => u.id === id)?.full_name || "—");
   const filtrados = useMemo(() => {
@@ -122,6 +139,9 @@ export default function CorreosPage() {
                       {(quien !== "" && esAdmin) && <td className="whitespace-nowrap px-3 py-1.5 text-xs dark:text-zinc-300">{nombre(m.enviado_por)}</td>}
                       <td className="whitespace-nowrap px-3 py-1.5">
                         <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${COLOR_ESTADO[m.estado]}`} title={m.verificado_at ? `Verificado el ${fechaHoraAR(m.verificado_at)}` : "Todavía no se verificó"}>{ETIQUETA_ESTADO[m.estado]}</span>
+                        {m.estado === "programado" && new Date(m.enviado_at).getTime() > Date.now() && (
+                          <button onClick={() => void cancelar(m.id)} disabled={cancelando === m.id} className="ml-2 text-xs text-zinc-500 underline hover:text-red-600 disabled:opacity-50">{cancelando === m.id ? "Cancelando…" : "Cancelar"}</button>
+                        )}
                       </td>
                     </tr>
                   ))}

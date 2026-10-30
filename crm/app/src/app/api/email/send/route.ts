@@ -11,13 +11,14 @@ import { Resend } from "resend";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { rutaDeLinkArchivo } from "@/lib/archivo-link";
 import { remitenteDelUsuario, esLinkDeNuestroStorage } from "@/lib/email-remitente";
+import { validarProgramado } from "@/lib/correos-enviados";
 
 // ── Main handler ──
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     // userEmail se ignora: el remitente lo arma el servidor con el usuario que entró (auditoría H38).
-    const { to, subject, bodyHtml, pdfBase64, pdfFilename, sociedadId, documentType, documentId, extraAttachments, pdfsExtra } = body as {
+    const { to, subject, bodyHtml, pdfBase64, pdfFilename, sociedadId, documentType, documentId, extraAttachments, pdfsExtra, programadoPara } = body as {
       to: string[];
       subject: string;
       bodyHtml: string;
@@ -31,6 +32,8 @@ export async function POST(req: NextRequest) {
       extraAttachments?: { filename: string; url: string }[];
       /** Más PDF armados en el navegador (avisos de cobranza: una factura por PDF). */
       pdfsExtra?: { filename: string; base64: string }[];
+      /** Programar el envío (Augusto 29/10, Cobranzas): ISO de cuándo sale. Resend lo guarda y lo manda a esa hora. */
+      programadoPara?: string;
     };
 
     // Validate required fields
@@ -48,6 +51,13 @@ export async function POST(req: NextRequest) {
       if (!emailRegex.test(email)) {
         return NextResponse.json({ error: `Email inválido: ${email}` }, { status: 400 });
       }
+    }
+
+    let programado: string | null = null;
+    if (programadoPara) {
+      const v = validarProgramado(programadoPara);
+      if ("error" in v) return NextResponse.json({ error: v.error }, { status: 400 });
+      programado = v.iso;
     }
 
     // Decode PDF from base64
@@ -120,6 +130,7 @@ export async function POST(req: NextRequest) {
       subject,
       html: bodyHtml || `<p>Adjunto encontrará el documento solicitado.</p>`,
       attachments,
+      ...(programado ? { scheduledAt: programado } : {}),
     });
 
     if (emailError) {
@@ -129,7 +140,7 @@ export async function POST(req: NextRequest) {
 
     // Correos enviados (Augusto 28/10): cada mail queda anotado (quién, cuándo, a quién, documento) para verificar su
     // estado en Resend. Los PR leen sus envíos de acá. El mail ya salió: si esto falla, solo se avisa.
-    let envio: { enviado_at: string } | null = null;
+    let envio: { id: string; enviado_at: string } | null = null;
     let avisoRegistro: string | undefined;
     if (user) {
       const { data: fila, error: errEnvio } = await (supabase as any).from("mails_enviados").insert({
@@ -142,14 +153,16 @@ export async function POST(req: NextRequest) {
         documento_id: documentId || null,
         documento_nombre: pdfFilename,
         resend_id: emailResult?.id || null,
-      }).select("enviado_at").single();
+        // Programado: enviado_at es cuándo sale (así se ordena y se avisa bien).
+        ...(programado ? { enviado_at: programado, estado: "programado" } : {}),
+      }).select("id, enviado_at").single();
       if (errEnvio) {
         console.error("No se pudo anotar el mail enviado:", errEnvio);
-        avisoRegistro = "El mail salió, pero no quedó anotado en Correos enviados.";
+        avisoRegistro = programado ? "El mail quedó programado, pero no quedó anotado en Correos enviados (para cancelarlo hay que hacerlo desde Resend)." : "El mail salió, pero no quedó anotado en Correos enviados.";
       } else envio = fila;
     }
 
-    return NextResponse.json({ success: true, emailId: emailResult?.id, filename: pdfFilename, envio, avisoRegistro });
+    return NextResponse.json({ success: true, emailId: emailResult?.id, filename: pdfFilename, envio, avisoRegistro, programado });
   } catch (err: any) {
     console.error("Email send error:", err);
     return NextResponse.json({ error: err.message || "Error interno del servidor" }, { status: 500 });

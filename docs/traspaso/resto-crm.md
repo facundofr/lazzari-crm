@@ -79,7 +79,11 @@ Informes en `docs/auditoria-integral/` (empezar por `01-resumen-ejecutivo.md`). 
 1c. Mail del PR a solicitantes (sin facturación ni contactos de pagos) + Cargar OC en la ventana de factura + Enviar por mail al emitir: PUBLICADO 29/10 en V1.1.616 (ver ESTADO). Falta ver en producción la ventana de factura (Cargar OC sin emitir; Enviar por mail con la próxima factura). La parte del mail del PR pasó al chat Presupuestos (29/10).
 2. Elegir del mockup qué pantalla implementar.
 3. Probar en producción la edición de un PR facturado (el de la moneda de costo mal cargada) y mirar que la OC quede bien. → pasó al chat Presupuestos (29/10).
-4. Viejos: leer y mandar `Claude outputs/informe-equipo-novedades-17-10-2026.md`; foto del remito del proveedor (hoy solo en Compras nueva, no en Compras Lazza); concepto de Ganancias de proveedores: HECHO 29/10 (99 fichas + Depósito Fiscal servicios + Damiano/Turbión copiados, ver ESTADO); Etapa 2 del asistente en pausa.
+4. Viejos: informe para el equipo DESCARTADO y borrado (Augusto 29/10); foto del remito del proveedor (hoy solo en Compras nueva, no en Compras Lazza); concepto de Ganancias de proveedores: HECHO 29/10 (99 fichas + Depósito Fiscal servicios + Damiano/Turbión copiados, ver ESTADO); Etapa 2 del asistente en pausa.
+
+5b. Programar envío (29/10) en Cobranzas Y en la ventana común de mail (email-compose-modal: PR, remitos, OC, facturas, OP, recibos, resumen). Cobranzas: hecho en la copia limpia `pub-cob` del scratchpad de este chat, SIN PUBLICAR; migración 20261029190500_mails_programados CORRIDA 29/10. Ver ESTADO.
+5c. Datos 29/10 (con OK): Corteva Seeds a @vylor.com (ficha + contactos, Celeste corregida), Pioneer dado de baja (activo=false), German Mansilla duplicado unificado. Ver ESTADO.
+5. Cobranzas (avisos de facturas que vencen esta semana y vencidas): PUBLICADO 29/10 en V1.1.627 (commit 19c279e, Vercel Ready, visto en producción sin mandar). Falta el primer envío real. 3 de los 6 vencidos de Lazzari no tienen mail (Truck Roque, Coop. La Nueva Leyenda, Pachamama).
 
 ## Decisiones de Augusto
 - Cada tema en su chat; acá no se relayan avisos de otros chats.

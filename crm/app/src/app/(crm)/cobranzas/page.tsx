@@ -5,9 +5,10 @@
 // La ven super_admin y administrativo (como Finanzas). Sale de administracion@ y queda en Correos enviados
 // (documento_tipo "aviso_cobranza", documento_id = cliente). Nada se envía solo: siempre se confirma antes.
 // El saldo de cada factura es el de Finanzas > Facturas (traerFacturasFL). Solo lee la base; no guarda nada propio.
+// Programar (Augusto 29/10): en la confirmación se puede elegir día y hora; Resend lo manda a esa hora y se puede cancelar antes.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { BellRing, ChevronDown, ChevronRight, Loader2, RefreshCw, Send } from "lucide-react";
+import { BellRing, ChevronDown, ChevronRight, Clock, Loader2, RefreshCw, Send } from "lucide-react";
 import { Header } from "@/components/layout/header";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast";
@@ -17,7 +18,8 @@ import { todayAR } from "@/lib/utils";
 import { traerFacturasFL } from "@/components/finanzas-lazza/datos";
 import { avisoDePagoReciente } from "@/lib/correo-finanzas";
 import { facturaPDFBase64 } from "@/lib/factura-pdf";
-import { ETIQUETA_ESTADO, type EstadoMail } from "@/lib/correos-enviados";
+import { fechaHoraAR } from "@/lib/presupuesto-envios";
+import { ETIQUETA_ESTADO, mananaALas9, programarPara, type EstadoMail } from "@/lib/correos-enviados";
 import {
   armarAvisos, destinatariosAviso, fmtFechaAviso, fmtMontoAviso, haceCuanto, mensajeAviso, separarMails, sumarDias, textoAHtml, totalTexto,
   type FacturaAviso, type GrupoAviso, type TipoAviso,
@@ -29,7 +31,7 @@ const TOPE_ADJUNTOS = 3_500_000;
 
 type Borrador = { para: string; asunto: string; texto: string };
 type InfoCliente = { email: string | null; para: string[]; diasCC: number };
-type UltimoAviso = { fecha: string; estado: EstadoMail };
+type UltimoAviso = { id: string; fecha: string; estado: EstadoMail };
 type Resultado = { ok: boolean; texto: string };
 
 const PESTANAS: { id: TipoAviso; titulo: string }[] = [
@@ -55,13 +57,15 @@ export default function CobranzasPage() {
   const [confirmar, setConfirmar] = useState<string[] | null>(null);
   const [enviando, setEnviando] = useState<string | null>(null);
   const [resultados, setResultados] = useState<Record<string, Resultado>>({});
+  const [programar, setProgramar] = useState(() => mananaALas9(hoy));
+  const [cancelando, setCancelando] = useState<string | null>(null);
 
   const cargarEnvios = useCallback(async () => {
     if (!sociedadId) return;
-    const { data } = await db.from("mails_enviados").select("documento_id, enviado_at, estado")
-      .eq("sociedad_id", sociedadId).eq("documento_tipo", "aviso_cobranza").order("enviado_at", { ascending: false }).limit(1000);
+    const { data } = await db.from("mails_enviados").select("id, documento_id, enviado_at, estado")
+      .eq("sociedad_id", sociedadId).eq("documento_tipo", "aviso_cobranza").neq("estado", "cancelado").order("enviado_at", { ascending: false }).limit(1000);
     const m = new Map<string, UltimoAviso>();
-    for (const r of data || []) if (r.documento_id && !m.has(r.documento_id)) m.set(r.documento_id, { fecha: r.enviado_at, estado: r.estado });
+    for (const r of data || []) if (r.documento_id && !m.has(r.documento_id)) m.set(r.documento_id, { id: r.id, fecha: r.enviado_at, estado: r.estado });
     setUltimos(m);
   }, [sociedadId]);
 
@@ -132,7 +136,7 @@ export default function CobranzasPage() {
   const editar = (g: GrupoAviso, cambio: Partial<Borrador>) => setBorradores((b) => ({ ...b, [clave(g)]: { ...borradorDe(g), ...cambio } }));
   const avisoPago = (g: GrupoAviso) => avisoDePagoReciente({ nombre: g.cliente, cuit: g.cuit }, pagos, hoy);
 
-  async function enviarUno(g: GrupoAviso): Promise<Resultado> {
+  async function enviarUno(g: GrupoAviso, programadoPara?: string): Promise<Resultado> {
     const b = borradorDe(g);
     const para = separarMails(b.para);
     if (!para.length) return { ok: false, texto: "No tiene mail: escribilo en Para." };
@@ -151,15 +155,16 @@ export default function CobranzasPage() {
       body: JSON.stringify({
         to: para, subject: b.asunto, bodyHtml: textoAHtml(b.texto),
         pdfBase64: pdfs[0].base64, pdfFilename: pdfs[0].filename, pdfsExtra: pdfs.slice(1),
-        sociedadId: sociedadActiva.id, documentType: "aviso_cobranza", documentId: g.clienteId,
+        sociedadId: sociedadActiva.id, documentType: "aviso_cobranza", documentId: g.clienteId, programadoPara,
       }),
     });
     const r = await res.json().catch(() => ({}));
     if (!res.ok || !r.success) return { ok: false, texto: r.error || "No se pudo enviar." };
-    return { ok: true, texto: `Enviado a ${para.join(", ")}${afuera ? ` (${afuera} PDF no entraron en el mail: mandalos aparte)` : ""}${r.avisoRegistro ? `. ${r.avisoRegistro}` : ""}` };
+    const que = r.programado ? `Programado para el ${fechaHoraAR(r.programado)} a` : "Enviado a";
+    return { ok: true, texto: `${que} ${para.join(", ")}${afuera ? ` (${afuera} PDF no entraron en el mail: mandalos aparte)` : ""}${r.avisoRegistro ? `. ${r.avisoRegistro}` : ""}` };
   }
 
-  async function enviar(claves: string[]) {
+  async function enviar(claves: string[], programadoPara?: string) {
     setConfirmar(null);
     let bien = 0;
     for (const [i, k] of claves.entries()) {
@@ -167,15 +172,30 @@ export default function CobranzasPage() {
       if (!g) continue;
       setEnviando(`${g.cliente} (${i + 1} de ${claves.length})`);
       let r: Resultado;
-      try { r = await enviarUno(g); } catch (e: any) { r = { ok: false, texto: e?.message || "No se pudo enviar." }; }
+      try { r = await enviarUno(g, programadoPara); } catch (e: any) { r = { ok: false, texto: e?.message || "No se pudo enviar." }; }
       if (r.ok) bien++;
       setResultados((x) => ({ ...x, [k]: r }));
     }
     setEnviando(null);
     setTildados(new Set());
     await cargarEnvios();
-    if (bien === claves.length) toast.success(bien === 1 ? "Aviso enviado" : `${bien} avisos enviados`);
-    else toast.error(`Se enviaron ${bien} de ${claves.length}: mirá los que dicen por qué no salieron`);
+    if (bien === claves.length) toast.success(programadoPara ? `${bien === 1 ? "Aviso programado" : `${bien} avisos programados`} para el ${fechaHoraAR(programadoPara)}` : bien === 1 ? "Aviso enviado" : `${bien} avisos enviados`);
+    else toast.error(`${programadoPara ? "Se programaron" : "Se enviaron"} ${bien} de ${claves.length}: mirá los que dicen por qué no salieron`);
+  }
+
+  const horaProgramada = programarPara(programar.fecha, programar.hora);
+
+  async function cancelarProgramado(id: string) {
+    setCancelando(id);
+    try {
+      const res = await fetch("/api/email/cancelar", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+      const r = await res.json().catch(() => ({}));
+      if (!res.ok || !r.ok) toast.error(r.error || "No se pudo cancelar");
+      else toast.success("Envío programado cancelado");
+    } finally {
+      setCancelando(null);
+      await cargarEnvios();
+    }
   }
 
   const totales = (t: TipoAviso) => {
@@ -241,6 +261,19 @@ export default function CobranzasPage() {
               <div className="flex gap-2">
                 <button onClick={() => void enviar(confirmar)} className="rounded-lg bg-orange-600 h-8 px-3 font-medium text-white hover:bg-orange-700">Confirmar y enviar</button>
                 <button onClick={() => setConfirmar(null)} className="rounded-lg border border-zinc-300 h-8 px-3 text-zinc-700 hover:bg-white dark:border-zinc-700 dark:text-zinc-300">Cancelar</button>
+                <span className="ml-2 inline-flex flex-wrap items-center gap-1.5 border-l border-orange-200 pl-3 dark:border-orange-900">
+                  <span className="text-zinc-600 dark:text-zinc-300">o programalo para</span>
+                  <input type="date" value={programar.fecha} min={hoy} onChange={(e) => setProgramar((p) => ({ ...p, fecha: e.target.value }))}
+                    className="rounded-lg border border-zinc-300 bg-white h-8 px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" />
+                  <input type="time" value={programar.hora} onChange={(e) => setProgramar((p) => ({ ...p, hora: e.target.value }))}
+                    className="rounded-lg border border-zinc-300 bg-white h-8 px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" />
+                  <button onClick={() => { if ("iso" in horaProgramada) void enviar(confirmar, horaProgramada.iso); }} disabled={!("iso" in horaProgramada)}
+                    title={"error" in horaProgramada ? horaProgramada.error : ""}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-orange-600 h-8 px-3 font-medium text-orange-700 hover:bg-white disabled:opacity-40 dark:text-orange-300">
+                    <Clock className="h-4 w-4" /> Programar
+                  </button>
+                  {"error" in horaProgramada && <span className="text-xs text-red-600">{horaProgramada.error}</span>}
+                </span>
               </div>
             </div>
           )}
@@ -272,7 +305,13 @@ export default function CobranzasPage() {
                         <span className="shrink-0 text-zinc-500">· {g.facturas.length} fact. · {totalTexto(g.total)} · {pestana === "vencidas" ? `vencida desde ${fmtFechaAviso(g.facturas[0].vence).slice(0, 5)}` : `vence ${fmtFechaAviso(g.facturas[0].vence).slice(0, 5)}`}</span>
                       </button>
                       {pago && <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-800 dark:bg-amber-950 dark:text-amber-200">avisó un pago el {fmtFechaAviso(pago).slice(0, 5)}: esperá</span>}
-                      {ult && <span className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] ${ult.estado === "rebotado" || ult.estado === "spam" ? "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>último aviso {haceCuanto(ult.fecha, hoy)} · {ETIQUETA_ESTADO[ult.estado]?.toLowerCase() || ult.estado}</span>}
+                      {ult?.estado === "programado" && (
+                        <span className="inline-flex shrink-0 items-center gap-1 rounded bg-sky-50 px-1.5 py-0.5 text-[11px] text-sky-700 dark:bg-sky-950 dark:text-sky-300">
+                          <Clock className="h-3 w-3" /> programado para el {fechaHoraAR(ult.fecha).slice(0, 5)} {fechaHoraAR(ult.fecha).slice(11)}
+                          <button onClick={() => void cancelarProgramado(ult.id)} disabled={cancelando === ult.id} className="ml-1 font-medium underline disabled:opacity-50">{cancelando === ult.id ? "cancelando…" : "Cancelar"}</button>
+                        </span>
+                      )}
+                      {ult && ult.estado !== "programado" && <span className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] ${ult.estado === "rebotado" || ult.estado === "spam" ? "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>último aviso {haceCuanto(ult.fecha, hoy)} · {ETIQUETA_ESTADO[ult.estado]?.toLowerCase() || ult.estado}</span>}
                       {!para.length && <span className="shrink-0 rounded bg-red-50 px-1.5 py-0.5 text-[11px] text-red-700 dark:bg-red-950 dark:text-red-300">sin mail</span>}
                     </div>
                     {res && <p className={`ml-6 text-xs ${res.ok ? "text-emerald-700 dark:text-emerald-400" : "text-red-600"}`}>{res.texto}</p>}
@@ -314,7 +353,7 @@ export default function CobranzasPage() {
               })}
             </ul>
           )}
-          {!cargando && grupos.length > 0 && <p className="border-t border-zinc-200 px-3 py-1.5 text-xs text-zinc-500 dark:border-zinc-800">Nada se envía solo: siempre se confirma antes. Cada envío queda en <Link href="/correos" className="text-orange-600 hover:underline">Correos enviados</Link>. Los que avisaron un pago en los últimos 15 días se marcan para esperar.</p>}
+          {!cargando && grupos.length > 0 && <p className="border-t border-zinc-200 px-3 py-1.5 text-xs text-zinc-500 dark:border-zinc-800">Nada se envía solo: siempre se confirma antes (al confirmar se puede programar para otro día y hora). Cada envío queda en <Link href="/correos" className="text-orange-600 hover:underline">Correos enviados</Link>. Los que avisaron un pago en los últimos 15 días se marcan para esperar.</p>}
         </Card>
       </div>
     </>
