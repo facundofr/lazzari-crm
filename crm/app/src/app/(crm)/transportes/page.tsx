@@ -11,6 +11,7 @@
 import { Header } from "@/components/layout/header";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Select } from "@/components/ui/input";
 import { DataTable } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { supabase } from "@/lib/supabase/client";
@@ -524,7 +525,7 @@ export default function TransportesPage() {
     const { error } = await (supabase as any).from("transportistas").update({ no_factura: valor }).eq("id", t.id);
     if (error) { toast.error(`No se pudo guardar: ${error.message}`); return; }
     setTransportistas((prev) => prev.map((x) => (x.id === t.id ? { ...x, no_factura: valor } : x)));
-    toast.success(valor ? `${t.nombre}: no nos factura (se le crea factura manual)` : `${t.nombre}: nos factura (se carga en Compras)`);
+    toast.success(valor ? `${t.nombre}: No nos factura (se le crea factura manual)` : `${t.nombre}: Sí nos factura (se carga en Compras)`);
   };
 
   const transportistaColumns = [
@@ -534,11 +535,14 @@ export default function TransportesPage() {
     { key: "cuit" as const, label: "CUIT", render: (t: TransportistaRow) => t.cuit || "—" },
     { key: "telefono" as const, label: "Teléfono", render: (t: TransportistaRow) => t.telefono || "—" },
     { key: "precio_viaje_fijo" as const, label: "$ fijo por viaje", render: (t: TransportistaRow) => t.precio_viaje_fijo != null ? formatCurrency(t.precio_viaje_fijo, "ARS") : "—" },
-    { key: "no_factura" as const, label: "No nos factura", render: (t: TransportistaRow) => (
-      <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs" onClick={(e) => e.stopPropagation()} title="Tildado: no nos hace factura, se le crea una factura manual desde Transportes">
-        <input type="checkbox" checked={Boolean(t.no_factura)} onChange={(e) => cambiarNoFactura(t, e.target.checked)} />
-        {t.no_factura ? "No factura" : "Factura"}
-      </label>
+    { key: "no_factura" as const, label: "¿Nos factura?", render: (t: TransportistaRow) => (
+      <div className="w-24" onClick={(e) => e.stopPropagation()} title="No: no nos hace factura, se le crea una factura manual desde Transportes. Sí: su factura se carga en Compras">
+        <Select
+          value={t.no_factura ? "no" : "si"}
+          onChange={(e) => cambiarNoFactura(t, e.target.value === "no")}
+          options={[{ value: "si", label: "Sí" }, { value: "no", label: "No" }]}
+        />
+      </div>
     )},
     { key: "activo" as const, label: "Estado", render: (t: TransportistaRow) => (
       <Badge variant={t.activo ? "success" : "outline"}>{t.activo ? "Activo" : "Inactivo"}</Badge>
