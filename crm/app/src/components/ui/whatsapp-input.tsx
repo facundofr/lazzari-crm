@@ -2,10 +2,12 @@
 
 // WhatsApp en dos casillas: característica (sin 0) y número (sin 15). Devuelve "2477 688498" (ver lib/whatsapp-ar.ts).
 // Si el número no suma 10 dígitos, avisa abajo en amarillo; nunca frena.
+// Augusto 30/10/2026: es la carga de teléfonos de todo el CRM (proveedores, clientes, contactos, sucursales, transportistas).
 import { useEffect, useRef, useState } from "react";
 import { separarWhatsApp, unirWhatsApp, avisoWhatsApp } from "@/lib/whatsapp-ar";
 
-export function WhatsAppInput({ value, onChange, className = "" }: { value: string; onChange: (v: string) => void; className?: string }) {
+/** `label`: rótulo arriba, igual que el de ui/input (Teléfono, WhatsApp). */
+export function WhatsAppInput({ value, onChange, className = "", label }: { value: string; onChange: (v: string) => void; className?: string; label?: string }) {
   const [partes, setPartes] = useState(() => separarWhatsApp(value));
   const ultimo = useRef(value);
   useEffect(() => {
@@ -23,7 +25,8 @@ export function WhatsAppInput({ value, onChange, className = "" }: { value: stri
   const caja = "h-9 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white";
 
   return (
-    <div className={className}>
+    <div className={`${label ? "space-y-1.5 " : ""}${className}`}>
+      {label && <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">{label}</label>}
       <div className="flex items-center gap-1.5">
         <span className="text-xs text-zinc-400">+54 9</span>
         <input value={partes.area} onChange={(e) => cambiar(e.target.value, partes.numero)} inputMode="numeric" placeholder="Caract." aria-label="Característica"

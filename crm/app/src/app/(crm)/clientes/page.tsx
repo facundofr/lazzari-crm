@@ -30,6 +30,8 @@ import { traerTodo } from "@/lib/paginar";
 import { traerSaldosClientes, saldoClienteEn, cobradoPorFactura, saldoFacturaVenta, type SaldoCliente } from "@/lib/saldo-clientes";
 import { totalesCuentaCorriente } from "@/lib/cuenta-corriente-cliente";
 import { esDni, digitosDocumento, textoDocumento, textoDocumentoConGuiones } from "@/lib/documento-cliente";
+import { WhatsAppInput } from "@/components/ui/whatsapp-input";
+import { mostrarWhatsApp } from "@/lib/whatsapp-ar";
 import { useTheme } from "@/lib/theme-context";
 
 const condicionLabels: Record<string, string> = {
@@ -1769,7 +1771,7 @@ export default function ClientesPage() {
                       </div>
                       <div>
                         <p className="text-xs text-zinc-500 dark:text-zinc-400">Telefono</p>
-                        <p className="text-sm font-medium mt-0.5">{selectedCliente.telefono ? <a href={`tel:${selectedCliente.telefono}`} className="text-orange-600 hover:underline">{selectedCliente.telefono}</a> : "—"}</p>
+                        <p className="text-sm font-medium mt-0.5">{selectedCliente.telefono ? <a href={`tel:${selectedCliente.telefono}`} className="text-orange-600 hover:underline">{mostrarWhatsApp(selectedCliente.telefono)}</a> : "—"}</p>
                       </div>
                       <InfoField label="Vendedor" value={selectedCliente.vendedorNombre} />
                       <div className="sm:col-span-2">
@@ -1884,10 +1886,10 @@ export default function ClientesPage() {
                       </div>
                       <div className="grid grid-cols-2 gap-2">
                         <Input label="Email" type="email" value={contactoForm.email} onChange={(e) => setContactoForm((p) => ({ ...p, email: e.target.value }))} />
-                        <Input label="Teléfono" value={contactoForm.telefono} onChange={(e) => setContactoForm((p) => ({ ...p, telefono: e.target.value }))} />
+                        <WhatsAppInput label="Teléfono" value={contactoForm.telefono} onChange={(v) => setContactoForm((p) => ({ ...p, telefono: v }))} />
                       </div>
                       <div className="grid grid-cols-2 gap-2">
-                        <Input label="WhatsApp" value={contactoForm.whatsapp} onChange={(e) => setContactoForm((p) => ({ ...p, whatsapp: e.target.value }))} />
+                        <WhatsAppInput label="WhatsApp" value={contactoForm.whatsapp} onChange={(v) => setContactoForm((p) => ({ ...p, whatsapp: v }))} />
                         <div className="space-y-1.5">
                           <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Sucursal</label>
                           <select value={contactoForm.sucursal_id} onChange={(e) => setContactoForm((p) => ({ ...p, sucursal_id: e.target.value }))} className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
@@ -1965,7 +1967,7 @@ export default function ClientesPage() {
                                     )}
                                     {c.telefono && (
                                       <div className="flex items-center gap-1.5 text-xs text-zinc-500">
-                                        <Phone className="h-3 w-3" /> {c.telefono}
+                                        <Phone className="h-3 w-3" /> {mostrarWhatsApp(c.telefono)}
                                       </div>
                                     )}
                                     {c.fechaCumpleanos && (
@@ -2032,7 +2034,7 @@ export default function ClientesPage() {
                         </div>
                       </div>
                       <div className="grid grid-cols-2 gap-2">
-                        <Input label="Teléfono" value={sucursalDetailForm.telefono} onChange={(e) => setSucursalDetailForm((p) => ({ ...p, telefono: e.target.value }))} />
+                        <WhatsAppInput label="Teléfono" value={sucursalDetailForm.telefono} onChange={(v) => setSucursalDetailForm((p) => ({ ...p, telefono: v }))} />
                         <Input label="Email" value={sucursalDetailForm.email} onChange={(e) => setSucursalDetailForm((p) => ({ ...p, email: e.target.value }))} />
                       </div>
                       <div className="space-y-1.5">
@@ -2087,7 +2089,7 @@ export default function ClientesPage() {
                                 </div>
                               )}
                               <div className="flex flex-wrap gap-4 mt-1">
-                                {s.telefono && <div className="flex items-center gap-1.5 text-xs text-zinc-500"><Phone className="h-3 w-3" /> {s.telefono}</div>}
+                                {s.telefono && <div className="flex items-center gap-1.5 text-xs text-zinc-500"><Phone className="h-3 w-3" /> {mostrarWhatsApp(s.telefono)}</div>}
                                 {s.email && <div className="flex items-center gap-1.5 text-xs text-zinc-500"><Mail className="h-3 w-3" /> {s.email}</div>}
                                 {(s as any).transportistaNombre && (
                                   <div className="flex items-center gap-1.5 text-xs text-zinc-500"><Truck className="h-3 w-3 text-blue-500" /> {(s as any).transportistaNombre}</div>
@@ -2105,7 +2107,7 @@ export default function ClientesPage() {
                                     {c.cargo && <p className="text-xs text-zinc-500 mt-0.5">{c.cargo}</p>}
                                     <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
                                       {c.email && <div className="flex items-center gap-1 text-xs text-zinc-400"><Mail className="h-3 w-3" /> {c.email}</div>}
-                                      {c.telefono && <div className="flex items-center gap-1 text-xs text-zinc-400"><Phone className="h-3 w-3" /> {c.telefono}</div>}
+                                      {c.telefono && <div className="flex items-center gap-1 text-xs text-zinc-400"><Phone className="h-3 w-3" /> {mostrarWhatsApp(c.telefono)}</div>}
                                     </div>
                                   </div>
                                 ))}
@@ -2638,13 +2640,7 @@ export default function ClientesPage() {
                   error={formFieldErrors.email}
                 />
               </div>
-              <Input
-                label="Teléfono / WhatsApp"
-                type="tel"
-                value={form.telefono}
-                onChange={(e) => setForm({ ...form, telefono: e.target.value })}
-                placeholder="Ej: +54 9 11 1234-5678"
-              />
+              <WhatsAppInput label="Teléfono / WhatsApp" value={form.telefono} onChange={(v) => setForm({ ...form, telefono: v })} />
               <div className="sm:col-span-2 lg:col-span-3 space-y-1.5">
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">Email de cobranzas</label>
                 <div className="flex gap-2">
@@ -2744,7 +2740,7 @@ export default function ClientesPage() {
                         </div>
                       </div>
                       <div className="grid grid-cols-2 gap-2">
-                        <Input label="Teléfono" value={newSucursal.telefono} onChange={(e) => setNewSucursal((p) => ({ ...p, telefono: e.target.value }))} />
+                        <WhatsAppInput label="Teléfono" value={newSucursal.telefono} onChange={(v) => setNewSucursal((p) => ({ ...p, telefono: v }))} />
                         <Input label="Email" value={newSucursal.email} onChange={(e) => setNewSucursal((p) => ({ ...p, email: e.target.value }))} />
                       </div>
                       <div className="flex justify-end gap-2 pt-1">
@@ -2788,7 +2784,7 @@ export default function ClientesPage() {
                             {(ct.email || ct.telefono) && (
                               <div className="flex gap-3">
                                 {ct.email && <span className="text-xs text-zinc-400">{ct.email}</span>}
-                                {ct.telefono && <span className="text-xs text-zinc-400">{ct.telefono}</span>}
+                                {ct.telefono && <span className="text-xs text-zinc-400">{mostrarWhatsApp(ct.telefono)}</span>}
                               </div>
                             )}
                             {ct.notas && <span className="text-xs text-zinc-400 italic">{ct.notas}</span>}
@@ -2810,7 +2806,7 @@ export default function ClientesPage() {
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       <Input label="Email" type="email" value={newContactoModal.email} onChange={(e) => setNewContactoModal((p) => ({ ...p, email: e.target.value }))} />
-                      <Input label="WhatsApp" value={newContactoModal.whatsapp} onChange={(e) => setNewContactoModal((p) => ({ ...p, whatsapp: e.target.value }))} />
+                      <WhatsAppInput label="WhatsApp" value={newContactoModal.whatsapp} onChange={(v) => setNewContactoModal((p) => ({ ...p, whatsapp: v }))} />
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       <div className="space-y-1.5">

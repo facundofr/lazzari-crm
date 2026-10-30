@@ -9,6 +9,7 @@
 // Lógica pura en lib/transportes-anotador.ts.
 
 import { Header } from "@/components/layout/header";
+import { mostrarWhatsApp } from "@/lib/whatsapp-ar";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select } from "@/components/ui/input";
@@ -545,7 +546,7 @@ export default function TransportesPage() {
       <span className="font-medium">{t.nombre}</span>
     )},
     { key: "cuit" as const, label: "CUIT", render: (t: TransportistaRow) => t.cuit || "—" },
-    { key: "telefono" as const, label: "Teléfono", render: (t: TransportistaRow) => t.telefono || "—" },
+    { key: "telefono" as const, label: "Teléfono", render: (t: TransportistaRow) => (t.telefono ? mostrarWhatsApp(t.telefono) : "—") },
     { key: "precio_viaje_fijo" as const, label: "$ fijo por viaje", render: (t: TransportistaRow) => t.precio_viaje_fijo != null ? formatCurrency(t.precio_viaje_fijo, "ARS") : "—" },
     { key: "destinos" as const, label: "Destinos", render: (t: TransportistaRow) => (
       <input
@@ -848,7 +849,7 @@ export default function TransportesPage() {
 
                     {selectedTransportista.razon_social && <DetailRow icon={Building2} label="Razón social" value={selectedTransportista.razon_social} />}
                     {selectedTransportista.cuit && <DetailRow icon={Hash} label="CUIT" value={selectedTransportista.cuit} />}
-                    {selectedTransportista.telefono && <DetailRow icon={Phone} label="Teléfono" value={selectedTransportista.telefono} />}
+                    {selectedTransportista.telefono && <DetailRow icon={Phone} label="Teléfono" value={mostrarWhatsApp(selectedTransportista.telefono)} />}
                     {selectedTransportista.email && <DetailRow icon={Mail} label="Email" value={selectedTransportista.email} />}
                     {selectedTransportista.contacto_principal && <DetailRow icon={User} label="Contacto" value={selectedTransportista.contacto_principal} />}
                     {selectedTransportista.direccion && <DetailRow icon={MapPin} label="Dirección" value={selectedTransportista.direccion} />}

@@ -70,3 +70,18 @@ export function mostrarWhatsApp(raw: string | null | undefined): string {
   const corte = numero.length - 4;
   return `${area} ${corte > 0 ? `${numero.slice(0, corte)}-${numero.slice(corte)}` : numero}`;
 }
+
+/**
+ * Cualquier teléfono cargado → como se guarda: "2477 688498" (Augusto 30/10/2026: un solo formato en todo el CRM).
+ * Saca ".0" del final (planillas), +54 / 54 9, el 0 y el 15. Si no quedan 10 números, o hay varios teléfonos juntos,
+ * lo deja como estaba. La base hace lo mismo al guardar (función telefono_ar, migración 20261030120000).
+ */
+export function guardarTelefono(raw: string | null | undefined): string {
+  const texto = String(raw ?? "").trim();
+  if (!texto) return texto;
+  if (/[/,;]|\sy\s|\so\s/i.test(texto)) return texto; // varios teléfonos: se deja
+  const d = digitosLocales(texto.replace(/\.0$/, ""));
+  if (d.length !== 10) return texto;
+  const n = largoArea(d);
+  return `${d.slice(0, n)} ${d.slice(n)}`;
+}
