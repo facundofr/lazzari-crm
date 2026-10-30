@@ -16,6 +16,8 @@
  *    (registrar_nota_credito_compra_v2, la misma de Finanzas). La nota de débito no se carga acá.
  * 6. Flete (Augusto 29/10): «Es: Compra / Transporte». Se sugiere Transporte si el proveedor es transportista, si su última
  *    factura fue de transporte o si los renglones son flete; se cambia a mano. Transporte cuenta en Transportes (Gastos y Reportes).
+ * 7. Pestaña Mercado Libre (Augusto 30/10): abre esta misma ventana con "Ya pagada con Visa" elegido y, al guardar, la une a los
+ *    artículos elegidos (onGuardada → unir_factura_mercado_libre). Si la unión falla, la factura ya quedó cargada.
  * Guardar usa guardar_conciliacion_compra (la de siempre), sin OC, sin aceptar costos ni aprender equivalencias.
  */
 import { useEffect, useRef, useState } from "react";
@@ -62,9 +64,15 @@ const btnSi = "rounded-md bg-violet-600 px-2 py-1 text-xs font-medium text-white
 const btnNo = "rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-700 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800";
 const elegido = "ring-2 ring-violet-400";
 
-export default function ComprasLazzaFactura({ sociedadId, onClose }: {
+export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicial, para, onGuardada }: {
   sociedadId: string;
   onClose: () => void;
+  /** Pestaña Mercado Libre (Augusto 30/10): arranca con "Ya pagada con Visa" elegido (se puede cambiar). */
+  conVisaInicial?: boolean;
+  /** Pestaña Mercado Libre: para qué artículo(s) es la factura (se muestra arriba). */
+  para?: string;
+  /** Pestaña Mercado Libre: al guardar la factura, se une a los artículos elegidos. */
+  onGuardada?: (facturaId: string) => Promise<void>;
 }) {
   const { toast } = useToast();
   const { profile } = useUser();
@@ -86,7 +94,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
   const [crearProv, setCrearProv] = useState(false);
   const [netoTxt, setNetoTxt] = useState("");
   // Augusto 19/10: arranca sin nada elegido y hay que elegir (las pagadas con tarjeta se marcan al cargarlas).
-  const [conVisa, setConVisa] = useState<boolean | null>(null);
+  const [conVisa, setConVisa] = useState<boolean | null>(conVisaInicial ?? null);
   const [faltaElegirPago, setFaltaElegirPago] = useState(false);
   // Para Pagos: transferencia o eCheq y a cuántos días (null = lo que sugiere el proveedor).
   const [forma, setForma] = useState<FormaPago | null>(null);
@@ -114,7 +122,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
   function reiniciar() {
     ncKey.current = null;
     setError(""); setFactura(null); setProveedor(null); setBuscandoProv(false);
-    setConVisa(null); setFaltaElegirPago(false); setForma(null); setDiasTxt(null); setNotaPago(""); setDuplicada(false); setEsNota(false); setOtraSociedad(""); setNoSeLeyo(false); setOrigen("");
+    setConVisa(conVisaInicial ?? null); setFaltaElegirPago(false); setForma(null); setDiasTxt(null); setNotaPago(""); setDuplicada(false); setEsNota(false); setOtraSociedad(""); setNoSeLeyo(false); setOrigen("");
     setPercTxt(""); setTotalTxt(""); setTipoElegido(null); setUltimoTipo(null);
   }
 
@@ -365,6 +373,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
       }
       toast.success([`✔ FC ${numero} cargada`, tipoFactura === "transporte" ? "Transporte" : "", pagoTxt].filter(Boolean).join(" · "));
       if (data?.aviso) toast.warning(String(data.aviso));
+      if (facturaId && onGuardada) await onGuardada(facturaId);
       window.dispatchEvent(new Event(EVENTO_FACTURAS_COMPRA));
       onClose();
     } catch (e: any) {
@@ -378,7 +387,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose }: {
       onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer?.files?.[0]; if (f && !leyendo && !guardando) void leer(f); }}>
       <div className="w-full max-w-4xl rounded-xl bg-white p-4 shadow-2xl dark:bg-zinc-900 dark:text-zinc-100">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-bold">Cargar factura <span className="text-sm font-normal text-zinc-500">· Compras Lazza</span></h2>
+          <h2 className="text-lg font-bold">Cargar factura <span className="text-sm font-normal text-zinc-500">· {para ? `Mercado Libre · ${para}` : "Compras Lazza"}</span></h2>
           <button onClick={onClose} disabled={guardando} className="rounded p-1 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-5 w-5" /></button>
         </div>
 

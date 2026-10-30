@@ -11,12 +11,14 @@
  * Estado "Por pedir" / "Pedido" (Compras Lazza, Augusto 19/10): se cambia con un clic; "Pedido" muestra la fecha en que se pidió (`pedido_at`) y el lápiz la cambia.
  * Compras Lazza (Augusto 19/10, al sacar la pantalla vieja del menú): pestaña "Anuladas" (OC canceladas; se abren y se reactivan)
  * y el operador es el de la OC (`created_by`, se cambia abriendo la OC); si la OC no tiene, el que cargó el PR.
+ * Compras Lazza (Augusto 30/10): pestaña "Mercado Libre", un renglón por artículo y su factura (components/compras-mercado-libre).
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { useToast } from "@/components/ui/toast";
 import { EVENTO_FACTURAS_COMPRA } from "@/components/carga-masiva-global";
+import ComprasMercadoLibre from "@/components/compras-mercado-libre";
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
 import { traerTodo } from "@/lib/paginar";
@@ -106,7 +108,7 @@ export default function ComprasListaOC({ sociedadId, lazza }: {
   const [filas, setFilas] = useState<Vista[]>([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
-  const [vista, setVista] = useState<"curso" | "terminadas" | "anuladas">("curso");
+  const [vista, setVista] = useState<"curso" | "terminadas" | "anuladas" | "mercadolibre">("curso");
   const [busca, setBusca] = useState("");
   const [persona, setPersona] = useState("");
   const [proveedor, setProveedor] = useState("");
@@ -258,14 +260,15 @@ export default function ComprasListaOC({ sociedadId, lazza }: {
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-1 border-b border-zinc-200 dark:border-zinc-700">
-        {([["curso", "En curso", enCurso], ["terminadas", "Terminadas", filas.length - enCurso - anuladas], ...(conLazza ? [["anuladas", "Anuladas", anuladas] as const] : [])] as const).map(([k, t, c]) => (
+        {([["curso", "En curso", enCurso], ["terminadas", "Terminadas", filas.length - enCurso - anuladas], ...(conLazza ? [["anuladas", "Anuladas", anuladas] as const, ["mercadolibre", "Mercado Libre", null] as const] : [])] as const).map(([k, t, c]) => (
           <button key={k} onClick={() => setVista(k)} className={`-mb-px border-b-2 px-3 py-1 text-sm font-medium ${vista === k ? "border-orange-500 text-orange-600" : "border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"}`}>
-            {t} <span className="ml-1 rounded-full bg-zinc-100 px-1.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">{c}</span>
+            {t} {c !== null && <span className="ml-1 rounded-full bg-zinc-100 px-1.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">{c}</span>}
           </button>
         ))}
-        <button onClick={() => void cargar()} className="ml-auto rounded p-1 text-zinc-400 hover:text-zinc-700" title="Actualizar"><RefreshCw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} /></button>
+        {vista !== "mercadolibre" && <button onClick={() => void cargar()} className="ml-auto rounded p-1 text-zinc-400 hover:text-zinc-700" title="Actualizar"><RefreshCw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} /></button>}
       </div>
 
+      {vista === "mercadolibre" ? (sociedadId ? <ComprasMercadoLibre sociedadId={sociedadId} /> : null) : <>
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative w-full max-w-xs">
           <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
@@ -368,6 +371,7 @@ export default function ComprasListaOC({ sociedadId, lazza }: {
           ] as Column<Vista>[])}
         />
       </Card>
+      </>}
     </div>
   );
 }
