@@ -1,10 +1,10 @@
 "use client";
 
 // Transportes: contador de viajes por transportista (versión simple, 19/10/2026, pedido de Augusto).
-// - Mes con ◀ ▶ (corte mensual). Un renglón por transportista: − viajes +, "$ a todos" (pone ese monto a todos sus viajes
-//   del mes sin liquidar, pisando lo que tengan), total y Liquidar.
-// - Clic en el nombre: sus viajes del mes (fecha, monto y nota editables; ✕ cancela, no borra). Tildar para liquidar uno o más.
-// - Liquidar: la ventana de siempre (factura del transportista o liquidación interna). No tiene que coincidir nada.
+// - Mes con ◀ ▶ (corte mensual). Un renglón por transportista: − viajes +, y (solo los que no nos facturan) "$ a todos", total y Factura manual.
+// - Clic en el nombre: sus viajes del mes (fecha, monto y nota editables; ✕ cancela, no borra). Tildar para facturar uno o más.
+// - Los que no nos facturan: Factura manual a fin de mes; esos viajes pasan a un renglón "Facturado" y lo que falta queda abajo.
+// - Las facturas de los que sí facturan se cargan con "Cargar factura" (la ventana de Compras Lazza), sin atar viajes.
 // - Los viajes de remitos ("¿Quién lo lleva?") no aparecen acá: quedan solo en Remitos.
 // Lógica pura en lib/transportes-anotador.ts.
 
@@ -31,7 +31,7 @@ import { useToast } from "@/components/ui/toast";
 import { traerTodo } from "@/lib/paginar";
 import { linkArchivo } from "@/lib/archivo-link";
 import {
-  claveViaje, montoInicial, viajesDelMes, sinLiquidar, viajeParaQuitar, fechaParaSumar, resumenMes, totalMontos,
+  claveViaje, montoInicial, montoViaje, viajesDelMes, sinLiquidar, viajeParaQuitar, fechaParaSumar, resumenMes, totalMontos,
   sumarMeses, leerMonto, esDeRemito, vigente, type ResumenTransportista,
 } from "@/lib/transportes-anotador";
 
@@ -276,12 +276,20 @@ export default function TransportesPage() {
 
   // Renglones: los que tienen viajes en el mes (en $ y, si hubiera, en US$) y después los activos sin viajes.
   const filas = useMemo(() => {
-    const ars = resumenMes(viajes, mes, catalogo, "ARS").map((r) => ({ r, moneda: "ARS" as const }));
-    const usd = resumenMes(viajes, mes, catalogo, "USD").map((r) => ({ r, moneda: "USD" as const }));
+    // Los que no nos facturan y ya tienen viajes facturados a mano: un renglón "Facturado" arriba y otro con lo que falta facturar abajo.
+    const partir = (r: ResumenTransportista, moneda: "ARS" | "USD") => {
+      const sinFactura = Boolean(transportistas.find((t) => t.id === r.clave)?.no_factura);
+      if (!sinFactura || r.liquidados === 0) return [{ r, moneda, facturado: false }];
+      const faltan = { ...r, viajes: r.pendientes.length, total: r.totalPendiente, liquidados: 0, sinMonto: r.pendientes.filter((v) => montoViaje(v) == null).length };
+      const hechos = { ...r, viajes: r.liquidados, total: r.total - r.totalPendiente, sinMonto: 0, pendientes: [], totalPendiente: 0 };
+      return [{ r: hechos, moneda, facturado: true }, { r: faltan, moneda, facturado: false }];
+    };
+    const ars = resumenMes(viajes, mes, catalogo, "ARS").flatMap((r) => partir(r, "ARS"));
+    const usd = resumenMes(viajes, mes, catalogo, "USD").flatMap((r) => partir(r, "USD"));
     const usadas = new Set([...ars, ...usd].map((f) => f.r.clave));
     const vacios = transportistas
       .filter((t) => t.activo && !usadas.has(t.id))
-      .map((t) => ({ r: { clave: t.id, nombre: t.nombre, viajes: 0, sinMonto: 0, total: 0, liquidados: 0, pendientes: [], totalPendiente: 0 } as ResumenTransportista, moneda: "ARS" as const }));
+      .map((t) => ({ r: { clave: t.id, nombre: t.nombre, viajes: 0, sinMonto: 0, total: 0, liquidados: 0, pendientes: [], totalPendiente: 0 } as ResumenTransportista, moneda: "ARS" as const, facturado: false }));
     return [...ars, ...usd, ...vacios];
   }, [viajes, mes, catalogo, transportistas]);
 
@@ -326,7 +334,7 @@ export default function TransportesPage() {
 
   const editarViaje = async (v: ViajeRow, patch: Partial<ViajeRow>) => {
     if (!socId) return;
-    if (v.factura_compra_id) { toast.error("Ese viaje ya se liquidó y está en Pagos; no se puede cambiar."); return; }
+    if (v.factura_compra_id) { toast.error("Ese viaje ya está facturado y en Pagos; no se puede cambiar."); return; }
     setOcupado(v.id);
     try {
       const { error } = await (supabase as any).from("transportes").update(patch).eq("id", v.id).eq("sociedad_id", socId).is("factura_compra_id", null);
@@ -339,11 +347,11 @@ export default function TransportesPage() {
     }
   };
 
-  // "−": cancela (no borra) el último viaje del mes sin liquidar.
+  // "−": cancela (no borra) el último viaje del mes sin facturar.
   const quitarViaje = async (clave: string) => {
     if (ocupado) return;
     const v = viajeParaQuitar(viajes, mes, clave, catalogo) as ViajeRow | null;
-    if (!v) { toast.error("No hay viajes sin liquidar para sacar en este mes."); return; }
+    if (!v) { toast.error("No hay viajes sin facturar para sacar en este mes."); return; }
     await editarViaje(v, { estado: "cancelado" });
   };
 
@@ -352,8 +360,8 @@ export default function TransportesPage() {
     const monto = leerMonto(montoGeneral[clave] || "");
     if (monto == null) { toast.error("Escribí un monto válido"); return; }
     const ids = sinLiquidar(viajesDelMes(viajes, mes, clave, catalogo)).map((v) => v.id);
-    if (!ids.length) { toast.error("No hay viajes sin liquidar en este mes"); return; }
-    if (!confirm(`¿Poner ${formatCurrency(monto, "ARS")} a los ${ids.length} viaje${ids.length > 1 ? "s" : ""} sin liquidar de ${nombre} en ${nombreMes(mes)}? Pisa los montos que tengan.`)) return;
+    if (!ids.length) { toast.error("No hay viajes sin facturar en este mes"); return; }
+    if (!confirm(`¿Poner ${formatCurrency(monto, "ARS")} a los ${ids.length} viaje${ids.length > 1 ? "s" : ""} sin facturar de ${nombre} en ${nombreMes(mes)}? Pisa los montos que tengan.`)) return;
     setOcupado(`fila:${clave}`);
     try {
       const { error } = await (supabase as any).from("transportes").update({ costo: monto }).in("id", ids).eq("sociedad_id", socId).is("factura_compra_id", null);
@@ -374,7 +382,7 @@ export default function TransportesPage() {
     return n;
   });
 
-  // Liquidar: los tildados de ese transportista; si no hay tildados, todos los del mes sin liquidar.
+  // Liquidar: los tildados de ese transportista; si no hay tildados, todos los del mes sin facturar.
   const liquidar = (r: ResumenTransportista, moneda: string) => {
     const pendientes = r.pendientes as ViajeRow[];
     const tildados = abierto === r.clave ? pendientes.filter((v) => seleccion.has(v.id)) : [];
@@ -638,19 +646,28 @@ export default function TransportesPage() {
                     <tr className="border-b border-zinc-200 bg-zinc-50 text-xs text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800/50">
                       <th className="px-3 py-1.5 text-left font-medium">Transportista</th>
                       <th className="px-2 py-1.5 text-center font-medium">Viajes</th>
-                      <th className="px-2 py-1.5 text-left font-medium" title="Pone ese monto a todos sus viajes del mes sin liquidar (pisa lo que tengan)">$ a todos</th>
+                      <th className="px-2 py-1.5 text-left font-medium" title="Pone ese monto a todos sus viajes del mes sin facturar (pisa lo que tengan)">$ a todos</th>
                       <th className="px-2 py-1.5 text-right font-medium">Total</th>
                       <th className="px-3 py-1.5 text-right font-medium">Factura manual</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filas.map(({ r, moneda }) => {
+                    {filas.map(({ r, moneda, facturado }) => {
                       const enCatalogo = transportistas.some((t) => t.id === r.clave);
                       const noFactura = Boolean(transportistas.find((t) => t.id === r.clave)?.no_factura);
                       const esAbierto = abierto === r.clave;
                       const tildados = esAbierto ? r.pendientes.filter((v) => seleccion.has(v.id)) : [];
                       const aLiquidar = tildados.length ? tildados : r.pendientes;
                       const filaOcupada = ocupado === `fila:${r.clave}`;
+                      if (facturado) return (
+                        <tr key={`${r.clave}-${moneda}-facturado`} className="border-b border-zinc-100 dark:border-zinc-800">
+                          <td className="px-3 py-1 pl-[30px] font-medium text-zinc-900 dark:text-white">{r.nombre}{moneda === "USD" && <span className="text-[11px] text-zinc-400"> (US$)</span>}</td>
+                          <td className="px-2 py-1 text-center text-base font-semibold tabular-nums text-zinc-900 dark:text-white">{r.viajes}</td>
+                          <td className="px-2 py-1"><span className="text-xs text-zinc-300 dark:text-zinc-600">—</span></td>
+                          <td className="px-2 py-1 text-right tabular-nums">{formatCurrency(r.total, moneda)}</td>
+                          <td className="px-3 py-1 text-right"><span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600"><CheckCircle2 size={13} /> Facturado</span></td>
+                        </tr>
+                      );
                       return (
                         <Fragment key={`${r.clave}-${moneda}`}>
                           <tr className={`border-b border-zinc-100 dark:border-zinc-800 ${esAbierto ? "bg-orange-50/40 dark:bg-orange-950/10" : ""}`}>
@@ -659,10 +676,10 @@ export default function TransportesPage() {
                                 <ChevronDown size={13} className={`shrink-0 text-zinc-400 transition-transform ${esAbierto ? "" : "-rotate-90"}`} />
                                 {r.nombre}{moneda === "USD" && <span className="text-[11px] text-zinc-400"> (US$)</span>}
                               </button>
-                              {(r.sinMonto > 0 || r.liquidados > 0) && (
+                              {noFactura && r.sinMonto > 0 && (
                                 <div className="pl-[18px] text-[11px] text-zinc-400">
                                   {r.sinMonto > 0 && <span className="text-amber-600">{r.sinMonto} sin monto</span>}
-                                  {r.liquidados > 0 && <span className="text-emerald-600">{r.sinMonto > 0 ? " · " : ""}{r.liquidados} liquidado{r.liquidados > 1 ? "s" : ""}</span>}
+                                  
                                 </div>
                               )}
                             </td>
@@ -702,8 +719,6 @@ export default function TransportesPage() {
                                 >
                                   <Receipt size={13} /> {tildados.length ? `${tildados.length} tildado${tildados.length > 1 ? "s" : ""}` : "Todo"} · {formatCurrency(totalMontos(aLiquidar), moneda)}
                                 </button>
-                              ) : r.liquidados > 0 ? (
-                                <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600"><CheckCircle2 size={13} /> Liquidado</span>
                               ) : null}
                             </td>
                           </tr>
@@ -722,7 +737,7 @@ export default function TransportesPage() {
                                         <th className="px-1 py-1 text-left font-medium">Fecha</th>
                                         <th className="px-1 py-1 text-right font-medium">Monto</th>
                                         <th className="px-1 py-1 text-left font-medium">Nota</th>
-                                        <th className="px-1 py-1 text-left font-medium">Liquidado</th>
+                                        <th className="px-1 py-1 text-left font-medium">Factura</th>
                                         <th className="w-7" />
                                       </tr>
                                     </thead>
@@ -735,7 +750,7 @@ export default function TransportesPage() {
                                           <tr key={v.id} className={cancelado ? "opacity-50" : ""}>
                                             <td className="px-1 py-0.5 text-center">
                                               {noFactura && !trabado && !cancelado && (
-                                                <input type="checkbox" checked={seleccion.has(v.id)} onChange={() => tildar(v.id)} className="accent-orange-600" aria-label="Tildar para liquidar" />
+                                                <input type="checkbox" checked={seleccion.has(v.id)} onChange={() => tildar(v.id)} className="accent-orange-600" aria-label="Tildar para facturar" />
                                               )}
                                             </td>
                                             <td className="px-1 py-0.5">
@@ -771,7 +786,7 @@ export default function TransportesPage() {
                                             </td>
                                             <td className="px-1 py-0.5 whitespace-nowrap">
                                               {trabado ? (
-                                                <button onClick={() => v.facturas_compra?.archivo_url && window.open(v.facturas_compra.archivo_url, "_blank", "noopener,noreferrer")} className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 hover:text-emerald-700" title="Liquidado y enviado a Pagos">
+                                                <button onClick={() => v.facturas_compra?.archivo_url && window.open(v.facturas_compra.archivo_url, "_blank", "noopener,noreferrer")} className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 hover:text-emerald-700" title="Facturado y enviado a Pagos">
                                                   <CheckCircle2 size={12} /> {v.facturas_compra?.numero_factura || "En pagos"}
                                                 </button>
                                               ) : cancelado ? <span className="text-[11px] text-red-500">cancelado</span> : <span className="text-[11px] text-zinc-300 dark:text-zinc-600">—</span>}
