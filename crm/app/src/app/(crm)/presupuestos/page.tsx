@@ -31,7 +31,7 @@ import {
   proponerPrecio, semaforoLinea, buscarClientes, clienteSeguro, ultimoPrecioCliente, avisosPresupuesto, redondear2,
   MARGEN_MINIMO_IA, type Confianza, type Semaforo, type ClienteBasico, type ClienteCandidato, type RenglonHistorico,
 } from "@/lib/presupuesto-ia";
-import { margenNetoPct, gastosPorcentajePR } from "@/lib/presupuesto-margen";
+import { margenNetoPct, gastosPorcentajePR, faltaCosto } from "@/lib/presupuesto-margen";
 
 // Margen NETO de gastos e impuestos, como la lista y la ventana del PR (auditoría H43). El PR se crea "sin definir" → 7 %.
 const GASTOS_PR_NUEVO = gastosPorcentajePR("sin_definir");
@@ -205,7 +205,7 @@ export default function PresupuestosPage() {
     const bajoMinimo = margen !== null && margen < MARGEN_MINIMO_IA;
     const nota = l.precioManual !== null ? (bajoMinimo ? `Margen ${margen}% (mínimo ${MARGEN_MINIMO_IA}%)` : "") : prop.nota;
     return { cand, costo, ventaLista, precio, margen, nota, bajoMinimo, sinTc, origenPrecio: l.precioManual !== null ? "manual" : prop.origen,
-      semaforo: semaforoLinea({ confianza: l.confianza, tieneArticulo: true, precio, cantidad: l.cantidad, bajoMinimo, sinCosto: !(costo && costo > 0), avisoExtra: sinTc }) };
+      semaforo: semaforoLinea({ confianza: l.confianza, tieneArticulo: true, precio, cantidad: l.cantidad, bajoMinimo, sinCosto: faltaCosto(costo, cand.descripcion || l.descripcion), avisoExtra: sinTc }) };
   }, [historial, moneda, tc, tcDivisas]);
 
   const filas = useMemo(() => lineas.map(l => ({ l, c: calcular(l) })), [lineas, calcular]);

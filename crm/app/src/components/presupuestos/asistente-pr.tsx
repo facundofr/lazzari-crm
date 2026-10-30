@@ -14,6 +14,7 @@ import { convertirAMonedaPR, type CatalogoItemParaPR } from "@/components/presup
 import { leerExcel, leerBase64, separarTalle } from "@/components/presupuestos/cotizacion-express";
 import { buscarCandidatos, precargarCatalogo, normalizar, tokens, esCodigo, type CatalogoCandidato as Cand } from "@/lib/catalogo-busqueda";
 import { claveArticulo } from "@/lib/presupuesto-ayudas";
+import { faltaCosto } from "@/lib/presupuesto-margen";
 import { proponerPrecio, semaforoLinea, margenSobreCosto, redondear2, MARGEN_MINIMO_IA, type Confianza, type Semaforo } from "@/lib/presupuesto-ia";
 
 const db = supabase as any;
@@ -130,7 +131,7 @@ export default function AsistentePR({ open, onClose, prMoneda, tc, tcDivisas, cl
     else if (prop) { precio = prop.precio; origen = prop.origen === "ultimo" ? "último precio" : prop.origen === "lista" ? "precio de lista" : "sin precio"; nota = prop.nota; }
     const margen = costo && costo > 0 && precio > 0 ? margenSobreCosto(precio, costo) : null;
     const bajo = margen !== null && margen < MARGEN_MINIMO_IA;
-    const sem = semaforoLinea({ confianza: l.confianza, tieneArticulo: !!cand || l.precioFijo !== null, precio, cantidad: l.cantidad, bajoMinimo: bajo, sinCosto: !(costo && costo > 0), avisoExtra: !!cand && costo === null });
+    const sem = semaforoLinea({ confianza: l.confianza, tieneArticulo: !!cand || l.precioFijo !== null, precio, cantidad: l.cantidad, bajoMinimo: bajo, sinCosto: faltaCosto(costo, cand?.descripcion || l.descripcion), avisoExtra: !!cand && costo === null });
     return { cand, costo, precio, origen, nota, margen, bajo, sem };
   }, [prMoneda, tc, tcDivisas, ultimos]);
   const filas = lineas.map(l => ({ l, c: calc(l) }));

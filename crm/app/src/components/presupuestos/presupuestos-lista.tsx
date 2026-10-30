@@ -40,7 +40,8 @@ import { calculateOwnStockPurchaseOrder, groupOwnStockItemsByCurrency, normalize
 import { estadoPorRecibido } from "@/lib/compras-recepcion";
 import { calculateNetPrice, parseQuantityRange, type PriceListRule } from "@/lib/price-list-rules";
 import { observacionesParaCliente } from "@/lib/observaciones-cliente";
-import { margenPR, MARGEN_MINIMO_PR, gastosPorcentajePR, margenNetoPct, costoEnMonedaPR } from "@/lib/presupuesto-margen";
+import { margenPR, MARGEN_MINIMO_PR, gastosPorcentajePR, margenNetoPct, costoEnMonedaPR, faltaCosto } from "@/lib/presupuesto-margen";
+import { esRenglonDeFlete } from "@/lib/finanzas-lazza";
 import { monedaCostoSospechosa } from "@/lib/presupuesto-moneda-costo";
 import { RemitoVentana } from "@/components/remito-ventana";
 import { traerSaldoUnCliente } from "@/lib/cuenta-corriente-cliente";
@@ -1085,12 +1086,12 @@ export default function PresupuestosLista() {
         const ids = aprobados.map(p => p.id);
         const { data: items } = await supabase
           .from("presupuesto_items")
-          .select("presupuesto_id, precio_costo")
+          .select("presupuesto_id, precio_costo, descripcion")
           .in("presupuesto_id", ids);
         if (!items) return;
         const sinCostoSet = new Set<string>();
         for (const it of items as any[]) {
-          if (!it.precio_costo || Number(it.precio_costo) === 0) {
+          if (faltaCosto(it.precio_costo, it.descripcion)) {
             sinCostoSet.add(it.presupuesto_id);
           }
         }
@@ -1857,7 +1858,8 @@ export default function PresupuestosLista() {
         // Match PR items to this OC by proveedor_id
         const isStockOwnOC = !oc.proveedor_id && String((oc as any).observaciones || "").includes("Stock propio");
         const enOtraOC = (it: any) => { const o = ocDeRenglon.get(it.id); return !!o && o !== oc.id; };
-        const matchingItems = prItems.filter((it: any) => ocDeRenglon.get(it.id) === oc.id || (!enOtraOC(it) && (isStockOwnOC
+        // Un flete nuevo no entra a la OC (va por Transportes); el que ya estaba en una OC vieja queda como está.
+        const matchingItems = prItems.filter((it: any) => ocDeRenglon.get(it.id) === oc.id || (!enOtraOC(it) && !esRenglonDeFlete(it.descripcion) && (isStockOwnOC
           ? Boolean(it.stock_propio) && normalizePurchaseCurrency(it.costo_moneda) === normalizePurchaseCurrency(oc.moneda)
           : it.proveedor_id === oc.proveedor_id && !it.stock_propio)));
         if (matchingItems.length === 0) continue;
@@ -1934,7 +1936,12 @@ export default function PresupuestosLista() {
         .select("*")
         .eq("presupuesto_id", prId);
       if (itemsErr || !itemsDb || itemsDb.length === 0) return;
-      let items = itemsDb;
+      // El flete no genera OC: su costo es la factura del transportista en Transportes (Augusto 30/10/2026: "No, sin OC").
+      let items = itemsDb.filter((it: any) => !esRenglonDeFlete(it.descripcion));
+      if (items.length === 0) {
+        toast.info("PR aprobado. No se generaron OC (solo flete: va por Transportes).");
+        return;
+      }
 
       // Get presupuesto header for numero and sociedad_id
       const { data: prHeader } = await (supabase as any)
@@ -2227,9 +2234,9 @@ export default function PresupuestosLista() {
       try {
         const { data: items } = await supabase
           .from("presupuesto_items")
-          .select("id, precio_costo")
+          .select("id, precio_costo, descripcion")
           .eq("presupuesto_id", id);
-        const sinCosto = (items || []).filter((it: any) => !it.precio_costo || Number(it.precio_costo) === 0);
+        const sinCosto = (items || []).filter((it: any) => faltaCosto(it.precio_costo, it.descripcion));
         if (sinCosto.length > 0) {
           // Show confirmation dialog instead of proceeding directly
           setCostosFaltantesModal({ id, count: sinCosto.length, motivo });
@@ -2266,9 +2273,9 @@ export default function PresupuestosLista() {
         try {
           const { data: items } = await supabase
             .from("presupuesto_items")
-            .select("id, precio_costo")
+            .select("id, precio_costo, descripcion")
             .eq("presupuesto_id", id);
-          const sinCosto = (items || []).filter((it: any) => !it.precio_costo || Number(it.precio_costo) === 0);
+          const sinCosto = (items || []).filter((it: any) => faltaCosto(it.precio_costo, it.descripcion));
           if (sinCosto.length > 0) {
             setPrsSinCostos(prev => new Set(prev).add(id));
           }
@@ -3482,7 +3489,7 @@ export default function PresupuestosLista() {
                 {(() => {
                   // Franja de resumen: ítems · total · ganancia · margen · sin costo.
                   const m = margenPR({ moneda: selected.moneda, tipoCambio: selected.tipoCambio, tipoCambioDivisas: selected.tipoCambioDivisas, modalidadEmision: (selected as any).modalidadEmision, costoEnvioInterno: (selected as any).costoEnvioInterno, items: selected.items || [] });
-                  const sinCosto = selected.items.filter((it) => !(Number(it.precioCosto) > 0)).length;
+                  const sinCosto = selected.items.filter((it) => faltaCosto(it.precioCosto, it.descripcion)).length;
                   const conAviso = selected.items.filter((it) => avisosRenglon({ cantidad: it.cantidad, unidad: it.unidad, precio: it.precioVenta, descripcion: it.descripcion }).length > 0).length;
                   const color = m.margenPct === null ? "text-zinc-400" : m.margenPct < MARGEN_MINIMO_PR ? "text-red-600" : m.margenPct < MARGEN_MINIMO_PR + 5 ? "text-amber-600" : "text-emerald-600";
                   return (

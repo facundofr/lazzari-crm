@@ -6,6 +6,7 @@
 // Es la ÚNICA regla de margen (auditoría H43, Augusto 28/10 "neto en todos"): la usan la lista, la ventana del PR,
 // el aviso al guardar y Presupuestos nuevo (IA).
 import { convertirCostoPR, esCostoUsd, tcParaCosto } from "./dolar-presupuesto";
+import { esRenglonDeFlete } from "./finanzas-lazza";
 
 export const GASTOS_PR_ARCA = 7;
 export const GASTOS_PR_MANUAL = 2;
@@ -42,6 +43,14 @@ export function margenNetoPct(venta: number, costo: number, gastosPct: number): 
   const ganancia = Math.round((venta * (1 - gastosPct / 100) - costo) * 100) / 100;
   return Math.round((ganancia * 1000) / costo) / 10;
 }
+
+/**
+ * Renglón al que le falta el costo (avisos "sin costo" del PR; nunca frenan).
+ * El flete no cuenta: su costo es la factura del transportista en Transportes, no va en el PR
+ * (Augusto 29/10/2026). Misma regla que Finanzas (`esRenglonDeFlete`).
+ */
+export const faltaCosto = (costo: number | string | null | undefined, descripcion: string | null | undefined) =>
+  !(Number(costo) > 0) && !esRenglonDeFlete(descripcion);
 
 /** Costo en la moneda del PR. null si hay que pasarlo de moneda y no hay dólar (no se toma el número tal cual). */
 export function costoEnMonedaPR(costo: number, costoMoneda: string | null | undefined, prMoneda: string, tc: number, tcDivisas = 0): number | null {

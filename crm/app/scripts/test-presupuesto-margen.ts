@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { margenPR, gastosPorcentajePR, margenNetoPct, costoEnMonedaPR } from "../src/lib/presupuesto-margen";
+import { margenPR, gastosPorcentajePR, margenNetoPct, costoEnMonedaPR, faltaCosto } from "../src/lib/presupuesto-margen";
 
 assert.equal(gastosPorcentajePR("manual"), 2);
 assert.equal(gastosPorcentajePR("electronica"), 7);
@@ -59,4 +59,12 @@ assert.equal(sinTc.sinDolar, 1);
 assert.equal(sinTc.venta, 1000);
 assert.equal(sinTc.margenPct, 16.3);
 
-console.log("OK: ganancia y margen del PR (7 % ARCA, 2 % manual, costos en US$, sin costos).");
+// Sin costo: el flete no cuenta (va por Transportes, Augusto 29/10)
+assert.equal(faltaCosto(0, "Respirador N95"), true);
+assert.equal(faltaCosto(null, "Respirador N95"), true);
+assert.equal(faltaCosto(150, "Respirador N95"), false);
+assert.equal(faltaCosto(0, "LOGISTICA TACHOS,MESA Y SILLAS"), false);
+assert.equal(faltaCosto(0, "Costo de envío"), false);
+assert.equal(faltaCosto(0, "SILLA DE RUEDAS DE TRANSFERENCIA CON ELEVACIÓN Y TRASLADO"), true);
+
+console.log("OK: ganancia y margen del PR (7 % ARCA, 2 % manual, costos en US$, sin costos, flete).");
