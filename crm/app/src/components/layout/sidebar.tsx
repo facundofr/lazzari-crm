@@ -28,8 +28,12 @@ import {
   Zap,
   FileSearch,
   Sparkles,
+  ArrowUpDown,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { aplicarOrdenMenu, moverEnLista } from "@/lib/orden-menu";
 import { createBrowserClient } from "@supabase/ssr";
 import type { Role } from "@/lib/types";
 import { ROLE_PERMISSIONS } from "@/lib/types";
@@ -41,6 +45,7 @@ import { APP_VERSION_LABEL } from "@/lib/app-version";
 // (los vendedores/compradores no ven Finanzas).
 // `oculto`: no aparece en el menú por ahora (se desarrolla más adelante); la pantalla sigue andando si se entra por el link.
 // `soloSuperAdmin`: en armado, por ahora la ve solo Augusto. `soloRoles`: solo esos roles (además de tener el módulo).
+// Este es el orden de fábrica: Augusto lo cambia con "Ordenar menú" y ese orden lo ven todos (lib/orden-menu.ts).
 const navigation: { grupo: string; items: { name: string; href: string; icon: typeof Users; module: string; oculto?: boolean; soloSuperAdmin?: boolean; soloRoles?: string[] }[] }[] = [
   { grupo: "Menú", items: [
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, module: "dashboard", oculto: true }, // Augusto 20/10: fuera del menú (sigue por link); el sistema abre en Presupuestos
@@ -77,6 +82,16 @@ export function Sidebar() {
   } = useUser();
   const { theme, toggleTheme, disenoNuevo } = useTheme();
   const [loggingOut, setLoggingOut] = useState(false);
+  // Orden guardado por Augusto (null = el de fábrica). `borrador`: rutas mientras ordena; null = no está ordenando.
+  const [orden, setOrden] = useState<string[] | null>(null);
+  const [borrador, setBorrador] = useState<string[] | null>(null);
+  const [guardandoOrden, setGuardandoOrden] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/orden-menu").then((r) => (r.ok ? r.json() : null))
+      .then((d: { orden: string[] | null } | null) => { if (d) setOrden(d.orden); })
+      .catch(() => {});
+  }, []);
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -93,6 +108,18 @@ export function Sidebar() {
   function handleNavClick() {
     // Close mobile sidebar on navigation
     setMobileSidebarOpen(false);
+  }
+
+  // Ordenar menú (solo super_admin): se ordenan las pantallas del menú (Augusto las ve todas); el orden vale para todos.
+  const visiblesEnMenu = navigation[0].items.filter((item) => !item.oculto);
+  async function guardarOrden(nuevo: string[] | null) {
+    setGuardandoOrden(true);
+    const r = await fetch("/api/orden-menu", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orden: nuevo }) }).catch(() => null);
+    const d = r ? await r.json().catch(() => ({})) : {};
+    setGuardandoOrden(false);
+    if (!r?.ok) { alert(`No se pudo guardar el orden: ${d.error ?? "sin conexión"}`); return; }
+    setOrden(d.orden ?? null);
+    setBorrador(null);
   }
 
   const accentColor = sociedadActiva?.colorPrimario || "#FF4500";
@@ -180,8 +207,49 @@ export function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-3 py-2">
-        {navigation.map((g) => {
-          const visibles = g.items.filter((item) => !item.oculto && (!item.soloSuperAdmin || role === "super_admin") && (!item.soloRoles || item.soloRoles.includes(role))).filter((item) => item.module === "compras_nueva" ? !!profile?.prueba_compras_nueva : item.module === "presupuestos_nuevo" ? !!profile?.prueba_presupuestos_nuevo : hasModuleAccess(role, item.module));
+        {borrador && (
+          <div className="mb-2">
+            <p className="px-1 pb-1.5 text-xs text-zinc-500">Subí o bajá cada pantalla. Este orden lo ven todos (cada uno solo las pantallas que tiene permitidas).</p>
+            <ul className="space-y-0.5">
+              {borrador.map((ruta, i) => {
+                const item = visiblesEnMenu.find((it) => it.href === ruta);
+                if (!item) return null;
+                return (
+                  <li key={ruta} className="dn-link flex items-center gap-2 rounded-lg px-2 py-1 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                    <item.icon className="h-4 w-4 shrink-0" />
+                    <span className="flex-1 truncate">{item.name}</span>
+                    <button type="button" aria-label={`Subir ${item.name}`} disabled={i === 0} onClick={() => setBorrador(moverEnLista(borrador, i, -1))}
+                      className="rounded p-0.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-30 dark:hover:bg-zinc-800 dark:hover:text-white">
+                      <ChevronUp className="h-4 w-4" />
+                    </button>
+                    <button type="button" aria-label={`Bajar ${item.name}`} disabled={i === borrador.length - 1} onClick={() => setBorrador(moverEnLista(borrador, i, 1))}
+                      className="rounded p-0.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-30 dark:hover:bg-zinc-800 dark:hover:text-white">
+                      <ChevronDown className="h-4 w-4" />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            <div className="mt-2 flex flex-wrap gap-1.5 px-1">
+              <button type="button" disabled={guardandoOrden} onClick={() => void guardarOrden(borrador)}
+                className="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50" style={{ backgroundColor: accentColor }}>
+                {guardandoOrden && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Guardar orden
+              </button>
+              <button type="button" disabled={guardandoOrden} onClick={() => setBorrador(null)}
+                className="rounded-md border border-zinc-200 px-2.5 py-1 text-xs font-medium hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800">
+                Cancelar
+              </button>
+              {orden && (
+                <button type="button" disabled={guardandoOrden} onClick={() => { if (confirm("¿Volver al orden original del menú? Lo ven todos.")) void guardarOrden(null); }}
+                  className="rounded-md px-1.5 py-1 text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-white">
+                  Volver al original
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+        {!borrador && navigation.map((g) => {
+          const visibles = aplicarOrdenMenu(g.items, orden).filter((item) => !item.oculto && (!item.soloSuperAdmin || role === "super_admin") && (!item.soloRoles || item.soloRoles.includes(role))).filter((item) => item.module === "compras_nueva" ? !!profile?.prueba_compras_nueva : item.module === "presupuestos_nuevo" ? !!profile?.prueba_presupuestos_nuevo : hasModuleAccess(role, item.module));
           if (!visibles.length) return null;
           const showLabel = !collapsed || mobileSidebarOpen;
           return (
@@ -217,6 +285,13 @@ export function Sidebar() {
 
       {/* Bottom */}
       <div className="dn-pie border-t border-zinc-200 px-3 py-2 dark:border-zinc-800">
+        {role === "super_admin" && !borrador && (!collapsed || mobileSidebarOpen) && (
+          <button type="button" onClick={() => setBorrador(aplicarOrdenMenu(visiblesEnMenu, orden).map((it) => it.href))}
+            className="dn-link flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm font-medium text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-white">
+            <ArrowUpDown className="h-4 w-4 shrink-0" />
+            <span>Ordenar menú</span>
+          </button>
+        )}
         {hasModuleAccess(role, "presupuestos") && (
           <Link
             href="/papelera"
