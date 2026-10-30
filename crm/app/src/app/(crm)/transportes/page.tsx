@@ -14,6 +14,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select } from "@/components/ui/input";
 import { TransportesFacturas } from "@/components/transportes-facturas";
+import ComprasLazzaFactura from "@/components/compras-lazza-factura";
 import { DataTable } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { supabase } from "@/lib/supabase/client";
@@ -102,6 +103,9 @@ export default function TransportesPage() {
 
   const [activeTab, setActiveTab] = useState<"viajes" | "catalogo" | "facturas">("viajes");
   const [busquedaCatalogo, setBusquedaCatalogo] = useState("");
+  // "Cargar factura": la misma ventana de Compras Lazza, con Transporte elegido. facturasKey recarga la pestaña Facturas al guardar.
+  const [cargandoFactura, setCargandoFactura] = useState(false);
+  const [facturasKey, setFacturasKey] = useState(0);
 
   // ─── Datos ───
   const [viajes, setViajes] = useState<ViajeRow[]>([]);
@@ -586,7 +590,7 @@ export default function TransportesPage() {
       <Header
         title="Transportes"
         subtitle="Contador de viajes por transportista"
-        action={activeTab === "catalogo" ? { label: "Nuevo transportista", onClick: () => { window.location.href = "/proveedores?crear=&tipo=transportista"; } } : undefined}
+        action={activeTab === "catalogo" ? { label: "Nuevo transportista", onClick: () => { window.location.href = "/proveedores?crear=&tipo=transportista"; } } : { label: "Cargar factura", onClick: () => setCargandoFactura(true) }}
       />
 
       <main className="mx-auto max-w-7xl px-4 py-4 sm:px-6">
@@ -672,7 +676,7 @@ export default function TransportesPage() {
                               </div>
                             </td>
                             <td className="px-2 py-1">
-                              {moneda === "ARS" && r.pendientes.length > 0 ? (
+                              {noFactura && moneda === "ARS" && r.pendientes.length > 0 ? (
                                 <div className="flex items-center gap-1">
                                   <input
                                     value={montoGeneral[r.clave] || ""}
@@ -688,7 +692,7 @@ export default function TransportesPage() {
                                 </div>
                               ) : <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>}
                             </td>
-                            <td className="px-2 py-1 text-right tabular-nums">{r.viajes > 0 ? formatCurrency(r.total, moneda) : <span className="text-zinc-300 dark:text-zinc-600">—</span>}</td>
+                            <td className="px-2 py-1 text-right tabular-nums">{noFactura && r.viajes > 0 ? formatCurrency(r.total, moneda) : <span className="text-zinc-300 dark:text-zinc-600">—</span>}</td>
                             <td className="px-3 py-1 text-right">
                               {r.pendientes.length > 0 && noFactura ? (
                                 <button
@@ -730,7 +734,7 @@ export default function TransportesPage() {
                                         return (
                                           <tr key={v.id} className={cancelado ? "opacity-50" : ""}>
                                             <td className="px-1 py-0.5 text-center">
-                                              {!trabado && !cancelado && (
+                                              {noFactura && !trabado && !cancelado && (
                                                 <input type="checkbox" checked={seleccion.has(v.id)} onChange={() => tildar(v.id)} className="accent-orange-600" aria-label="Tildar para liquidar" />
                                               )}
                                             </td>
@@ -738,7 +742,7 @@ export default function TransportesPage() {
                                               <input type="date" key={`f-${v.fecha}`} defaultValue={v.fecha} disabled={trabado || cancelado} onBlur={(e) => e.target.value && e.target.value !== v.fecha && editarViaje(v, { fecha: e.target.value })} className={`${celda} w-[118px]`} />
                                             </td>
                                             <td className="px-1 py-0.5 text-right">
-                                              <input
+                                              {!noFactura ? <span className="text-[11px] text-zinc-300 dark:text-zinc-600">—</span> : <input
                                                 key={`c-${v.costo ?? ""}`}
                                                 defaultValue={v.costo ?? ""}
                                                 disabled={trabado || cancelado}
@@ -751,7 +755,7 @@ export default function TransportesPage() {
                                                 }}
                                                 onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
                                                 className={`${celda} w-24 text-right tabular-nums placeholder:text-zinc-300 dark:placeholder:text-zinc-600`}
-                                              />
+                                              />}
                                             </td>
                                             <td className="px-1 py-0.5">
                                               <input
@@ -803,7 +807,12 @@ export default function TransportesPage() {
         {/* ══════════════════════════════════════════════════════════════════
             TAB: CATÁLOGO TRANSPORTISTAS
            ══════════════════════════════════════════════════════════════════ */}
-        {activeTab === "facturas" && socId && <TransportesFacturas socId={socId} />}
+        {activeTab === "facturas" && socId && <TransportesFacturas key={facturasKey} socId={socId} />}
+
+        {cargandoFactura && socId && (
+          <ComprasLazzaFactura sociedadId={socId} tipoInicial="transporte" onClose={() => setCargandoFactura(false)}
+            onGuardada={async () => { setFacturasKey((k) => k + 1); }} />
+        )}
 
         {activeTab === "catalogo" && (
           <div className="flex gap-6">

@@ -64,7 +64,7 @@ const btnSi = "rounded-md bg-violet-600 px-2 py-1 text-xs font-medium text-white
 const btnNo = "rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-700 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800";
 const elegido = "ring-2 ring-violet-400";
 
-export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicial, para, onGuardada }: {
+export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicial, para, onGuardada, tipoInicial }: {
   sociedadId: string;
   onClose: () => void;
   /** Pestaña Mercado Libre (Augusto 30/10): arranca con "Ya pagada con Visa" elegido (se puede cambiar). */
@@ -73,6 +73,8 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
   para?: string;
   /** Pestaña Mercado Libre: al guardar la factura, se une a los artículos elegidos. */
   onGuardada?: (facturaId: string) => Promise<void>;
+  /** Desde Transportes (Augusto 30/10): arranca con este tipo elegido ("transporte"); se puede cambiar. Sin esto, se avisa si el proveedor es transportista. */
+  tipoInicial?: "mercaderia" | "transporte";
 }) {
   const { toast } = useToast();
   const { profile } = useUser();
@@ -112,7 +114,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
   // Cambia al sacar/agregar renglones: los campos de texto de la tabla se rearman con los valores nuevos.
   const [filasKey, setFilasKey] = useState(0);
   // Compra o Transporte (null = lo sugerido). ultimoTipo = tipo de la última factura del proveedor.
-  const [tipoElegido, setTipoElegido] = useState<"mercaderia" | "transporte" | null>(null);
+  const [tipoElegido, setTipoElegido] = useState<"mercaderia" | "transporte" | null>(tipoInicial ?? null);
   const [ultimoTipo, setUltimoTipo] = useState<string | null>(null);
 
   const plata = (n: number) => formatCurrency(n, factura?.moneda || "ARS");
@@ -123,7 +125,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
     ncKey.current = null;
     setError(""); setFactura(null); setProveedor(null); setBuscandoProv(false);
     setConVisa(conVisaInicial ?? null); setFaltaElegirPago(false); setForma(null); setDiasTxt(null); setNotaPago(""); setDuplicada(false); setEsNota(false); setOtraSociedad(""); setNoSeLeyo(false); setOrigen("");
-    setPercTxt(""); setTotalTxt(""); setTipoElegido(null); setUltimoTipo(null);
+    setPercTxt(""); setTotalTxt(""); setTipoElegido(tipoInicial ?? null); setUltimoTipo(null);
   }
 
   async function leer(file: File) {
@@ -223,7 +225,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
   async function elegirProveedor(p: Proveedor, f: FacturaCarga) {
     const { data: dups } = await db.from("facturas_compra").select("numero_factura, tipo_comprobante, tipo, created_at").eq("sociedad_id", sociedadId).eq("proveedor_id", p.id).neq("estado", "anulada");
     const ultima = [...(dups || [])].filter((x: any) => !String(x.tipo_comprobante || "").startsWith("NC")).sort((a: any, b: any) => String(b.created_at).localeCompare(String(a.created_at)))[0];
-    setUltimoTipo(ultima?.tipo ?? null); setTipoElegido(null);
+    setUltimoTipo(ultima?.tipo ?? null); setTipoElegido(tipoInicial ?? null);
     const norm = (n: string) => { const m = String(n || "").replace(/\s+/g, "").match(/^(\d{1,5})[-/](\d{1,8})$/); return m ? `${m[1].padStart(5, "0")}-${m[2].padStart(8, "0")}` : String(n || "").replace(/\s+/g, "").toUpperCase(); };
     setDuplicada(!!f.numero && (dups || []).some((x: any) => norm(x.numero_factura) === norm(f.numero) && String(x.tipo_comprobante || "FC A").toUpperCase() === f.tipo.toUpperCase()));
     // Sin factura: si ya hay una del mismo proveedor y día, el número sigue con (2), (3)…
@@ -390,6 +392,14 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
           <h2 className="text-lg font-bold">Cargar factura <span className="text-sm font-normal text-zinc-500">· {para ? `Mercado Libre · ${para}` : "Compras Lazza"}</span></h2>
           <button onClick={onClose} disabled={guardando} className="rounded p-1 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-5 w-5" /></button>
         </div>
+
+        {proveedor?.es_transportista && !tipoInicial && (
+          <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-200">
+            <span>Este proveedor es transportista: cargala desde Transportes.</span>
+            <a href="/transportes" className="rounded-md bg-amber-600 px-2 py-1 text-xs font-medium text-white hover:bg-amber-700">Ir a Transportes</a>
+            <span className="text-xs opacity-80">Es un aviso: podés seguir cargándola acá.</span>
+          </div>
+        )}
 
         {factura && (
           <div className="space-y-3">
