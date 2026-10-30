@@ -6,6 +6,7 @@
 // (documento_tipo "aviso_cobranza", documento_id = cliente). Nada se envía solo: siempre se confirma antes.
 // El saldo de cada factura es el de Finanzas > Facturas (traerFacturasFL). Solo lee la base; no guarda nada propio.
 // Programar (Augusto 29/10): en la confirmación se puede elegir día y hora; Resend lo manda a esa hora y se puede cancelar antes.
+// Filtro Sin mandar / Mandados / Todos (Augusto 30/10): abre en Sin mandar; mandado = aviso en los últimos 7 días o programado (avisoMandado).
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { BellRing, ChevronDown, ChevronRight, Clock, Loader2, RefreshCw, Send } from "lucide-react";
@@ -21,7 +22,7 @@ import { facturaPDFBase64 } from "@/lib/factura-pdf";
 import { fechaHoraAR } from "@/lib/presupuesto-envios";
 import { ETIQUETA_ESTADO, mananaALas9, programarPara, type EstadoMail } from "@/lib/correos-enviados";
 import {
-  armarAvisos, destinatariosAviso, fmtFechaAviso, fmtMontoAviso, haceCuanto, mensajeAviso, separarMails, sumarDias, textoAHtml, totalTexto,
+  armarAvisos, avisoMandado, destinatariosAviso, fmtFechaAviso, fmtMontoAviso, haceCuanto, mensajeAviso, separarMails, sumarDias, textoAHtml, totalTexto,
   type FacturaAviso, type GrupoAviso, type TipoAviso,
 } from "@/lib/avisos-cobranza";
 
@@ -39,12 +40,20 @@ const PESTANAS: { id: TipoAviso; titulo: string }[] = [
   { id: "vencidas", titulo: "Vencidas" },
 ];
 
+type FiltroEnvio = "sin_mandar" | "mandados" | "todos";
+const FILTROS: { id: FiltroEnvio; titulo: string }[] = [
+  { id: "sin_mandar", titulo: "Sin mandar" },
+  { id: "mandados", titulo: "Mandados" },
+  { id: "todos", titulo: "Todos" },
+];
+
 export default function CobranzasPage() {
   const { role, sociedadActiva, loading: cargandoUsuario } = useUser();
   const { toast } = useToast();
   const sociedadId = sociedadActiva?.id;
   const hoy = todayAR();
   const [pestana, setPestana] = useState<TipoAviso>("vencidas");
+  const [filtro, setFiltro] = useState<FiltroEnvio>("sin_mandar");
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [facturas, setFacturas] = useState<FacturaAviso[]>([]);
@@ -117,13 +126,16 @@ export default function CobranzasPage() {
   }, [sociedadId, hoy, cargarEnvios]);
 
   useEffect(() => { void cargar(); }, [cargar]);
-  useEffect(() => { setTildados(new Set()); setAbierto(null); setConfirmar(null); }, [pestana, sociedadId]);
+  useEffect(() => { setTildados(new Set()); setAbierto(null); setConfirmar(null); }, [pestana, filtro, sociedadId]);
 
   const avisos = useMemo(() => {
     const dias = new Map([...clientes].map(([id, c]) => [id, c.diasCC]));
     return armarAvisos(facturas, dias, hoy);
   }, [facturas, clientes, hoy]);
-  const grupos = avisos[pestana];
+  const todosGrupos = avisos[pestana];
+  const mandado = useCallback((g: GrupoAviso) => avisoMandado(ultimos.get(g.clienteId), hoy), [ultimos, hoy]);
+  const cuentaFiltro = (f: FiltroEnvio) => f === "todos" ? todosGrupos.length : todosGrupos.filter((g) => mandado(g) === (f === "mandados")).length;
+  const grupos = filtro === "todos" ? todosGrupos : todosGrupos.filter((g) => mandado(g) === (filtro === "mandados"));
 
   const nombreSociedad = sociedadActiva?.nombre || "Lazzari";
   const clave = (g: GrupoAviso) => `${g.tipo}:${g.clienteId}`;
@@ -234,8 +246,17 @@ export default function CobranzasPage() {
             </button>
           </div>
 
-          {!cargando && grupos.length > 0 && (
+          {!cargando && todosGrupos.length > 0 && (
             <div className="flex flex-wrap items-center gap-3 border-b border-zinc-200 px-3 py-2 text-sm dark:border-zinc-800">
+              <span className="inline-flex rounded-lg border border-zinc-200 p-0.5 dark:border-zinc-700">
+                {FILTROS.map((f) => (
+                  <button key={f.id} onClick={() => setFiltro(f.id)}
+                    title={f.id === "mandados" ? "Con aviso en los últimos 7 días o programado" : f.id === "sin_mandar" ? "Sin aviso en los últimos 7 días (o el último rebotó)" : ""}
+                    className={`rounded-md px-2.5 h-7 text-sm ${filtro === f.id ? "bg-zinc-100 font-semibold text-zinc-900 dark:bg-zinc-800 dark:text-white" : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"}`}>
+                    {f.titulo} <span className="font-normal text-zinc-500">{cuentaFiltro(f.id)}</span>
+                  </button>
+                ))}
+              </span>
               <label className="inline-flex items-center gap-2 text-zinc-600 dark:text-zinc-300">
                 <input type="checkbox" checked={tildables.length > 0 && tildables.every((g) => tildados.has(clave(g)))}
                   onChange={(e) => setTildados(e.target.checked ? new Set(tildables.map(clave)) : new Set())} />
@@ -281,6 +302,8 @@ export default function CobranzasPage() {
 
           {error ? <p className="p-4 text-sm text-red-600">{error}</p> : cargando ? <p className="p-4 text-sm text-zinc-500">Cargando...</p> : !sociedadId ? (
             <p className="p-4 text-sm text-zinc-500">Elegí una sociedad.</p>
+          ) : todosGrupos.length > 0 && grupos.length === 0 ? (
+            <p className="p-4 text-sm text-zinc-500">{filtro === "sin_mandar" ? "A todos se les mandó un aviso en los últimos 7 días." : "Todavía no se le mandó a ninguno en los últimos 7 días."}</p>
           ) : grupos.length === 0 ? (
             <p className="p-4 text-sm text-zinc-500">{pestana === "semana" ? "No hay facturas que venzan esta semana." : "No hay facturas vencidas sin cobrar."}</p>
           ) : (
@@ -353,7 +376,7 @@ export default function CobranzasPage() {
               })}
             </ul>
           )}
-          {!cargando && grupos.length > 0 && <p className="border-t border-zinc-200 px-3 py-1.5 text-xs text-zinc-500 dark:border-zinc-800">Nada se envía solo: siempre se confirma antes (al confirmar se puede programar para otro día y hora). Cada envío queda en <Link href="/correos" className="text-orange-600 hover:underline">Correos enviados</Link>. Los que avisaron un pago en los últimos 15 días se marcan para esperar.</p>}
+          {!cargando && todosGrupos.length > 0 && <p className="border-t border-zinc-200 px-3 py-1.5 text-xs text-zinc-500 dark:border-zinc-800">Nada se envía solo: siempre se confirma antes (al confirmar se puede programar para otro día y hora). Cada envío queda en <Link href="/correos" className="text-orange-600 hover:underline">Correos enviados</Link>. Los que avisaron un pago en los últimos 15 días se marcan para esperar.</p>}
         </Card>
       </div>
     </>

@@ -1,5 +1,5 @@
 // npx tsx scripts/test-avisos-cobranza.ts
-import { armarAvisos, destinatariosAviso, finDeSemana, haceCuanto, mensajeAviso, separarMails, textoAHtml, totalTexto, venceFactura, type FacturaAviso } from "../src/lib/avisos-cobranza";
+import { armarAvisos, avisoMandado, destinatariosAviso, finDeSemana, haceCuanto, mensajeAviso, separarMails, textoAHtml, totalTexto, venceFactura, type FacturaAviso } from "../src/lib/avisos-cobranza";
 
 let fallas = 0;
 const ok = (cond: boolean, msg: string) => { if (!cond) { fallas++; console.error("FALLA:", msg); } else console.log("ok:", msg); };
@@ -48,6 +48,16 @@ ok(destinatariosAviso([{ cargo: null, nombre: "Facturas a pagar", email: "Factur
 ok(destinatariosAviso([{ cargo: null, nombre: "Proveedores Synthon", email: "proveedores.ar@synthon.com" }], "").join() === "proveedores.ar@synthon.com", "Para: 'Proveedores' (Synthon)");
 ok(destinatariosAviso([{ cargo: "COMPRAS", nombre: "Ana", email: "ana@corteva.com" }], "seedspayables.argentina@corteva.com").join() === "seedspayables.argentina@corteva.com", "Para: Corteva Seeds va al mail de payables del cliente");
 ok(haceCuanto("2026-10-26T15:00:00Z", "2026-10-29") === "hace 3 días" && haceCuanto("2026-10-29", "2026-10-29") === "hoy", "hace cuánto");
+
+ok(haceCuanto("2026-10-30T01:09:38Z", "2026-10-30") === "ayer", "hace cuánto: 22 h de Argentina del día anterior es ayer");
+
+// Mandado / sin mandar (Augusto 30/10: últimos 7 días; programado cuenta; rebotado no)
+ok(!avisoMandado(undefined, "2026-10-30"), "sin aviso → sin mandar");
+ok(avisoMandado({ fecha: "2026-10-30T01:09:38Z", estado: "entregado" }, "2026-10-30"), "mandado anoche 22 h (01 h UTC) → mandado");
+ok(avisoMandado({ fecha: "2026-10-24T15:00:00Z", estado: "entregado" }, "2026-10-30"), "hace 6 días → mandado");
+ok(!avisoMandado({ fecha: "2026-10-23T15:00:00Z", estado: "entregado" }, "2026-10-30"), "hace 7 días → vuelve a sin mandar");
+ok(avisoMandado({ fecha: "2026-11-02T12:00:00Z", estado: "programado" }, "2026-10-30"), "programado → mandado");
+ok(!avisoMandado({ fecha: "2026-10-29T15:00:00Z", estado: "rebotado" }, "2026-10-30"), "rebotado → sin mandar");
 
 if (fallas) { console.error(`\n${fallas} FALLAS`); process.exit(1); }
 console.log("\nTodo OK");

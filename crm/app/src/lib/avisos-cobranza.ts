@@ -160,6 +160,19 @@ export function destinatariosAviso(contactos: { cargo: string | null; nombre: st
 
 /** "hoy", "ayer", "hace 3 días" */
 export function haceCuanto(fecha: string, hoy: string): string {
-  const d = diasEntre(iso(fecha), hoy);
+  const d = diasEntre(fechaAR(fecha), hoy);
   return d <= 0 ? "hoy" : d === 1 ? "ayer" : `hace ${d} días`;
+}
+
+/** Días que un aviso cuenta como "ya mandado" en Cobranzas (Augusto 30/10: pasada una semana vuelve a "Sin mandar"). */
+export const DIAS_AVISO_MANDADO = 7;
+
+/** Fecha (AAAA-MM-DD, hora de Argentina) de un timestamp de la base. */
+const fechaAR = (s: string) => (String(s).length > 10 ? new Date(Date.parse(s) - 3 * 3_600_000).toISOString().slice(0, 10) : iso(s));
+
+/** ¿Al cliente ya se le mandó un aviso? Sí si el último salió en los últimos 7 días o está programado.
+ *  Un aviso rebotado o en spam no llegó: cuenta como sin mandar. Los cancelados no llegan acá. */
+export function avisoMandado(ultimo: { fecha: string; estado: string } | null | undefined, hoy: string): boolean {
+  if (!ultimo || ultimo.estado === "rebotado" || ultimo.estado === "spam") return false;
+  return ultimo.estado === "programado" || diasEntre(fechaAR(ultimo.fecha), hoy) < DIAS_AVISO_MANDADO;
 }
