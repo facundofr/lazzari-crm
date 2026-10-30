@@ -10,6 +10,7 @@ import { fechaMedioCobro, avisoFechaCobroFutura } from "@/lib/fecha-cobro";
 import { repartirCobro, avisoDiferenciaCobro, facturasParaRegistrar } from "@/lib/cobro-reparto";
 import { fuentesSaldoFavorCliente, repartirSaldoFavorCliente, faltaSegunOrden, cubreConSaldoFavor, type FuenteSaldoFavorCliente } from "@/lib/saldo-favor-cliente";
 import { claveArchivo, mismaRetencion, mismoPago, sinRepetir } from "@/lib/comprobante-medios";
+import { movimientoParecido, renglonesRepetidos, TIPOS_COBRO } from "@/lib/cobro-parecido";
 import { ZonaArchivos } from "@/components/ui/zona-archivos";
 import { useToast } from "@/components/ui/toast";
 import { textoCobro } from "@/lib/cartel-guardado";
@@ -72,6 +73,8 @@ const todayStr = () => todayAR();
 // Acepta "1.241.525,27", "1241525,27" o "1241525.27". Vacío o inválido = 0.
 const num = (v: string) => { const n = parseDecimalInput(v); return Number.isFinite(n) ? n : 0; };
 const r2 = (n: number) => Math.round(n * 100) / 100;
+// La función todavía no está en la base (migración sin correr).
+const faltaFuncion = (e: any, nombre: string) => !!e && (e.code === "PGRST202" || (String(e.message || "").includes(nombre) && /function|funci/i.test(String(e.message || ""))));
 
 const MEDIO_TIPOS = [
   { value: "transferencia", label: "Transferencia bancaria" },
@@ -104,6 +107,12 @@ function mapTipoDB(tipo: string): string {
   if (tipo === "percepcion_iva" || tipo === "percepcion_iibb") return "ajuste";
   return tipo;
 }
+
+// Mismo pago / misma retención (lib/comprobante-medios.ts): para no sumar dos veces un comprobante y para avisar renglones repetidos.
+const pagoDe = (x: MedioPago) => ({ tipo: x.tipo, monto: num(x.monto), numero: x.cheque_numero || x.referencia, fecha: x.fecha });
+const mismoMedio = (a: MedioPago, b: MedioPago) => mismoPago(pagoDe(a), pagoDe(b));
+const retDe = (x: RetencionLinea) => ({ tipo: x.tipo, monto: num(x.monto), certificado: x.certificado });
+const mismaRet = (a: RetencionLinea, b: RetencionLinea) => mismaRetencion(retDe(a), retDe(b));
 
 function buildDesc(prefix: string, ref: string, obs: string, opRef: string): string {
   const parts: string[] = [];
@@ -152,6 +161,24 @@ export default function CobroMasivoLiquidacion({
       });
     return () => { vivo = false; };
   }, [sociedadId, clienteId, moneda]);
+
+  // Cobros sueltos del cliente (sin factura ni aplicación): si uno de los medios ya estaba cargado así, se avisa al confirmar
+  // (auditoría de la plata 30/10/2026, punto 6). Si no se pueden leer, no hay aviso: nunca frena.
+  const [sueltos, setSueltos] = useState<{ id: string; fecha: string; monto: number; tipo: string; descripcion: string | null }[]>([]);
+  useEffect(() => {
+    let vivo = true;
+    (supabase as any).from("movimientos").select("id, fecha, monto, tipo, descripcion")
+      .eq("sociedad_id", sociedadId).eq("cliente_id", clienteId).eq("moneda", "ARS").in("tipo", TIPOS_COBRO)
+      .is("factura_id", null).is("liquidacion_fx_id", null).or("anulado.is.null,anulado.eq.false")
+      .then(async ({ data, error: e }: any) => {
+        if (!vivo || e || !data?.length) return;
+        const { data: aps, error: e2 } = await (supabase as any).from("cobro_aplicaciones").select("movimiento_id").in("movimiento_id", data.map((r: any) => r.id));
+        if (!vivo || e2) return;
+        const aplicados = new Set((aps || []).map((a: any) => a.movimiento_id));
+        setSueltos(data.filter((r: any) => !aplicados.has(r.id)));
+      });
+    return () => { vivo = false; };
+  }, [sociedadId, clienteId]);
 
   // ── Tipo de cambio (solo para facturas USD) ──
   const isUSD = moneda === "USD";
@@ -301,10 +328,6 @@ export default function CobroMasivoLiquidacion({
 
       // 26/10/2026 (auditoría UX, arreglo 3): volver a subir el comprobante (o la retención que ya venía en la OP)
       // no suma de nuevo lo que ya está cargado; se avisa (lib/comprobante-medios.ts).
-      const pagoDe = (x: MedioPago) => ({ tipo: x.tipo, monto: num(x.monto), numero: x.cheque_numero || x.referencia, fecha: x.fecha });
-      const mismoMedio = (a: MedioPago, b: MedioPago) => mismoPago(pagoDe(a), pagoDe(b));
-      const retDe = (x: RetencionLinea) => ({ tipo: x.tipo, monto: num(x.monto), certificado: x.certificado });
-      const mismaRet = (a: RetencionLinea, b: RetencionLinea) => mismaRetencion(retDe(a), retDe(b));
       const mediosRepetidos = sinRepetir(medios, parsedMedios, mismoMedio).repetidos;
       const retencionesRepetidas = sinRepetir(retenciones, parsedRetenciones, mismaRet).repetidos;
       const monedaMedios = isUSD ? "ARS" : moneda;
@@ -382,6 +405,17 @@ export default function CobroMasivoLiquidacion({
         if (!confirm(aviso)) { setSaving(false); return; }
       }
 
+      // Auditoría de la plata (30/10/2026, punto 6): renglones repetidos y cobro suelto parecido. Avisan, nunca frenan.
+      const conMonto = medios.filter((x) => num(x.monto) > 0);
+      const enPesos = isUSD ? "ARS" : m;
+      const repetidos = [
+        ...renglonesRepetidos(conMonto, mismoMedio).map((g) => `${MEDIO_TIPOS.find((t) => t.value === g.renglon.tipo)?.label || g.renglon.tipo} ${fc(num(g.renglon.monto), enPesos)} (${g.veces} veces)`),
+        ...renglonesRepetidos(retenciones.filter((x) => num(x.monto) > 0), mismaRet).map((g) => `${RETENCION_TIPOS.find((t) => t.value === g.renglon.tipo)?.label || g.renglon.tipo} ${fc(num(g.renglon.monto), enPesos)} (${g.veces} veces)`),
+      ];
+      if (repetidos.length && !confirm(`Hay renglones repetidos en este cobro:\n${repetidos.join("\n")}\n\nSi son pagos distintos, Aceptar registra el cobro igual.`)) { setSaving(false); return; }
+      const parecido = conMonto.map((x) => movimientoParecido({ fecha: x.fecha || fechaPago, monto: num(x.monto) }, sueltos)).find(Boolean);
+      if (parecido && !confirm(`Este cliente ya tiene un cobro sin factura parecido:\n${formatDate(parecido.fecha)} · ${fc(Number(parecido.monto), "ARS")} · ${parecido.descripcion || parecido.tipo}\n\nSi es el mismo pago, cancelá: ya está cargado (revisalo en Movimientos). ¿Es otro pago? Aceptar registra el cobro igual.`)) { setSaving(false); return; }
+
       const cotizSuffix = isUSD && cotizNum > 0 ? ` | TC: ${cotizNum.toFixed(2)} (${cotizModalidad})` : "";
 
       // En dólares los montos van en pesos: la base necesita el tipo de cambio para aplicarlos a las facturas.
@@ -431,9 +465,6 @@ export default function CobroMasivoLiquidacion({
 
       if (!requestKeyRef.current) requestKeyRef.current = crypto.randomUUID();
 
-      // Primero el saldo a favor (si se tildó): así la base ve el saldo real de cada factura al registrar el cobro.
-      await aplicarSaldoFavor();
-
       // Una unica RPC confirma movimientos, aplicaciones y cheques en cartera.
       const base = {
         p_cliente_id: clienteId,
@@ -444,13 +475,28 @@ export default function CobroMasivoLiquidacion({
         p_sociedad_id: sociedadId,
         p_request_key: requestKeyRef.current,
       };
-      const { data, error: rpcErr } = usarDiferenciaCC
-        ? await (supabase as any).rpc("registrar_cobro_masivo_diferencia_cc", {
-          ...base,
-          p_diferencia: diferenciaCC,
-          p_descripcion: `Diferencia de cobro pasada a la cuenta corriente — Facturas: ${facturas.map((f) => f.numero).join(", ")}${opReferencia ? ` | OP: ${opReferencia}` : ""}`,
-        })
-        : await (supabase as any).rpc("registrar_cobro_masivo_seguro", base);
+      const diferenciaCCArgs = usarDiferenciaCC ? {
+        p_diferencia: diferenciaCC,
+        p_descripcion: `Diferencia de cobro pasada a la cuenta corriente — Facturas: ${facturas.map((f) => f.numero).join(", ")}${opReferencia ? ` | OP: ${opReferencia}` : ""}`,
+      } : null;
+      // Saldo a favor y cobro en una sola operación (auditoría de la plata 30/10/2026, punto 6): si el cobro falla, el saldo
+      // a favor tampoco queda aplicado. Sin la migración 20261030120000 sigue como antes, en dos pasos.
+      let res: { data: any; error: any } | null = null;
+      if (aplicacionesSF.length && !sfAplicadoRef.current) {
+        res = await (supabase as any).rpc("registrar_cobro_con_saldo_favor", {
+          ...base, ...diferenciaCCArgs,
+          p_aplicaciones: aplicacionesSF.map((a) => ({ movimiento_id: a.movimiento_id, factura_id: a.factura_id, monto: a.monto })),
+        });
+        if (faltaFuncion(res?.error, "registrar_cobro_con_saldo_favor")) res = null;
+      }
+      if (!res) {
+        // Primero el saldo a favor (si se tildó): así la base ve el saldo real de cada factura al registrar el cobro.
+        await aplicarSaldoFavor();
+        res = diferenciaCCArgs
+          ? await (supabase as any).rpc("registrar_cobro_masivo_diferencia_cc", { ...base, ...diferenciaCCArgs })
+          : await (supabase as any).rpc("registrar_cobro_masivo_seguro", base);
+      }
+      const { data, error: rpcErr } = res!;
       if (rpcErr) {
         if (usarDiferenciaCC && /registrar_cobro_masivo_diferencia_cc/.test(String(rpcErr.message || ""))) {
           throw new Error("Falta correr la migración 20261012110000 (diferencia a la cuenta corriente). Mientras tanto elegí \"Saldo en la factura más nueva\".");

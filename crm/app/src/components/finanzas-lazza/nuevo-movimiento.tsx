@@ -3,14 +3,15 @@
 // Finanzas Lazza → Movimientos → "Nuevo movimiento" (23/10/2026, pedido de Augusto para la mudanza de Finanzas).
 // Mismo alta manual que Finanzas (handleCreateMov): un insert en `movimientos` con la sociedad activa y un cliente o proveedor.
 // Sin retenciones (Augusto: "sacale las retenciones"). Cliente/proveedor con Autocompletar.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "@/components/ui/modal";
 import { Input, Select } from "@/components/ui/input";
 import Autocompletar from "@/components/ui/autocompletar";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { useUser } from "@/lib/auth-context";
-import { todayAR } from "@/lib/utils";
+import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
+import { movimientoParecido, rangoParecido, TOLERANCIA_PARECIDO } from "@/lib/cobro-parecido";
 
 const db = supabase as any;
 
@@ -31,6 +32,22 @@ export function errorMovimientoNuevo(f: DatosMovimientoNuevo): string | null {
   return null;
 }
 
+/**
+ * Lo ya cargado de ese cliente o proveedor que se parece al nuevo (importe ±$ 1, a 5 días o menos). Auditoría de la plata
+ * (30/10/2026, punto 6): un cobro suelto no baja la cuenta corriente y la factura se volvía a cobrar. Si no se puede leer, null.
+ */
+async function buscarParecido(f: DatosMovimientoNuevo, sociedadId: string) {
+  const r = rangoParecido([f.fecha]);
+  if (!r || f.tipo === "ajuste") return null;
+  const { data, error } = await db.from("movimientos").select("id, fecha, monto, moneda, tipo, descripcion")
+    .eq("sociedad_id", sociedadId).eq(f.entidad.startsWith("c:") ? "cliente_id" : "proveedor_id", f.entidad.slice(2)).eq("moneda", f.moneda)
+    .gte("fecha", r.desde).lte("fecha", r.hasta).gte("monto", f.monto - TOLERANCIA_PARECIDO).lte("monto", f.monto + TOLERANCIA_PARECIDO)
+    .not("tipo", "in", "(ajuste,retencion_iva,retencion_ganancias,retencion_iibb,retencion_suss)").or("anulado.is.null,anulado.eq.false");
+  if (error) return null;
+  const filas: { id: string; fecha: string; monto: number; moneda: "ARS" | "USD"; tipo: string; descripcion: string | null }[] = data || [];
+  return movimientoParecido({ fecha: f.fecha, monto: f.monto, moneda: f.moneda }, filas);
+}
+
 const vacio = (): DatosMovimientoNuevo => ({ tipo: "cobro", descripcion: "", monto: 0, moneda: "ARS", fecha: todayAR(), entidad: "" });
 
 export function NuevoMovimiento({ sociedadId, abierto, onClose, onGuardado }: { sociedadId: string; abierto: boolean; onClose: () => void; onGuardado: () => void }) {
@@ -39,6 +56,8 @@ export function NuevoMovimiento({ sociedadId, abierto, onClose, onGuardado }: { 
   const [personas, setPersonas] = useState<{ valor: string; texto: string; detalle: string }[]>([]);
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
+  // Doble clic en Guardar = un solo movimiento.
+  const enCurso = useRef(false);
 
   useEffect(() => {
     if (!abierto) return;
@@ -62,8 +81,12 @@ export function NuevoMovimiento({ sociedadId, abierto, onClose, onGuardado }: { 
   const guardar = async () => {
     const e = errorMovimientoNuevo(form);
     if (e) { setError(e); return; }
+    if (enCurso.current) return;
+    enCurso.current = true;
     setGuardando(true); setError("");
     try {
+      const p = await buscarParecido(form, sociedadId);
+      if (p && !confirm(`Ya hay un movimiento parecido de ${form.entidad.startsWith("c:") ? "este cliente" : "este proveedor"}:\n${formatDate(p.fecha)} · ${TIPOS.find((t) => t.value === p.tipo)?.label || p.tipo} · ${formatCurrency(Number(p.monto), p.moneda)}${p.descripcion ? ` · ${p.descripcion}` : ""}\n\n¿Es otro? Aceptar lo guarda igual.`)) return;
       const fila: Record<string, unknown> = {
         tipo: form.tipo, descripcion: form.descripcion.trim(), monto: form.monto, moneda: form.moneda, fecha: form.fecha, sociedad_id: sociedadId,
       };
@@ -74,7 +97,7 @@ export function NuevoMovimiento({ sociedadId, abierto, onClose, onGuardado }: { 
       onGuardado(); onClose();
     } catch (err: any) {
       setError(err?.message || "Error al guardar");
-    } finally { setGuardando(false); }
+    } finally { setGuardando(false); enCurso.current = false; }
   };
 
   return (

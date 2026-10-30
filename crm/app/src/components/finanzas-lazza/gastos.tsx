@@ -9,7 +9,7 @@
 // Arreglo 17 (26/10/2026), lo que había en Finanzas vieja: "Leer VEP (IA)" en la ventana del gasto (/api/parse-vep, lib/vep.ts:
 // completa y adjunta el PDF, nunca guarda solo) y el fijo con "SICORE auto" (calculo 'sicore'): su monto son las retenciones
 // de Ganancias del mes anterior, las mismas del TXT SICORE (montoSicore).
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { AlertTriangle, ArrowDown, ArrowUp, ChevronsUpDown, Loader2, Paperclip, Pencil, Plus, Search, Sparkles, Trash2, Undo2, X } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
@@ -17,7 +17,7 @@ import { useToast } from "@/components/ui/toast";
 import { Select } from "@/components/ui/input";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import {
-  GRUPOS, GRUPOS_EDITABLES, MEDIOS, nombreGrupo, armarFilasGastos, filasDeTransportes, etiquetaMedio, filtrarGastos, fijosSinCargar, grupoDe, totalesPorGrupo,
+  GRUPOS, GRUPOS_EDITABLES, MEDIOS, nombreGrupo, armarFilasGastos, filasDeTransportes, etiquetaMedio, filtrarGastos, fijosCubiertos, fijosSinCargar, gastoParecido, grupoDe, mesDelDetalleFijo, numeroVep, totalesPorGrupo,
   type FacturaTransporteRow, type FijoRow, type FilaGasto, type GastoRow, type Grupo,
 } from "@/lib/gastos-lazza";
 import { montoSicore, sugerirGastoFijo } from "@/lib/gasto-fijo-factura";
@@ -48,6 +48,8 @@ const plata = (m: { ARS: number; USD: number }) => [m.ARS > 0.005 || !m.USD ? fo
 interface Borrador { id: string | null; fecha: string; grupo: Grupo; detalle: string; fijo: boolean; medio: string; monto: string; moneda: "ARS" | "USD"; fijoId: string | null; archivo?: File | null; nota?: string }
 interface PagoGasto { id: string; gasto_manual_id: string; monto: number; conciliado: boolean; cruzado: boolean }
 interface Sicore { mes: string; monto: number }
+/** Factura de compra del proveedor de un gasto fijo (para "cubierto por la factura"). */
+interface FacturaFijo { id: string; numero_factura: string | null; fecha: string; proveedor_id: string | null; estado: string | null }
 const nombreDeMes = (mes: string) => `${MESES[Number(mes.slice(5, 7)) - 1]} ${mes.slice(0, 4)}`;
 
 export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: string; periodo: string }) {
@@ -57,6 +59,8 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
   const [fijos, setFijos] = useState<FijoRow[]>([]);
   const [pagos, setPagos] = useState<PagoGasto[]>([]);
   const [sicore, setSicore] = useState<Sicore | null>(null);
+  const [facturasFijos, setFacturasFijos] = useState<FacturaFijo[]>([]);
+  const enCurso = useRef(false); // un solo guardado a la vez (doble clic en Guardar)
   const [error, setError] = useState<string | null>(null);
   const [sinMigracion, setSinMigracion] = useState(false);
   const [cargadosSolos, setCargadosSolos] = useState<{ gasto_id: string; descripcion: string; monto: number }[]>([]);
@@ -97,6 +101,9 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
         // Grupo Transportes: las facturas de transporte del mes (solo se muestran; se pagan con OP).
         traerTodo<any>(() => db.from("facturas_compra").select("id, fecha, numero_factura, total, moneda, estado, archivo_url, proveedores(razon_social)").eq("sociedad_id", sociedadId).eq("tipo", "transporte").neq("estado", "anulada").gte("fecha", desde).lt("fecha", hasta).order("id")),
       ]);
+      // Fijos con proveedor (auditoría D4): si su factura del mes ya está en Compras, el fijo queda "cubierto por la factura".
+      const provs = [...new Set(fs.filter((f) => f.activo !== false && f.proveedor_id).map((f) => f.proveedor_id as string))];
+      const fcs = provs.length ? await traerTodo<FacturaFijo>(() => db.from("facturas_compra").select("id, numero_factura, fecha, proveedor_id, estado").eq("sociedad_id", sociedadId).in("proveedor_id", provs).neq("estado", "anulada").gte("fecha", desde).lt("fecha", hasta).order("id")) : [];
       const retenciones = [
         ...ops.map((o: any) => ({ fecha: String(o.fecha).slice(0, 10), estado: o.estado, retencion: Number(o.retencion_ganancias_monto) })),
         ...directos.map((m: any) => ({ fecha: String(m.fecha).slice(0, 10), estado: m.anulado ? "anulada" : null, retencion: Number(m.retencion_ganancias_monto) })),
@@ -115,6 +122,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
       }
       if (!vivo) return;
       setTransportes(trs.map((f: any) => ({ ...f, proveedor: f.proveedores?.razon_social ?? null })));
+      setFacturasFijos(fcs);
       setGastos(gs); setFijos(fs); setPagos(ps); setSicore(montoSicore(retenciones, `${periodo}-01`));
     })().catch((e) => { console.error("Finanzas Lazza · Gastos:", e); if (vivo) setError("No se pudieron cargar los gastos. Recargá la página."); });
     return () => { vivo = false; };
@@ -144,13 +152,29 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
   const totales = useMemo(() => totalesPorGrupo(filas), [filas]);
   const totalVisible = useMemo(() => ({ ARS: visibles.filter((x) => x.moneda === "ARS").reduce((s, x) => s + x.monto, 0), USD: visibles.filter((x) => x.moneda === "USD").reduce((s, x) => s + x.monto, 0) }), [visibles]);
   const pendientes = useMemo(() => fijosSinCargar(fijos, gastos || [], periodo), [fijos, gastos, periodo]);
+  const cubiertos = useMemo(() => fijosCubiertos(pendientes, facturasFijos), [pendientes, facturasFijos]);
   const pagosDe = useCallback((gastoId: string) => pagos.filter((p) => p.gasto_manual_id === gastoId), [pagos]);
   /** Monto con que se carga el fijo: el "SICORE auto" toma las retenciones del mes anterior; los demás, su monto. */
   const montoFijo = (f: FijoRow) => (f.calculo === "sicore" && sicore ? sicore.monto : Number(f.monto || 0));
   const tituloSicore = sicore ? `Automático: retenciones de Ganancias de ${nombreDeMes(sicore.mes)} (las del TXT SICORE)` : "";
 
   // ── Guardar / borrar (mismas reglas que Finanzas vieja) ──
+  /** Gastos del mes del nuevo y los que tengan su N° de VEP, para el aviso de repetido. Si la consulta falla, no avisa (nunca frena). */
+  async function buscarParecido(b: Borrador, monto: number): Promise<GastoRow | null> {
+    try {
+      const textos = `${b.detalle} ${b.nota || ""}`;
+      const mes = b.fecha.slice(0, 7);
+      const { desde, hasta } = rangoMes(mes);
+      const delMes = mes === periodo && gastos ? gastos
+        : await traerTodo<GastoRow>(() => db.from("gastos_manuales").select("*").eq("sociedad_id", sociedadId).gte("fecha", desde).lt("fecha", hasta).order("id"));
+      const vep = numeroVep(textos);
+      const conVep = vep ? ((await db.from("gastos_manuales").select("*").eq("sociedad_id", sociedadId).or(`descripcion.ilike.%${vep}%,notas.ilike.%${vep}%`).limit(5)).data as GastoRow[] | null) || [] : [];
+      return gastoParecido({ fecha: b.fecha, grupo: b.grupo, monto, moneda: b.moneda, textos }, [...delMes, ...conVep]);
+    } catch { return null; }
+  }
+
   async function guardar(b: Borrador) {
+    if (enCurso.current) return;
     const monto = Math.round(Number(String(b.monto).replace(",", ".")) * 100) / 100;
     if (!b.detalle.trim()) { toast.error("Poné el detalle del gasto"); return; }
     if (!(monto > 0)) { toast.error("El monto tiene que ser mayor a 0"); return; }
@@ -162,8 +186,14 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
       if (cruzado && anterior && Math.abs(Number(anterior.monto) - monto) > 0.005
         && !confirm(`Este gasto ya está cruzado con el banco por ${formatCurrency(Number(anterior.monto), b.moneda)}. Si cambiás el monto a ${formatCurrency(monto, b.moneda)}, la línea del banco no va a coincidir.\n\n¿Guardar igual?`)) return;
     }
+    enCurso.current = true;
     setGuardando(true);
     try {
+      // Auditoría de la plata (29/10/2026): aviso si ya hay uno parecido (mismo VEP, o mismo grupo e importe en el mes). Nunca frena.
+      if (!b.id) {
+        const p = await buscarParecido(b, monto);
+        if (p && !confirm(`Ya hay un gasto parecido:\n${formatDate(String(p.fecha).slice(0, 10))} · ${p.descripcion || ""} · ${formatCurrency(Number(p.monto), String(p.moneda).toUpperCase() === "USD" ? "USD" : "ARS")}\n\n¿Es otro gasto? Aceptar lo guarda igual.`)) return;
+      }
       const datos: Record<string, unknown> = {
         fecha: b.fecha, descripcion: b.detalle.trim(), grupo: b.grupo, monto, moneda: b.moneda, medio_pago: b.medio || "transferencia",
         tipo_recurrencia: b.fijo ? "mensual" : "eventual",
@@ -182,8 +212,10 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
         if (antes && (antes.gasto_fijo_id || null) !== b.fijoId) datos.gasto_fijo_id = b.fijoId; // tocó "Usar" en la sugerencia del VEP
         const { error: e } = await db.from("gastos_manuales").update(datos).eq("id", b.id).eq("sociedad_id", sociedadId);
         if (e) throw e;
+        // Sin cambiar el monto del gasto, el de su pago no se toca (30/10/2026, Synthon: el gasto es solo una parte de la transferencia).
+        const mismoMonto = !!antes && Math.abs(Number(antes.monto) - monto) < 0.005;
         for (const p of pagosDe(b.id)) {
-          const { error: e2 } = await db.rpc("gestionar_cobro", { p_movimiento_id: p.id, p_accion: "editar", p_descripcion: descMov, p_monto: monto, p_moneda: b.moneda, p_fecha: b.fecha });
+          const { error: e2 } = await db.rpc("gestionar_cobro", { p_movimiento_id: p.id, p_accion: "editar", p_descripcion: descMov, p_monto: mismoMonto ? Number(p.monto) : monto, p_moneda: b.moneda, p_fecha: b.fecha });
           if (e2) toast.warning(`Gasto guardado, pero su pago en Movimientos no se pudo actualizar: ${e2.message}`);
         }
       } else {
@@ -202,6 +234,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
       toast.error(`No se pudo guardar: ${e?.message || String(e)}`);
     } finally {
       setGuardando(false);
+      enCurso.current = false;
     }
   }
 
@@ -227,8 +260,11 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
   };
   const desdeFijo = (f: (typeof pendientes)[number]): Borrador => ({
     id: null, fecha: f.vence && f.vence <= hoy ? f.vence : esMesActual ? hoy : f.vence || `${periodo}-01`, grupo: f.grupoFinal,
-    detalle: `${f.descripcion || ""} — ${nombreMes}`, fijo: true, medio: f.medio_pago || "transferencia", monto: montoFijo(f) > 0 ? String(montoFijo(f)) : "",
+    // El sueldo que se paga a principio de mes es del mes anterior (Augusto 29/10/2026): el detalle lo dice; se puede cambiar.
+    detalle: `${f.descripcion || ""} — ${nombreDeMes(mesDelDetalleFijo(f, periodo))}`, fijo: true, medio: f.medio_pago || "transferencia", monto: montoFijo(f) > 0 ? String(montoFijo(f)) : "",
     moneda: String(f.moneda).toUpperCase() === "USD" ? "USD" : "ARS", fijoId: f.id,
+    // Con su factura del mes ya en Compras (D4): el gasto va sin pago propio; lo paga la OP de la factura.
+    ...(cubiertos.get(f.id) ? { medio: "factura_proveedor", nota: `Factura ${cubiertos.get(f.id)!.numero_factura || ""} del proveedor: se paga con OP desde Pagar` } : {}),
   });
 
   if (error) return <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30">{error}</p>;
@@ -346,7 +382,8 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
               <div key={f.id} className="flex flex-wrap items-center gap-2 px-1 py-1 text-sm">
                 <span className="w-24 text-xs text-zinc-500">{f.vence ? `vence ${formatDate(f.vence)}` : "sin día"}</span>
                 <span className="w-36 truncate text-xs">{nombreGrupo(f.grupoFinal)}</span>
-                <span className="min-w-[160px] flex-1">{f.descripcion}{f.medio_pago === "debito_automatico" && <span className="ml-1 text-xs">🔁</span>}</span>
+                <span className="min-w-[160px] flex-1">{f.descripcion}{f.medio_pago === "debito_automatico" && <span className="ml-1 text-xs">🔁</span>}
+                  {cubiertos.get(f.id) && <span className="ml-1 text-[11px] text-emerald-700 dark:text-emerald-400" title="La factura de este proveedor ya está en Compras y se paga con OP desde Pagar: el gasto se carga sin otro pago.">✓ factura {cubiertos.get(f.id)!.numero_factura || ""}: se carga sin pago (lo paga la OP)</span>}</span>
                 <span className="font-mono text-xs" title={f.calculo === "sicore" ? tituloSicore : undefined}>
                   {f.calculo === "sicore" && <span className="mr-1 font-sans text-[10px] text-zinc-400">auto</span>}
                   {formatCurrency(montoFijo(f), String(f.moneda).toUpperCase() === "USD" ? "USD" : "ARS")}

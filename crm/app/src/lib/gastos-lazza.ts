@@ -41,6 +41,9 @@ export const MEDIOS: Record<string, string> = {
   transferencia: "Transferencia", efectivo: "Efectivo", tarjeta: "Tarjeta", tarjeta_visa_1582: "Tarjeta Visa 1582", tarjeta_mastercard_4775: "Tarjeta Mastercard 4775", cheque: "Cheque", vep: "VEP",
   debito: "Débito en cuenta", debito_automatico: "🔁 Débito automático",
   factura_transporte: "Factura (se paga en Pagar)",
+  // Gasto de un fijo cuya factura del proveedor ya está en Compras (auditoría D4, 30/10/2026): cuenta como gasto pero no crea pago;
+  // el pago es la OP de la factura (migración 20261030100000).
+  factura_proveedor: "Factura (se paga con OP)",
 };
 export const etiquetaMedio = (m: string | null | undefined) => MEDIOS[String(m || "")] || (m ? String(m) : "—");
 
@@ -52,6 +55,7 @@ export interface GastoRow {
 export interface FijoRow {
   id: string; descripcion: string | null; categoria: string | null; grupo?: string | null; monto: number | string | null;
   moneda: string | null; activo: boolean | null; dia_vencimiento: number | null; medio_pago?: string | null; calculo?: string | null;
+  proveedor_id?: string | null;
 }
 
 export interface FilaGasto {
@@ -122,6 +126,53 @@ export function venceEnMes(dia: number | null | undefined, mes: string): string 
   const [y, m] = mes.split("-").map(Number);
   const ultimo = new Date(Date.UTC(y, m, 0)).getUTCDate();
   return `${mes}-${String(Math.min(dia, ultimo)).padStart(2, "0")}`;
+}
+
+/**
+ * Mes que nombra el detalle al cargar un fijo desde "Fijos sin cargar" del mes `mes` (AAAA-MM).
+ * El sueldo es del mes anterior (Augusto 29/10/2026: "lo que pago a principio de mes es el sueldo del mes anterior"):
+ * en octubre se carga "Sueldo … — septiembre". Lo demás, del mismo mes. Es la sugerencia: el detalle se puede cambiar.
+ * La Contabilidad lo cuenta en el mes que dice el detalle; el pago queda con su fecha real.
+ */
+export function mesDelDetalleFijo(f: { descripcion?: string | null }, mes: string): string {
+  if (!/^\s*sueldo\b/i.test(String(f.descripcion || ""))) return mes;
+  const y = Number(mes.slice(0, 4)), m = Number(mes.slice(5, 7));
+  return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
+}
+
+/** N° de VEP que dice un texto ("… (VEP 1696573116)", "Nro. VEP: 1682735631"): así se reconoce el mismo VEP cargado dos veces. */
+export function numeroVep(texto: string | null | undefined): string | null {
+  const m = String(texto || "").match(/\bvep\D{0,3}(\d{8,})/i);
+  return m ? m[1] : null;
+}
+
+/**
+ * Gasto ya cargado que se parece al que se va a guardar (auditoría de la plata, 29/10/2026): el mismo N° de VEP (de cualquier mes),
+ * o el mismo grupo, moneda e importe (±$ 1) en el mismo mes. Solo para avisar: si el usuario dice que es otro, se guarda igual (regla 1).
+ */
+export function gastoParecido(
+  nuevo: { fecha: string; grupo: string; monto: number; moneda: string; textos: string },
+  cargados: GastoRow[],
+): GastoRow | null {
+  const vep = numeroVep(nuevo.textos);
+  const mes = nuevo.fecha.slice(0, 7);
+  return cargados.find((g) => (!!vep && numeroVep(`${g.descripcion || ""} ${g.notas || ""}`) === vep)
+    || (String(g.fecha).slice(0, 7) === mes && grupoDe(g) === nuevo.grupo && mon(g.moneda) === mon(nuevo.moneda)
+      && Math.abs(num(g.monto) - nuevo.monto) <= 1)) || null;
+}
+
+/**
+ * Fijos con proveedor que ya tienen una factura de ese proveedor en el mes (auditoría, D4): la factura se paga con OP desde Pagar,
+ * así que el gasto del fijo se carga sin pago propio (medio "factura_proveedor"). Antes creaba otro pago: dos salidas para una
+ * sola transferencia (pasó con los honorarios del contador en octubre). El gasto sí se carga: es lo que cuenta en el resultado.
+ */
+export function fijosCubiertos<F extends { proveedor_id: string | null }>(fijos: FijoRow[], facturasDelMes: F[]): Map<string, F> {
+  const out = new Map<string, F>();
+  for (const f of fijos) {
+    const fc = f.proveedor_id ? facturasDelMes.find((x) => x.proveedor_id === f.proveedor_id) : undefined;
+    if (fc) out.set(f.id, fc);
+  }
+  return out;
 }
 
 /** Fijos activos que todavía no tienen gasto cargado en el mes (para "Cargar"). */

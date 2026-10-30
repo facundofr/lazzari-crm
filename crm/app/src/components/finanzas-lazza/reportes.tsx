@@ -5,26 +5,36 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { useUser } from "@/lib/auth-context";
 import { LineaPremio } from "./premios";
 import { OBJETIVOS_MES, reporteBasico, type NetoIva, type ReporteBasico } from "@/lib/finanzas-lazza";
 import { traerDatosReporte } from "./datos";
+import { traerResultadoMes, type ResultadoMes } from "./resultado-mes";
 
 const NIVEL_TEXTO: Record<ReporteBasico["objetivo"]["nivel"], string> = {
   debajo: "Debajo del mínimo", minimo: "Mínimo cumplido", bueno: "Bueno cumplido", muy_bueno: "Muy bueno cumplido",
 };
 
 export function FinanzasLazzaReportes({ sociedadId, periodo }: { sociedadId: string; periodo: string }) {
+  const { sociedadActiva } = useUser();
+  const esLazzari = sociedadActiva?.nombre === "Lazzari";
   const [datos, setDatos] = useState<Awaited<ReturnType<typeof traerDatosReporte>> | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // El resultado del mes es el de Contabilidad (auditoría de la plata 29/10/2026): se trae aparte y, si falla, no tapa el resto.
+  const [res, setRes] = useState<ResultadoMes | null>(null);
+  const [resError, setResError] = useState(false);
 
   useEffect(() => {
     let vivo = true;
-    setDatos(null); setError(null);
+    setDatos(null); setError(null); setRes(null); setResError(false);
     traerDatosReporte(sociedadId, periodo)
       .then((d) => { if (vivo) setDatos(d); })
       .catch((e) => { console.error("Finanzas Lazza · Reportes:", e); if (vivo) setError("No se pudieron cargar los datos. Recargá la página."); });
+    traerResultadoMes(sociedadId, periodo, esLazzari)
+      .then((x) => { if (vivo) setRes(x); })
+      .catch((e) => { console.error("Finanzas Lazza · Reportes (resultado):", e); if (vivo) setResError(true); });
     return () => { vivo = false; };
-  }, [sociedadId, periodo]);
+  }, [sociedadId, periodo, esLazzari]);
 
   const r = useMemo(() => (datos ? reporteBasico({ periodo, ...datos }) : null), [datos, periodo]);
 
@@ -77,22 +87,39 @@ export function FinanzasLazzaReportes({ sociedadId, periodo }: { sociedadId: str
             {fila("Transportes", r.transportes, `Facturas de transporte del mes (${r.transportes.n}): transportistas y liquidaciones internas`)}
           </tbody>
         </table>
+        {/* Gastos (auditoría de la plata 29/10/2026): los que cuentan son los de la Contabilidad; IVA, SICORE, anticipos y retiros no. */}
         <div className="mt-2 grid grid-cols-1 gap-1 border-t border-zinc-200 pt-2 text-sm sm:grid-cols-3 dark:border-zinc-700">
-          <p className="flex justify-between gap-2 sm:block"><span className="text-zinc-500">Gastos fijos</span> <b className="font-mono sm:block">{formatCurrency(r.gastos.fijos)}</b></p>
-          <p className="flex justify-between gap-2 sm:block"><span className="text-zinc-500">Gastos eventuales</span> <b className="font-mono sm:block">{formatCurrency(r.gastos.eventuales)}</b></p>
-          <p className="flex justify-between gap-2 sm:block"><span className="text-zinc-500">Gastos del mes</span> <b className="font-mono sm:block">{formatCurrency(r.gastos.total)}</b></p>
+          <p className="flex justify-between gap-2 sm:block"><span className="text-zinc-500">Gastos que cuentan</span> <b className="font-mono sm:block">{res ? formatCurrency(res.gastosQueCuentan) : "…"}</b></p>
+          <p className="flex justify-between gap-2 sm:block"><span className="text-zinc-500">No son gasto</span> <b className="font-mono text-zinc-500 sm:block">{res ? formatCurrency(res.noSonGasto) : "…"}</b></p>
+          <p className="flex justify-between gap-2 sm:block"><span className="text-zinc-500">Cargado en Gastos</span> <b className="font-mono text-zinc-500 sm:block">{formatCurrency(r.gastos.total)}</b></p>
         </div>
+        {res && (
+          <p className="mt-1 text-[11px] text-zinc-500">
+            Los que cuentan son {formatCurrency(res.partes.deGastos)} de Gastos (cada uno en el mes que dice su detalle)
+            {" "}+ {formatCurrency(res.partes.iibb)} de IIBB y tasas{res.iibbPct !== null ? ` (${String(res.iibbPct).replace(".", ",")} % de las ventas)` : ""}
+            {res.partes.delBanco ? <> + {formatCurrency(res.partes.delBanco)} de comisiones e intereses del banco</> : null}
+            {res.partes.estimados ? <> + {formatCurrency(res.partes.estimados)} estimados (premios y comisión de José que todavía no se cargaron)</> : null}.
+            {" "}No son gasto: IVA, SICORE, anticipos de Ganancias, retiros e impuestos del banco a cuenta.
+          </p>
+        )}
         {r.gastos.enUsdSinCotizacion > 0 && <p className="mt-1 text-[11px] text-amber-600">Hay gastos en US$ por {formatCurrency(r.gastos.enUsdSinCotizacion, "USD")} sin cotización del día: no suman.</p>}
       </div>
 
-      {/* Resultado del mes: neto de venta − neto de costo − transportes − gastos del mes */}
-      <div className={`rounded-xl border-2 p-3 text-sm ${r.resultado >= 0 ? "border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/20" : "border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/20"}`}>
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <span className="font-semibold text-zinc-700 dark:text-zinc-200">Resultado del mes</span>
-          <span className={`font-mono text-lg font-bold ${r.resultado >= 0 ? "text-emerald-700 dark:text-emerald-400" : "text-red-600"}`}>{formatCurrency(r.resultado)}</span>
+      {/* Resultado del mes: el mismo que Contabilidad (antes de Ganancias). */}
+      {res ? (
+        <div className={`rounded-xl border-2 p-3 text-sm ${res.antesGanancias >= 0 ? "border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/20" : "border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/20"}`}>
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <span className="font-semibold text-zinc-700 dark:text-zinc-200">Resultado del mes <span className="text-xs font-normal text-zinc-500">(antes de Ganancias, igual que Contabilidad)</span></span>
+            <span className={`font-mono text-lg font-bold ${res.antesGanancias >= 0 ? "text-emerald-700 dark:text-emerald-400" : "text-red-600"}`}>{formatCurrency(res.antesGanancias)}</span>
+          </div>
+          <p className="mt-0.5 font-mono text-[11px] text-zinc-500">{formatCurrency(res.ventas)} neto de venta − {formatCurrency(res.costo)} neto de costo − {formatCurrency(res.transportes)} transportes − {formatCurrency(res.gastosQueCuentan)} gastos que cuentan</p>
+          <p className="mt-0.5 text-[11px] text-zinc-500">Después de Ganancias (25 %): <b className="font-mono">{formatCurrency(res.neto)}</b></p>
         </div>
-        <p className="mt-0.5 font-mono text-[11px] text-zinc-500">{formatCurrency(r.facturado.neto)} neto de venta − {formatCurrency(r.costo.neto)} neto de costo − {formatCurrency(r.transportes.neto)} transportes − {formatCurrency(r.gastos.total)} gastos del mes</p>
-      </div>
+      ) : (
+        <p className="flex items-center gap-2 rounded-xl border border-zinc-200 p-3 text-sm text-zinc-500 dark:border-zinc-800">
+          {resError ? "No se pudo calcular el resultado del mes. Recargá la página." : <><Loader2 className="h-4 w-4 animate-spin" /> Calculando el resultado…</>}
+        </p>
+      )}
 
       {(r.avisos.length > 0 || r.sinCotizacion.length > 0) && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm dark:border-amber-900 dark:bg-amber-950/30">

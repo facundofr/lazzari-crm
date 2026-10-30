@@ -12,11 +12,13 @@ import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { rangoProximaSemana } from "@/lib/cheques-lazza";
-import { armarRetenciones, ivaDelMes, reporteBasico } from "@/lib/finanzas-lazza";
+import { armarRetenciones, ivaDelMes } from "@/lib/finanzas-lazza";
+import { useUser } from "@/lib/auth-context";
 import { esCobroDeCliente } from "@/lib/tipos-movimiento";
 import { traerParaFacturar } from "./facturar";
 import { CargaDiaria } from "./carga-diaria";
-import { traerComprasDelMes, traerDatosReporte, traerDeudas, traerIvaACuenta, traerTcDelDia, traerVentasDelMes, rangoMes } from "./datos";
+import { traerComprasDelMes, traerDeudas, traerIvaACuenta, traerTcDelDia, traerVentasDelMes, rangoMes } from "./datos";
+import { traerResultadoMes } from "./resultado-mes";
 
 const db = supabase as any;
 
@@ -79,15 +81,15 @@ const TARJETAS_DE_LOADER: SeccionFL[][] = [
 ];
 
 /** Cada loader devuelve los datos de una o más tarjetas. */
-function loaders(sociedadId: string, periodo: string, hoy: string): (() => Promise<Partial<Record<SeccionFL, Dato>>>)[] {
+function loaders(sociedadId: string, periodo: string, hoy: string, esLazzari: boolean): (() => Promise<Partial<Record<SeccionFL, Dato>>>)[] {
   const { desde, hasta } = rangoMes(periodo);
   return [
-    // Reportes y gastos (misma cuenta que Reportes; el objetivo del mes está adentro de Reportes).
+    // Reportes y gastos: el resultado es el de Contabilidad, igual que en Reportes (auditoría de la plata 29/10/2026).
     async () => {
-      const r = reporteBasico({ periodo, ...(await traerDatosReporte(sociedadId, periodo)) });
+      const r = await traerResultadoMes(sociedadId, periodo, esLazzari);
       return {
-        reportes: { valor: formatCurrency(Math.round(r.resultado)).replace(/,00$/, ""), sub: "resultado del mes (neto)", tono: r.resultado >= 0 ? "verde" : "rojo" },
-        gastos: { valor: millones(r.gastos.total), sub: "del mes" },
+        reportes: { valor: formatCurrency(Math.round(r.antesGanancias)).replace(/,00$/, ""), sub: "resultado del mes (antes de Ganancias)", tono: r.antesGanancias >= 0 ? "verde" : "rojo" },
+        gastos: { valor: millones(r.cargadosEnGastos), sub: "del mes" },
         contabilidad: { valor: "Resultados y caja", sub: "mensual y semanal, con Excel" },
       };
     },
@@ -170,6 +172,8 @@ function loaders(sociedadId: string, periodo: string, hoy: string): (() => Promi
 }
 
 export function FinanzasLazzaInicio({ sociedadId, onAbrir }: { sociedadId: string; onAbrir: (s: SeccionFL) => void }) {
+  const { sociedadActiva } = useUser();
+  const esLazzari = sociedadActiva?.nombre === "Lazzari";
   const [datos, setDatos] = useState<Partial<Record<SeccionFL, Dato>>>({});
   const hoy = todayAR();
   const periodo = hoy.slice(0, 7);
@@ -177,7 +181,7 @@ export function FinanzasLazzaInicio({ sociedadId, onAbrir }: { sociedadId: strin
   useEffect(() => {
     let vivo = true;
     setDatos({});
-    loaders(sociedadId, periodo, hoy).forEach((cargar, i) => {
+    loaders(sociedadId, periodo, hoy, esLazzari).forEach((cargar, i) => {
       cargar()
         .then((d) => { if (vivo) setDatos((prev) => ({ ...prev, ...d })); })
         .catch((e) => {
@@ -186,7 +190,7 @@ export function FinanzasLazzaInicio({ sociedadId, onAbrir }: { sociedadId: strin
         });
     });
     return () => { vivo = false; };
-  }, [sociedadId, periodo, hoy]);
+  }, [sociedadId, periodo, hoy, esLazzari]);
 
   const tarjeta = (t: TarjetaDef, g: (typeof GRUPOS)[number]) => {
     const dato = datos[t.id] ?? null;

@@ -1,6 +1,6 @@
 // npx tsx scripts/test-gastos-lazza.ts
 import assert from "node:assert/strict";
-import { filasDeTransportes, GRUPOS_EDITABLES, esGastoFijo, nombreGrupo, armarFilasGastos, filtrarGastos, fijosSinCargar, grupoDe, grupoDeCategoria, totalesPorGrupo, venceEnMes, type FijoRow, type GastoRow } from "../src/lib/gastos-lazza";
+import { filasDeTransportes, GRUPOS_EDITABLES, esGastoFijo, fijosCubiertos, gastoParecido, numeroVep, nombreGrupo, armarFilasGastos, filtrarGastos, fijosSinCargar, grupoDe, grupoDeCategoria, mesDelDetalleFijo, totalesPorGrupo, venceEnMes, type FijoRow, type GastoRow } from "../src/lib/gastos-lazza";
 
 assert.equal(grupoDeCategoria("Sueldos"), "Personal");
 assert.equal(grupoDeCategoria("Premios"), "Premios"); // 28/10: grupo nuevo, seguido a Sueldos
@@ -79,6 +79,37 @@ assert.equal(esGastoFijo({}), false);
   const tot = totalesPorGrupo([...filas, ...tr]);
   assert.deepEqual(tot.find((x) => x.grupo === "Transportes"), { grupo: "Transportes", n: 2, ARS: 72000, USD: 1000 });
   assert.ok(!GRUPOS_EDITABLES.includes("Transportes" as never), "Transportes no se elige al cargar un gasto");
+}
+
+// Sueldo (29/10/2026): lo que se paga a principio de mes es el sueldo del mes anterior; lo demás, del mismo mes.
+assert.equal(mesDelDetalleFijo({ descripcion: "Sueldo Sebastián Pereyra" }, "2026-10"), "2026-09");
+assert.equal(mesDelDetalleFijo({ descripcion: "sueldo Augusto" }, "2027-01"), "2026-12");
+assert.equal(mesDelDetalleFijo({ descripcion: "Mutual — Sebastián Pereyra" }, "2026-10"), "2026-10");
+assert.equal(mesDelDetalleFijo({ descripcion: "Alquiler" }, "2026-10"), "2026-10");
+
+// Repetidos (auditoría de la plata, 29/10/2026): mismo VEP, o mismo grupo, moneda e importe en el mes; fijo cubierto por su factura.
+assert.equal(numeroVep("ARCA VEP — Anticipo de Ganancias 2 (VEP 1696573116) — pago 21/10"), "1696573116");
+assert.equal(numeroVep("Nro. VEP: 1682735631"), "1682735631");
+assert.equal(numeroVep("Luz octubre"), null);
+{
+  const cargados: GastoRow[] = [
+    { id: "a", fecha: "2026-10-21", descripcion: "ARCA VEP — SICORE septiembre 2026 (VEP 1696995778)", categoria: "Impuestos", grupo: "Impuestos", monto: 3033210.96, moneda: "ARS", medio_pago: "debito", tipo_recurrencia: "eventual", gasto_fijo_id: null },
+    { id: "b", fecha: "2026-10-20", descripcion: "Honorarios contador — octubre 2026", categoria: "Profesionales", grupo: "Profesionales", monto: "178200", moneda: "ARS", medio_pago: "transferencia", tipo_recurrencia: "mensual", gasto_fijo_id: "musso" },
+  ];
+  const base = { fecha: "2026-10-25", grupo: "Profesionales", monto: 178200.5, moneda: "ARS", textos: "Musso octubre" };
+  assert.equal(gastoParecido(base, cargados)?.id, "b", "mismo grupo e importe (±1) en el mes");
+  assert.equal(gastoParecido({ ...base, monto: 178202 }, cargados), null, "más de $ 1 de diferencia");
+  assert.equal(gastoParecido({ ...base, fecha: "2026-11-02" }, cargados), null, "otro mes");
+  assert.equal(gastoParecido({ ...base, grupo: "Operativos" }, cargados), null, "otro grupo");
+  assert.equal(gastoParecido({ ...base, moneda: "USD" }, cargados), null, "otra moneda");
+  assert.equal(gastoParecido({ fecha: "2026-11-05", grupo: "Impuestos", monto: 1, moneda: "ARS", textos: "SICORE (VEP 1696995778)" }, cargados)?.id, "a", "el mismo VEP, aunque sea otro mes e importe");
+  const fijosProv: FijoRow[] = [
+    { id: "musso", descripcion: "Honorarios contador (Agustín Musso)", categoria: "Profesionales", monto: 178200, moneda: "ARS", activo: true, dia_vencimiento: null, proveedor_id: "p-musso" },
+    { id: "alq", descripcion: "Alquiler", categoria: "Alquiler", monto: 800, moneda: "USD", activo: true, dia_vencimiento: null, proveedor_id: null },
+  ];
+  const cub = fijosCubiertos(fijosProv, [{ proveedor_id: "p-musso", numero_factura: "00001-00000556" }, { proveedor_id: "otro", numero_factura: "9" }]);
+  assert.equal(cub.get("musso")?.numero_factura, "00001-00000556");
+  assert.equal(cub.has("alq"), false, "sin proveedor no se cubre");
 }
 
 console.log("test-gastos-lazza OK");

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { armarRetenciones, totalesRetenciones, excelRetencionesSufridas, rangoQuincena, practicadasPorQuincena, armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, saldoMenorA,armarTcDelDia, armarVencimientos, filtrarVencimientos, ivaDelMes, certificadoDeRetencion, periodoVepIva, esVepSinImpuesto, nivelObjetivo, reporteBasico, saldoFacturaCompra, unificarMoneda, sumarDias, conVencimiento, facturasACobrar, monedaDelCobro, clientesACobrar, proveedoresAPagar, type FacturaVentaFL, type FilaVencimiento } from "../src/lib/finanzas-lazza";
+import { armarRetenciones, totalesRetenciones, excelRetencionesSufridas, rangoQuincena, practicadasPorQuincena, armarCuentasCorrientes, semaforoPorEntidad, tieneSaldo, saldoMenorA,armarTcDelDia, armarVencimientos, filtrarVencimientos, ivaDelMes, certificadoDeRetencion, periodoVepIva, esVepSinImpuesto, nivelObjetivo, reporteBasico, costoDeFactura, costoDelPr, esRenglonDeFlete, saldoFacturaCompra, unificarMoneda, sumarDias, conVencimiento, facturasACobrar, monedaDelCobro, clientesACobrar, proveedoresAPagar, type FacturaVentaFL, type FilaVencimiento } from "../src/lib/finanzas-lazza";
 
 const tcDia = armarTcDelDia([{ fecha: "2026-10-09", valor_venta: 1400 }, { fecha: "2026-10-14", valor_venta: 1500 }]);
 assert.equal(tcDia("2026-10-14"), 1500);
@@ -52,8 +52,21 @@ assert.deepEqual(r.avisos.map((a) => a.facturaId).sort(), ["d", "h"]);
 assert.equal(r.avisos.find((a) => a.facturaId === "h")!.prNumero, "PR-8");
 // Gastos: fijos 1500 + 200 (mensual), eventuales 700 + 10×1500
 assert.deepEqual(r.gastos, { fijos: 1700, eventuales: 15700, total: 17400, enUsdSinCotizacion: 0 });
-// Resultado = neto venta − neto costo − gastos
-assert.equal(r.resultado, 148700 - 74200 - 17400);
+// Sin "resultado" propio (auditoría de la plata 29/10/2026): el del mes sale de la Contabilidad (estadoDeResultados).
+assert.equal("resultado" in r, false);
+
+// Cruce de renglones factura ↔ PR (auditoría 29/10/2026): los espacios de más no lo rompen (antes /s+/ comía las "s").
+const itemsCruce = [
+  { presupuesto_id: "px", descripcion: "Campera softshell", cantidad: 4, precio_costo: 1000, costo_moneda: "ARS", iva_porcentaje: 21 },
+  { presupuesto_id: "px", descripcion: "Pantalón cargo", cantidad: 4, precio_costo: 500, costo_moneda: "ARS", iva_porcentaje: 21 },
+];
+const parcial = costoDeFactura(itemsCruce, [{ factura_id: "fx", descripcion: "CAMPERA  SOFTSHELL ", cantidad: 2 }], fv({ id: "fx" }), tcDia);
+assert.equal(parcial.aproximado, false); // se cruzó: solo lo facturado
+assert.equal(parcial.costo.neto, 2000);
+// "Perno" y "Pernos" no son el mismo renglón (antes se cruzaban porque se borraba la "s").
+const distinto = costoDeFactura([{ presupuesto_id: "py", descripcion: "Pernos", cantidad: 10, precio_costo: 100, costo_moneda: "ARS", iva_porcentaje: 21 }],
+  [{ factura_id: "fy", descripcion: "Perno", cantidad: 5 }], fv({ id: "fy" }), tcDia);
+assert.equal(distinto.aproximado, true); // no se cruza: costo del PR entero y avisa
 
 // NC cuya factura de origen es de otro mes: usa `origenes`
 const r2 = reporteBasico({ periodo: "2026-10", facturas: [fv({ id: "n", tipo: "NCA", subtotal: 5000, iva: 1050, total: 6050, factura_origen_id: "g" })], origenes: [facturas[6]], idsAnulados: [], items: [{ presupuesto_id: "pg", cantidad: 1, precio_costo: 4000, costo_moneda: "ARS", iva_porcentaje: 21 }], prNumero: {}, gastos: [], tcDia });
@@ -408,7 +421,6 @@ assert.deepEqual(porProveedor.map((p) => [p.proveedorId, p.facturas, p.saldo, p.
   assert.equal(conTr.transportes.neto, 82000);
   assert.equal(conTr.transportes.total, 84100);
   assert.equal(conTr.transportes.n, 2);
-  assert.equal(conTr.resultado, 100000 - 82000);
   const sinTr = reporteBasico({ periodo: "2026-10", facturas: [], origenes: [], idsAnulados: [], items: [], prNumero: {}, gastos: [], tcDia });
   assert.deepEqual(sinTr.transportes, { neto: 0, iva: 0, total: 0, n: 0 });
 }
@@ -425,4 +437,25 @@ console.log("test-finanzas-lazza OK");
   const rBien = reporteBasico({ periodo: "2026-10", facturas: [fRaro], origenes: [], idsAnulados: [], items: [{ presupuesto_id: "praro", cantidad: 1, precio_costo: 36425, costo_moneda: "ARS", iva_porcentaje: 21 }], prNumero: {}, gastos: [], tcDia });
   assert.equal(rBien.avisos.some((a) => a.costoRaro), false);
   console.log("costo raro OK");
+}
+
+// ── Flete (Augusto 29/10/2026): su costo no va en el PR; se cuenta solo por Transportes ──
+{
+  for (const d of ["LOGISTICA TACHOS,MESA Y SILLAS", "Logistica taza", "Envio", "Envíos", "TRASLADOS PERSONAL", "Servicio de logística: envío de Armario a Mendoza", "Fletes", "Costo de envío"])
+    assert.equal(esRenglonDeFlete(d), true, d);
+  for (const d of ["SILLA DE RUEDAS DE TRANSFERENCIA CON ELEVACIÓN Y TRASLADO", "LONA CONFECCIONADA EN LONA DE CAMION", "Respirador N95", "Transportador de rodillos", "", null])
+    assert.equal(esRenglonDeFlete(d), false, String(d));
+  // PR-1224 (Termo): el renglón de logística tenía costo y el viaje ya estaba en Transportes → restaba dos veces
+  const items = [
+    { presupuesto_id: "pt", descripcion: "MESA PLEGABLE", cantidad: 2, precio_costo: 100000, costo_moneda: "ARS", iva_porcentaje: 21 },
+    { presupuesto_id: "pt", descripcion: "LOGISTICA TACHOS,MESA Y SILLAS", cantidad: 1, precio_costo: 313202, costo_moneda: "ARS", iva_porcentaje: 21 },
+    { presupuesto_id: "pt", descripcion: "Envio", cantidad: 1, precio_costo: 0, costo_moneda: "ARS", iva_porcentaje: 21 },
+  ];
+  const c = costoDelPr(items, { moneda: "ARS", tipo_cambio: null, fecha: "2026-10-09" }, tcDia);
+  assert.equal(c.costo.neto, 200000); // solo las mesas
+  assert.equal(c.sinCosto, 0, "el flete en 0 no es un artículo sin costo");
+  const r = reporteBasico({ periodo: "2026-10", facturas: [fv({ id: "ft", fecha: "2026-10-09", subtotal: 600000, iva: 126000, total: 726000, presupuesto_id: "pt" })], origenes: [], idsAnulados: [], items, prNumero: {}, gastos: [], tcDia });
+  assert.equal(r.costo.neto, 200000);
+  assert.equal(r.avisos.length, 0);
+  console.log("flete OK");
 }

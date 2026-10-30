@@ -29,4 +29,7 @@ assert.deepEqual(faltan.map((x) => x.persona), ["Sebastián Pereyra", "Augusto L
 assert.ok(faltan.every((x) => x.monto === 400_000));
 // Otro mes: no se mezcla
 assert.equal(premiosPorCargar("2026-11", 97_000_000, ["Premio octubre — Jerónimo Casadidio"]).length, 4);
+// Auditoría 29/10/2026: si le cambiaron el detalle pero sigue siendo el premio de ese mes de esa persona, ya está cargado.
+assert.deepEqual(premiosPorCargar("2026-10", 97_000_000, ["Premio octubre — Sebastián Pereyra (pagado con el sueldo)", "premio  OCTUBRE — augusto lazzari"]).map((x) => x.persona), ["Jerónimo Casadidio", "Mariana Santinelli"]);
+assert.equal(premiosPorCargar("2026-11", 97_000_000, ["Premio octubre — Sebastián Pereyra (pagado)"]).length, 4, "otro mes no cuenta");
 console.log("test-premios-lazza OK");

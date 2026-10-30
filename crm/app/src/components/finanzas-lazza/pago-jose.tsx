@@ -47,12 +47,15 @@ export function PagoJose({ sociedadId, periodo, onCargado }: { sociedadId: strin
       }
       const comision = comisionDelMes(r.filas, suyos);
       const { desde, hasta } = rangoMes(periodo);
-      const [{ data: com, error: e1 }, { data: int, error: e2 }] = await Promise.all([
+      // Comisión ya cargada (auditoría de la plata, 29/10/2026): con su texto, o una comisión de José en este mes aunque le hayan
+      // cambiado el detalle (antes solo el texto exacto: si se editaba, se ofrecía cargarla otra vez).
+      const [{ data: com, error: e1 }, { data: int, error: e2 }, { data: com2, error: e3 }] = await Promise.all([
         db.from("gastos_manuales").select("id").eq("sociedad_id", sociedadId).eq("descripcion", detalleComision(mesComision)).limit(1),
         db.from("gastos_manuales").select("id").eq("sociedad_id", sociedadId).eq("gasto_fijo_id", JOSE_ALVAREZ.fijoInteresId).gte("fecha", desde).lt("fecha", hasta).limit(1),
+        db.from("gastos_manuales").select("id").eq("sociedad_id", sociedadId).eq("categoria", "Comisiones").ilike("descripcion", "%jos%").gte("fecha", desde).lt("fecha", hasta).limit(1),
       ]);
-      if (e1 || e2) throw e1 || e2;
-      setEstado({ mesComision, comision, comisionCargada: !!(com || []).length, interesCargado: !!(int || []).length });
+      if (e1 || e2 || e3) throw e1 || e2 || e3;
+      setEstado({ mesComision, comision, comisionCargada: !!(com || []).length || !!(com2 || []).length, interesCargado: !!(int || []).length });
     } catch (e) {
       console.error("Pago de José Alvarez:", e);
       setError(true);

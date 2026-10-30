@@ -38,6 +38,8 @@ export function mesSiguiente(periodo: string): string {
   const [a, m] = periodo.split("-").map(Number);
   return m === 12 ? `${a + 1}-01` : `${a}-${String(m + 1).padStart(2, "0")}`;
 }
+const normalizar = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+
 /** Detalle del gasto, igual para todos: "Premio octubre — Jerónimo Casadidio". Sirve también para saber si ya está cargado. */
 export const detallePremio = (periodo: string, persona: string) => `Premio ${nombreMesPremio(periodo)} — ${persona}`;
 
@@ -45,10 +47,13 @@ export const detallePremio = (periodo: string, persona: string) => `Premio ${nom
 export function premiosPorCargar(periodo: string, neto: number, yaCargados: string[]): { detalle: string; persona: string; monto: number }[] {
   const p = premioDelMes(neto);
   if (p.porPersona <= 0) return [];
-  const hechos = new Set(yaCargados.map((d) => d.trim().toLowerCase()));
+  // Ya cargado (auditoría de la plata, 29/10/2026): el mismo texto, o un premio de ese mes que nombra a la persona aunque le
+  // hayan cambiado el resto del detalle. Antes solo el texto exacto: si se editaba, se podía volver a cargar.
+  const hechos = yaCargados.map(normalizar);
+  const delMes = normalizar(`Premio ${nombreMesPremio(periodo)}`);
   return p.personas
     .map((persona) => ({ detalle: detallePremio(periodo, persona), persona, monto: p.porPersona }))
-    .filter((x) => !hechos.has(x.detalle.toLowerCase()));
+    .filter((x) => !hechos.some((d) => d === normalizar(x.detalle) || (d.startsWith(delMes) && d.includes(normalizar(x.persona)))));
 }
 
 export const MONTOS_PREMIO = { bueno: OBJETIVOS_MES.bueno, muyBueno: OBJETIVOS_MES.muyBueno } as const;

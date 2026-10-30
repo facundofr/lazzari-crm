@@ -5,6 +5,7 @@
  * - FACTURADO = facturas de venta del mes − NC del mes, neto + IVA = total. USD al TC de cada factura.
  *   Una factura anulada y la NC que la anuló desaparecen juntas (`filtrarParaGestion`).
  * - COSTO = costo de los ítems del PR de cada factura (cantidad × precio_costo, neto + IVA del ítem).
+ *   Los renglones de flete no suman: el flete se cuenta solo por Transportes (Augusto 29/10/2026, `esRenglonDeFlete`).
  *   Costo en US$ → al TC de la factura (si la factura es en $, al dólar BNA divisa del día de la factura).
  *   NC = mercadería devuelta: resta venta Y costo (parcial: costo del PR de origen × neto NC / neto factura).
  *   No usa las facturas de compra (Augusto 18/10).
@@ -139,12 +140,13 @@ export interface AvisoPr {
 export interface ReporteBasico {
   facturado: NetoIva;
   costo: NetoIva;
+  /** Todo lo cargado en Gastos con fecha del mes (lo que muestra Gastos). No es lo que resta el resultado. */
   gastos: { fijos: number; eventuales: number; total: number; enUsdSinCotizacion: number };
   /** Facturas de transporte del mes (29/10/2026, Augusto: mismo nombre que en Gastos y en la Contabilidad). */
   transportes: NetoIva & { n: number };
   objetivo: { neto: number; nivel: NivelObjetivo; proximo: { nombre: string; monto: number; falta: number } | null };
-  /** Neto de venta − neto de costo − neto de transportes − gastos del mes (Augusto 18/10 y 29/10). */
-  resultado: number;
+  // Sin "resultado" (auditoría de la plata 29/10/2026): restaba IVA, SICORE, anticipos y gastos personales como si fueran gasto.
+  // El resultado del mes es uno solo, el de la Contabilidad (estadoDeResultados): Reportes y el inicio lo toman de ahí.
   filas: FilaReporte[];
   /** PR sin costo, facturas sin PR, NC sin factura de origen. */
   avisos: AvisoPr[];
@@ -176,6 +178,7 @@ export function costoDelPr(items: ItemCostoFL[], factura: Pick<FacturaVentaFL, "
   let sinCosto = 0;
   let sinTc = false;
   for (const it of items) {
+    if (esRenglonDeFlete(it.descripcion)) continue; // ni costo ni "sin costo": el flete va por Transportes
     const unit = num(it.precio_costo);
     if (unit <= 0) { sinCosto += 1; continue; }
     let neto = num(it.cantidad) * unit;
@@ -193,7 +196,16 @@ export function costoDelPr(items: ItemCostoFL[], factura: Pick<FacturaVentaFL, "
 }
 
 const normalizarDescripcion = (s: string | null | undefined) =>
-  String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/s+/g, " ").trim();
+  String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+
+/**
+ * Renglón de flete del PR (Augusto 29/10/2026: "no lo vamos a poner más en el PR al costo del flete, así no lo duplicamos…
+ * va a cargarse en transporte y listo"). El flete se le cobra al cliente en el PR, pero su costo es la factura del transportista,
+ * que ya resta en Transportes. Por eso su costo no suma en el costo del PR, aunque un PR viejo lo tenga cargado.
+ * Se reconoce por cómo empieza: Logística, Flete, Envío, Traslado o Transporte (también "Servicio de logística…", "Costo de envío…").
+ */
+export const esRenglonDeFlete = (descripcion: string | null | undefined) =>
+  /^((servicio|costo|cargo|gastos?) de )?(logistica|flete|envio|traslado|transporte)s?\b/.test(normalizarDescripcion(descripcion));
 
 /**
  * Costo de UNA factura de venta (28/10/2026, Augusto): el de los renglones que se facturaron, no el del PR entero.
@@ -356,7 +368,6 @@ export function reporteBasico(input: {
     gastos: { fijos: r2(fijos), eventuales: r2(eventuales), total: r2(fijos + eventuales), enUsdSinCotizacion: r2(enUsdSinCotizacion) },
     transportes: { ...redondearNI(transportes), n: transportesN },
     objetivo: nivelObjetivo(fact.neto),
-    resultado: r2(fact.neto - r2(costoTot.neto) - r2(transportes.neto) - r2(fijos + eventuales)),
     filas,
     avisos,
     sinCotizacion,
