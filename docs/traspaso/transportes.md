@@ -1,4 +1,24 @@
-# Traspaso — chat Transportes (actualizado 19/10/2026)
+# Traspaso — chat Transportes (actualizado 27/10/2026)
+
+## Estado 29/10/2026 (V1.1.630)
+- Publicado: factura de Transportes con tipo `transporte`; Liquidar → **Factura manual** solo para transportistas con el tilde **No nos factura** (Catálogo transportistas); sin subida de factura con IA (las facturas van en Compras). Migraciones corridas: `20261029120000`, `130000` (columna `no_factura`), `140000` (José Rodríguez proveedor), `150000` (borra Nuevo Plus Ultra).
+- Falta: que Augusto tilde en el catálogo quién no factura. Abiertas: Speed 7/10, montos de Hero R-1070/R-1086, condición de IVA de José Rodríguez, "otro desplegable" de ¿Quién lo lleva?.
+
+## Estado 27/10/2026 (chat retomado con la cuenta nueva)
+- Se retomó el chat: se leyeron CLAUDE.md, la memoria, ESTADO y este traspaso. **No se tocó código, base ni archivos (solo este traspaso y una línea en ESTADO).** Nada para publicar ni migraciones de Transportes sin correr.
+- Se le mandaron a Augusto estas 5 preguntas y **sigue sin contestar ninguna**:
+  1. Viaje de Speed del 7/10 sin monto y liquidado: ¿dejarlo así o cargarle el monto? (antes de cargarlo, mostrarle qué se cambia y esperar su OK).
+  2. Monto de Hero R-1070 y R-1086 (cargar cuando lo pase).
+  3. Confirmar Monotributo de Mateo Perrone con su factura.
+  4. José Rodríguez (Rosario): CUIT o DNI para darlo de alta como proveedor con el tilde "Transporte" (pasos para Augusto; el trigger crea el transportista).
+  5. "Poneme el otro desplegable" en "¿Quién lo lleva?": ¿lo resolvió el buscador de V1.1.543?
+- Archivos de este chat sin commitear: solo `docs/traspaso/transportes.md` y la entrada de Transportes en `docs/ESTADO.md` (que tiene cambios de otros chats). Van con la próxima tanda; no hace falta deploy.
+
+## Estado 26/10/2026 (cambio de cuenta de Claude)
+- **Este chat no tiene nada a medio hacer, ni código ni migraciones sin correr ni nada sin publicar.** No se tocó código ni base.
+- Última tarea (solo lectura): el viaje de SPEED BUSINESS (Credifin) del 7/10 que figuraba "sin monto" y "liquidado" a la vez. Es un viaje sin remito, ligado a la factura de transporte del 10/9 por $30.997,66 (pagada); el viaje quedó con costo vacío. Las facturas pueden cubrir varios viajes, así que no se le puso monto. Se le preguntó a Augusto si se lo carga o se deja así (sin respuesta).
+- Los otros viajes de Speed en octubre: 2 del 2/10 de remito (facturas pagadas $38.813,23 y $27.190,56), 2 cancelados y 2 de remito sin liquidar (20/10 y 22/10). Los de remito no aparecen en el contador.
+- Pendientes de siempre: Hero R-1070 y R-1086 sin monto (esperar a Augusto), confirmar Monotributo de Mateo Perrone con su factura, José Rodríguez sin ficha.
 
 ## Objetivo del chat
 Solo Transportes del CRM: transportistas, envíos y fletes (los que trabajan para Lazzari y los que cobra un proveedor en su factura),
@@ -98,16 +118,19 @@ Descartado: resumen por WhatsApp al transportista y carga por IA.
 
 ## Pendiente / próximo paso (actualizado 20/10/2026)
 Resuelto: a y b (migración 20261020160000), c (V1.1.543), Hero y Victor Masson (revisado 20/10, solo lectura: un solo transportista cada uno, con CUIT, activo, en Lazzari; Hero tiene sus 2 viajes; las fichas de Grupo LA no tienen el tilde y no hace falta).
-- Commitear `20261020160000_transportes_recuperar_viajes_remito` (+ rollback) en la próxima tanda (ya corrida). Próxima versión: 1.1.545.
+- **Estado 22/10:** este chat no tiene nada a medio hacer ni archivos sin commitear. La migración `20261020160000` (+ rollback) y este traspaso se subieron en el commit 77ffca9 (push a main, sin deploy: no cambia código). Producción en V1.1.544; la próxima versión que se publique es 1.1.545 (revisar contra origin/main). No hay migraciones de Transportes sin correr.
+- La entrada de Transportes en `docs/ESTADO.md` (20/10) sigue sin commitear junto con entradas de otros chats: va con la próxima tanda.
+- Augusto preguntó qué es "Liquidado" (22/10): se le explicó (viaje ya pasado a Pagos con factura o liquidación interna; queda trabado). Ofrecido sin respuesta: mirar (solo lectura) el viaje de SPEED BUSINESS de octubre que figura "sin monto" y "liquidado" a la vez (probablemente liquidado con factura y el viaje en $0) y decirle de qué factura es.
+- Captura de octubre (22/10): 35 viajes · $198.500,03. Sin monto: Julio/Ingrid 3, José Rodríguez 2, Hero 2, Pluscargo Rosario 1, Speed 1, Cargas Mayo 1.
 - Hero R-1070 y R-1086 sin monto: cargarlo cuando Augusto lo pase.
 - Pregunta abierta: "poneme el otro desplegable" en "¿Quién lo lleva?" (¿lo resolvió el buscador de V1.1.543?).
 - José Rodríguez (Rosario): en la lista sin ficha de proveedor ni datos. Mateo Perrone: confirmar Monotributo con su factura.
 - Leer `docs/ARQUITECTURA.md` antes de tocar código.
 
 ## Migraciones pendientes / errores conocidos
-Las 7 migraciones viejas de transportistas ya se subieron en V1.1.543. Solo falta commitear `20261020160000` (corrida). Ningún error conocido propio.
+Todas las migraciones de Transportes están corridas y commiteadas (la última, `20261020160000`, en 77ffca9). Ningún error conocido propio.
 
 ## Prompt para seguir en un chat nuevo
 ```
-Sos el chat de Transportes del CRM Lazzari. Leé CLAUDE.md, la memoria (MEMORY.md y sus archivos), docs/traspaso/transportes.md (sección "Pendiente") y las primeras entradas de docs/ESTADO.md. La pantalla Transportes es el contador simple (V1.1.543); "¿Quién lo lleva?" es solo dato del remito. El margen antes/después del flete está DESCARTADO: no lo propongas. Nunca asignes nada solo. No toques la base ni publiques sin mi OK.
+Sos el chat de Transportes del CRM Lazzari. Leé CLAUDE.md, la memoria (MEMORY.md y sus archivos), docs/traspaso/transportes.md (sección "Pendiente") y las primeras entradas de docs/ESTADO.md. Si docs/traspaso/memoria/ existe, leé también esa memoria. La pantalla Transportes es el contador simple (V1.1.543); "¿Quién lo lleva?" es solo dato del remito. El margen antes/después del flete está DESCARTADO: no lo propongas. Nunca asignes nada solo. No toques la base ni publiques sin mi OK.
 ```

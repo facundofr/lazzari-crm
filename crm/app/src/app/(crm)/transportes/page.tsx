@@ -47,6 +47,7 @@ interface TransportistaRow {
   observaciones: string | null;
   activo: boolean;
   precio_viaje_fijo?: number | null;
+  no_factura?: boolean;
   created_at: string;
 }
 
@@ -399,7 +400,7 @@ export default function TransportesPage() {
 
     setFacturaViajeIds(rows.map((row) => row.id));
     setFacturaFile(null);
-    setFacturaEsInterna(false);
+    setFacturaEsInterna(true);
     setFacturaParsed(false);
     setFacturaParseError("");
     setFacturaForm({
@@ -466,7 +467,7 @@ export default function TransportesPage() {
           cae: facturaEsInterna ? null : facturaForm.cae.trim() || null,
           estado: "pendiente",
           solo_iva: false,
-          tipo: "mercaderia",
+          tipo: "transporte",
           sociedad_id: socId,
           created_by: profile?.id || null,
         })
@@ -519,6 +520,13 @@ export default function TransportesPage() {
   };
 
   // ── Columnas del catálogo ───────────────────────────────────────────
+  const cambiarNoFactura = async (t: TransportistaRow, valor: boolean) => {
+    const { error } = await (supabase as any).from("transportistas").update({ no_factura: valor }).eq("id", t.id);
+    if (error) { toast.error(`No se pudo guardar: ${error.message}`); return; }
+    setTransportistas((prev) => prev.map((x) => (x.id === t.id ? { ...x, no_factura: valor } : x)));
+    toast.success(valor ? `${t.nombre}: no nos factura (se le crea factura manual)` : `${t.nombre}: nos factura (se carga en Compras)`);
+  };
+
   const transportistaColumns = [
     { key: "nombre" as const, label: "Nombre", sortable: true, render: (t: TransportistaRow) => (
       <span className="font-medium">{t.nombre}</span>
@@ -526,6 +534,12 @@ export default function TransportesPage() {
     { key: "cuit" as const, label: "CUIT", render: (t: TransportistaRow) => t.cuit || "—" },
     { key: "telefono" as const, label: "Teléfono", render: (t: TransportistaRow) => t.telefono || "—" },
     { key: "precio_viaje_fijo" as const, label: "$ fijo por viaje", render: (t: TransportistaRow) => t.precio_viaje_fijo != null ? formatCurrency(t.precio_viaje_fijo, "ARS") : "—" },
+    { key: "no_factura" as const, label: "No nos factura", render: (t: TransportistaRow) => (
+      <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs" onClick={(e) => e.stopPropagation()} title="Tildado: no nos hace factura, se le crea una factura manual desde Transportes">
+        <input type="checkbox" checked={Boolean(t.no_factura)} onChange={(e) => cambiarNoFactura(t, e.target.checked)} />
+        {t.no_factura ? "No factura" : "Factura"}
+      </label>
+    )},
     { key: "activo" as const, label: "Estado", render: (t: TransportistaRow) => (
       <Badge variant={t.activo ? "success" : "outline"}>{t.activo ? "Activo" : "Inactivo"}</Badge>
     )},
@@ -587,12 +601,13 @@ export default function TransportesPage() {
                       <th className="px-2 py-1.5 text-center font-medium">Viajes</th>
                       <th className="px-2 py-1.5 text-left font-medium" title="Pone ese monto a todos sus viajes del mes sin liquidar (pisa lo que tengan)">$ a todos</th>
                       <th className="px-2 py-1.5 text-right font-medium">Total</th>
-                      <th className="px-3 py-1.5 text-right font-medium">Liquidar</th>
+                      <th className="px-3 py-1.5 text-right font-medium">Factura manual</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filas.map(({ r, moneda }) => {
                       const enCatalogo = transportistas.some((t) => t.id === r.clave);
+                      const noFactura = Boolean(transportistas.find((t) => t.id === r.clave)?.no_factura);
                       const esAbierto = abierto === r.clave;
                       const tildados = esAbierto ? r.pendientes.filter((v) => seleccion.has(v.id)) : [];
                       const aLiquidar = tildados.length ? tildados : r.pendientes;
@@ -640,11 +655,11 @@ export default function TransportesPage() {
                             </td>
                             <td className="px-2 py-1 text-right tabular-nums">{r.viajes > 0 ? formatCurrency(r.total, moneda) : <span className="text-zinc-300 dark:text-zinc-600">—</span>}</td>
                             <td className="px-3 py-1 text-right">
-                              {r.pendientes.length > 0 ? (
+                              {r.pendientes.length > 0 && noFactura ? (
                                 <button
                                   onClick={() => liquidar(r, moneda)}
                                   className="inline-flex items-center gap-1.5 rounded-lg bg-orange-50 px-2.5 py-1 text-xs font-semibold text-orange-700 hover:bg-orange-100 dark:bg-orange-950/30 dark:text-orange-400"
-                                  title={tildados.length ? `Liquidar los ${tildados.length} tildados` : "Liquidar todos los del mes sin liquidar (o abrí y tildá los que quieras)"}
+                                  title={tildados.length ? `Crear la factura manual con los ${tildados.length} tildados` : "Crear la factura manual con todos los del mes (o abrí y tildá los que quieras)"}
                                 >
                                   <Receipt size={13} /> {tildados.length ? `${tildados.length} tildado${tildados.length > 1 ? "s" : ""}` : "Todo"} · {formatCurrency(totalMontos(aLiquidar), moneda)}
                                 </button>
@@ -834,7 +849,7 @@ export default function TransportesPage() {
           <div className="w-full max-w-lg rounded-xl bg-white shadow-2xl dark:bg-zinc-900 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-zinc-200 p-4 dark:border-zinc-700">
               <div>
-                <h2 className="text-lg font-semibold text-zinc-900 dark:text-white">Enviar factura a pagos</h2>
+                <h2 className="text-lg font-semibold text-zinc-900 dark:text-white">Crear factura manual</h2>
                 <p className="mt-0.5 text-xs text-zinc-500">Se registrará en Facturas de Compra como pendiente</p>
               </div>
               <button onClick={() => setShowFacturaViaje(false)} className="text-zinc-400 hover:text-zinc-600">
@@ -846,20 +861,6 @@ export default function TransportesPage() {
               <div className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2.5 text-sm text-orange-800 dark:border-orange-900 dark:bg-orange-950/30 dark:text-orange-300">
                 <span className="font-medium">{facturaViajeIds.length} {facturaViajeIds.length === 1 ? "viaje" : "viajes"}</span>
                 <span className="block text-xs mt-0.5">{facturaForm.detalle}</span>
-              </div>
-
-              <div>
-                <label className={labelClass}>Respaldo del pago</label>
-                <div className="grid grid-cols-2 gap-2 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800">
-                  <button type="button" onClick={() => setFacturaEsInterna(false)}
-                    className={`rounded-md px-3 py-2 text-xs font-medium ${!facturaEsInterna ? "bg-white text-zinc-900 shadow dark:bg-zinc-700 dark:text-white" : "text-zinc-500"}`}>
-                    Con factura del transportista
-                  </button>
-                  <button type="button" onClick={() => { setFacturaEsInterna(true); setFacturaFile(null); setFacturaParsed(false); setFacturaParseError(""); }}
-                    className={`rounded-md px-3 py-2 text-xs font-medium ${facturaEsInterna ? "bg-white text-zinc-900 shadow dark:bg-zinc-700 dark:text-white" : "text-zinc-500"}`}>
-                    Factura manual · sin comprobante
-                  </button>
-                </div>
               </div>
 
               <div>
