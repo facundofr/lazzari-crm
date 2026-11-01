@@ -19,7 +19,7 @@ import { FinanzasLazzaCheques } from "./cheques";
 import { CargarEstadoCheques } from "./cheques-reportes";
 import { MovimientosPorTipo } from "./movimientos-por-tipo";
 import { CargaDiaria } from "./carga-diaria";
-import FinanzasParaConfirmar from "@/components/finanzas-para-confirmar";
+import { BancoSimple } from "./banco-simple";
 import { linkArchivo } from "@/lib/archivo-link";
 
 const db = supabase as any;
@@ -177,10 +177,12 @@ export function FinanzasLazzaBancos({ sociedadId, pestanaInicial = "cuentas" }: 
         <div className="space-y-3">
           {/* 24/10, Augusto: "Ver por tipo" muestra todas las líneas del banco agrupadas (solo lectura). */}
           <div className="flex w-fit rounded-lg border border-zinc-200 p-0.5 text-sm dark:border-zinc-700">
-            <button type="button" onClick={() => setVistaMov("confirmar")} className={botonPestana(vistaMov === "confirmar")}>Para confirmar</button>
+            <button type="button" onClick={() => setVistaMov("confirmar")} className={botonPestana(vistaMov === "confirmar")}>Movimientos del banco</button>
             <button type="button" onClick={() => setVistaMov("tipo")} className={botonPestana(vistaMov === "tipo")}>Ver por tipo</button>
           </div>
-          {vistaMov === "confirmar" ? <FinanzasParaConfirmar simple /> : <MovimientosPorTipo sociedadId={sociedadId} />}
+          {/* 30/10/2026 (banco simple, Augusto: "sin confirmar nada"): sin la bandeja "Para confirmar" (queda en el código); las
+              líneas se procesan solas al subir y al abrir (components/finanzas-lazza/banco-simple). */}
+          {vistaMov === "confirmar" ? <BancoSimple sociedadId={sociedadId} /> : <MovimientosPorTipo sociedadId={sociedadId} />}
         </div>
       )}
 

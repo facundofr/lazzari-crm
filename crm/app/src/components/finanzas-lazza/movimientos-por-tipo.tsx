@@ -75,7 +75,7 @@ export function MovimientosPorTipo({ sociedadId }: { sociedadId: string }) {
 
   if (error) return <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">No se pudieron leer los movimientos: {error}</p>;
   if (!filas) return <p className="flex items-center gap-2 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Leyendo los movimientos…</p>;
-  if (!filas.length) return <p className="rounded-lg border border-zinc-200 p-3 text-sm text-zinc-500 dark:border-zinc-700">Todavía no hay movimientos cargados. Subí el Excel en "Para confirmar".</p>;
+  if (!filas.length) return <p className="rounded-lg border border-zinc-200 p-3 text-sm text-zinc-500 dark:border-zinc-700">Todavía no hay movimientos cargados. Subí los archivos del banco en "Movimientos del banco".</p>;
 
   const elegir = (t: TipoMov | "") => { setTipoSel(t); setVisibles(POR_PAGINA); };
   const tarjeta = "rounded-xl border p-2.5 text-left text-xs transition";

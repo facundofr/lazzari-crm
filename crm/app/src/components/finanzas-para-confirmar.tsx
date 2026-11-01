@@ -62,7 +62,11 @@ const CONF: Record<Confianza, { label: string; clase: string }> = {
  * `simple` (23/10/2026, Bancos > Extracto de Finanzas Lazza): la misma bandeja y la misma lógica, con menos pantalla:
  * tres números arriba, una sola lista "Para vos", los impuestos y comisiones del banco juntos en una fila y el registro como link.
  */
-export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { onIrATab?: (tab: string) => void; simple?: boolean }) {
+/**
+ * `soloSubir` (30/10/2026, banco simple): solo la subida de archivos (con su vista previa y sus controles), sin la bandeja.
+ * Al terminar de guardar avisa con `onGuardado` y el banco simple procesa las líneas solo (components/finanzas-lazza/banco-simple).
+ */
+export default function FinanzasParaConfirmar({ onIrATab, simple = false, soloSubir = false, onGuardado }: { onIrATab?: (tab: string) => void; simple?: boolean; soloSubir?: boolean; onGuardado?: () => void }) {
   const { sociedadActiva, profile } = useUser() as any;
   const sociedadId: string | undefined = sociedadActiva?.id;
   const [cargando, setCargando] = useState(true);
@@ -850,6 +854,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
     setOcupado(null);
     setAviso(msgs.join("\n"));
     await cargar();
+    onGuardado?.();
   }
 
   // ─── Pantalla ──────────────────────────────────────────────────────────────
@@ -1025,7 +1030,8 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
         className={`rounded-xl border-2 border-dashed p-3 text-sm transition ${arrastrando ? "border-orange-400 bg-orange-50 dark:bg-orange-950/30" : "border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900"}`}
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
-          {simple ? <p className="text-zinc-600 dark:text-zinc-300"><b>Arrastrá acá todos los archivos del banco juntos</b>: los Excel "Movimientos" de cada cuenta (una vez por mes alcanza) y los reportes de eCheq (todos los días). Primero se cargan los movimientos y después el estado de los cheques; no se duplica nada. Las transferencias se guardan pero no se tocan: los cobros y pagos los cargás vos.</p> : (
+          {soloSubir ? <p className="text-zinc-600 dark:text-zinc-300"><b>Arrastrá acá todos los archivos del banco juntos</b>: los Excel "Movimientos" de cada cuenta y los reportes de eCheq. No se duplica nada. Al guardar, cada línea se clasifica sola por el código del banco y se cruza con lo que ya está cargado (solo lo exacto): no hay nada para confirmar.</p>
+          : simple ? <p className="text-zinc-600 dark:text-zinc-300"><b>Arrastrá acá todos los archivos del banco juntos</b>: los Excel "Movimientos" de cada cuenta (una vez por mes alcanza) y los reportes de eCheq (todos los días). Primero se cargan los movimientos y después el estado de los cheques; no se duplica nada. Las transferencias se guardan pero no se tocan: los cobros y pagos los cargás vos.</p> : (
           <p className="text-zinc-600 dark:text-zinc-300"><b>Arrastrá acá el Excel del BBVA</b> (se verifican los saldos al centavo), el <b>resumen mensual en PDF</b> (pone nombre y CUIT a cada transferencia y débito automático) y el <b>CSV de ARCA</b> "Mis comprobantes recibidos" (qué factura paga cada transferencia a un proveedor).</p>
           )}
           <label className="flex cursor-pointer items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-600">
@@ -1098,7 +1104,7 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
             <div className="flex gap-2 pt-1">
               <button disabled={ocupado !== null || !(archivos.some((a) => a.cuenta) || reportesEcheq.length > 0) || (rechazosQueAnulan.length > 0 && !rechazoEntendido)}
                 title={rechazosQueAnulan.length > 0 && !rechazoEntendido ? "Tildá «Entendido» del cheque rechazado para guardar" : undefined}
-                onClick={() => void guardarArchivos()} className="rounded-md bg-emerald-600 px-3 py-1 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">Guardar y armar la bandeja</button>
+                onClick={() => void guardarArchivos()} className="rounded-md bg-emerald-600 px-3 py-1 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">{soloSubir ? "Guardar" : "Guardar y armar la bandeja"}</button>
               <button onClick={() => { setArchivos([]); setReportesEcheq([]); setRechazoEntendido(false); }} className="rounded-md border border-zinc-200 px-3 py-1 dark:border-zinc-700">Cancelar</button>
             </div>
           </div>
@@ -1106,14 +1112,14 @@ export default function FinanzasParaConfirmar({ onIrATab, simple = false }: { on
         {aviso && <p className="mt-2 whitespace-pre-line text-xs font-medium text-zinc-700 dark:text-zinc-300">{aviso}</p>}
       </div>
 
-      {faltaMigracion && (
+      {!soloSubir && faltaMigracion && (
         <div className="flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <div><b>Falta una actualización de la base de datos para la bandeja</b> (avisá a soporte). Mientras tanto se ve lo que propone el sistema, pero no se puede confirmar (hace falta el Registro).</div>
         </div>
       )}
 
-      {cargando ? (
+      {soloSubir ? null : cargando ? (
         <div className="flex items-center gap-2 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Armando la bandeja…</div>
       ) : error ? (
         <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>

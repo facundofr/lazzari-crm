@@ -57,13 +57,15 @@ export const EVENTO_ABRIR_FINANZAS = "finanzas:abrir";
 /**
  * A dónde lleva un aviso de la campana (auditoría UX 27/10/2026, arreglo 8): al ítem, no a Finanzas en general.
  * Cheque rechazado (aviso de un cliente) → la ficha de ese cliente en Cuentas corrientes; aviso de cheque de tercero → Cheques;
- * aviso de una factura de compra (total cambiado) → Facturas. Cualquier otro aviso de finanzas → el inicio.
+ * aviso de una factura de compra (total cambiado) → Facturas; aviso de una línea del banco (banco simple, 30/10/2026) → Bancos.
+ * Cualquier otro aviso de finanzas → el inicio.
  */
 export function linkDeAlertaFinanzas(entityType: string | null | undefined, entityId: string | null | undefined): string {
   switch (entityType) {
     case "cliente": return entityId ? `/finanzas?seccion=cuentas&cliente=${encodeURIComponent(entityId)}` : "/finanzas?seccion=cuentas";
     case "echeq_tercero": return "/finanzas?seccion=cheques";
     case "factura_compra": return "/finanzas?seccion=facturas";
+    case "extracto_movimiento": return "/finanzas?seccion=bancos";
     default: return "/finanzas";
   }
 }

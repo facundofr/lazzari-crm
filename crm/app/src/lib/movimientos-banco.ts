@@ -8,7 +8,7 @@ export type TipoMov =
   | "impuestos_comisiones" | "cheques" | "transferencias" | "debitos_automaticos" | "tarjeta" | "propios" | "efectivo" | "otros" | "sin_clasificar";
 
 export const TIPOS_MOV: Array<{ id: TipoMov; nombre: string; ayuda: string }> = [
-  { id: "sin_clasificar", nombre: "Sin clasificar", ayuda: "Líneas que todavía no tienen tipo: se resuelven en Para confirmar." },
+  { id: "sin_clasificar", nombre: "Sin clasificar", ayuda: "Líneas que el banco todavía no pudo cruzar: falta cargar su cobro o pago (el motivo está en Movimientos del banco)." },
   { id: "impuestos_comisiones", nombre: "Impuestos y comisiones", ayuda: "Comisiones, IVA, SIRCREB, impuesto crédito Ganancias (Ley 25.413) y pagos de ARCA (VEP)." },
   { id: "cheques", nombre: "Cheques", ayuda: "Depósitos, débitos y rechazos de cheques." },
   { id: "transferencias", nombre: "Transferencias", ayuda: "Cobros y pagos por transferencia." },
