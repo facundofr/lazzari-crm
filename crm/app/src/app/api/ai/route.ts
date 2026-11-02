@@ -70,7 +70,7 @@ Productos: codigo, nombre, categoria, precio_costo, moneda_costo, stock, stock_m
 Presupuestos: numero, cliente_id, vendedor_id, estado (solicitud/pendiente/aprobado/rechazado/postergado/vencido/facturado), total, moneda, fecha. "solicitud" = pedido del cliente todavía no cotizado. "Vencido" = PR pendiente cuya fecha de validez (columna vencimiento) ya pasó; para contar vencidos usá estado = vencido O (estado = pendiente Y vencimiento < hoy), no solo el estado.
 Facturas (de venta): numero, tipo, punto_venta, cliente_id, total, moneda, estado, fecha, fecha_vencimiento, cae.
 Facturas_compra: numero_factura, tipo_comprobante, proveedor_id, fecha, fecha_vencimiento, total, moneda, estado.
-Ordenes_compra: numero, proveedor_id, presupuesto_id, estado, estado_facturacion, total, moneda.
+Ordenes_compra: numero, proveedor_id, presupuesto_origen_id (el PR), estado (borrador/enviada/recibida_parcial/recibida/cancelada; cancelada = anulada), pedido (true = ya se le pidió al proveedor), pedido_at, fecha_entrega_estimada, saldo_cerrado (true = el proveedor no entrega el resto), total, moneda. No usar estado_facturacion ni estado_pago de la OC: desde el 19/10/2026 las facturas de compra ya no se atan a la OC y esas columnas no se actualizan; lo facturado y pagado se ve en facturas_compra por proveedor.
 Movimientos: tipo, monto, moneda, fecha, descripcion, anulado.
 Echeqs: numero, monto, fecha_pago, estado, direccion (recibido/emitido).
 Contactos: entity_type (cliente/proveedor), entity_id, nombre, cargo, email, telefono.

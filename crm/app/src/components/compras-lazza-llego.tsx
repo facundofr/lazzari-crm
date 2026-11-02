@@ -7,12 +7,14 @@
  * [Corregir cantidades]: si se marcó de más (ej. Completo por error), se pone el total que llegó de verdad.
  * Se guarda todo junto con registrar_llegada_oc (migración 20261029170000, auditoría H48): suma sobre lo que hay en la base,
  * así dos personas a la vez no se pisan. Sin la migración guarda como antes, renglón por renglón.
+ * Tanda 6 (02/11/2026): al marcar que llegó algo, aviso en la campana al vendedor del PR (lo hacía Compras nueva). Corregir no avisa.
  */
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { useToast } from "@/components/ui/toast";
+import { useUser } from "@/lib/auth-context";
 import { EVENTO_FACTURAS_COMPRA } from "@/components/carga-masiva-global";
-import { armarRecepcion, estadoPorRecibido } from "@/lib/compras-recepcion";
+import { armarRecepcion, avisoLlegada, estadoPorRecibido } from "@/lib/compras-recepcion";
 import { cant } from "@/lib/cargar-factura";
 import { Check, Loader2, X } from "lucide-react";
 
@@ -23,6 +25,7 @@ type Item = { id: string; codigo: string | null; descripcion: string; cantidad: 
 
 export default function ComprasLazzaLlego({ sociedadId, oc, onClose }: { sociedadId: string; oc: { id: string; numero: string }; onClose: () => void }) {
   const { toast } = useToast();
+  const { profile } = useUser();
   const [items, setItems] = useState<Item[]>([]);
   const [cargando, setCargando] = useState(true);
   const [parcial, setParcial] = useState(false);
@@ -54,6 +57,17 @@ export default function ComprasLazzaLlego({ sociedadId, oc, onClose }: { socieda
     if (e && faltaFuncion(e)) return null;
     if (e) throw new Error(`No se pudo guardar lo que llegó (${e.message}); no quedó nada cargado`);
     return { faltan: Number(data?.faltan || 0) };
+  }
+
+  /** Aviso al vendedor del PR (campana). Si falla no frena: lo que llegó ya quedó guardado. */
+  async function avisarVendedor(faltan: number) {
+    const { data } = await db.from("ordenes_compra").select("proveedores(razon_social, nombre_fantasia), presupuesto_origen:presupuesto_origen_id(id, numero, vendedor_id, created_by)")
+      .eq("id", oc.id).eq("sociedad_id", sociedadId).single();
+    const pr = data?.presupuesto_origen || null;
+    const prov = data?.proveedores;
+    const aviso = avisoLlegada({ ocNumero: oc.numero, proveedor: (prov?.nombre_fantasia || prov?.razon_social || "").trim() || null, faltan, quien: profile?.full_name, pr }, profile?.id);
+    if (!aviso || !pr) return;
+    await db.from("alertas").insert({ ...aviso, tipo: "seguimiento", entity_id: pr.id, entity_type: "presupuesto", module: "presupuestos", sociedad_id: sociedadId }).then(() => {}, () => {});
   }
 
   /** Corregir: el número es el TOTAL que llegó (puede bajar). */
@@ -95,6 +109,7 @@ export default function ComprasLazzaLlego({ sociedadId, oc, onClose }: { socieda
       if (!rec.cargas.length) { setError("No pusiste ninguna cantidad."); return; }
       const enBase = await llegadaEnBase(rec.cargas.map(c => ({ item_id: c.item_id, cantidad: c.cantidad })), "sumar");
       if (enBase) {
+        await avisarVendedor(enBase.faltan);
         toast.success(`${oc.numero}: ${enBase.faltan ? `llegó una parte, faltan ${enBase.faltan} artículo(s)` : "llegó todo"}`);
         window.dispatchEvent(new Event(EVENTO_FACTURAS_COMPRA));
         onClose();
@@ -117,6 +132,7 @@ export default function ComprasLazzaLlego({ sociedadId, oc, onClose }: { socieda
         if (e) toast.warning(`${oc.numero}: se guardó lo que llegó pero no cambió el estado (${e.message})`);
       }
       const faltan = despues.filter(i => Number(i.cantidad_recibida || 0) < Number(i.cantidad) - 0.0001).length;
+      await avisarVendedor(faltan);
       toast.success(`${oc.numero}: ${faltan ? `llegó una parte, faltan ${faltan} artículo(s)` : "llegó todo"}`);
       window.dispatchEvent(new Event(EVENTO_FACTURAS_COMPRA));
       onClose();

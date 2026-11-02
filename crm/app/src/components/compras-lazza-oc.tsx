@@ -16,6 +16,10 @@
  * si alguien cambió la OC mientras estaba abierta. Sin la migración guarda como antes, paso por paso.
  * Augusto 19/10 (al sacar del menú la pantalla vieja de Compras): se cambia el operador de la OC (`created_by`) y se puede
  * Anular la OC (queda cancelada, no se borra, con nota de quién y cuándo) o Reactivarla desde la pestaña "Anuladas".
+ * Tanda 6 de la auditoría (02/11/2026, lo hacían las pantallas viejas de Compras), con lo guardado de la OC:
+ * - Enviar al proveedor: la misma ventana que se propone al aprobar el PR (WhatsApp, mail con PDF, PDF, copiar).
+ * - Reclamar lo que falta: copia el mensaje con solo lo pendiente, sin precios.
+ * - Cerrar saldo ("el proveedor no entrega el resto", cerrar_saldo_oc): la OC pasa a Terminadas; Reabrir saldo la vuelve.
  */
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
@@ -26,7 +30,9 @@ import { EVENTO_FACTURAS_COMPRA } from "@/components/carga-masiva-global";
 import { estadoPorRecibido } from "@/lib/compras-recepcion";
 import { asignarRenglonesAProveedor } from "@/lib/oc-sin-proveedor";
 import { monedaRenglonOc, prDeRenglones, totalesOc } from "@/lib/compras-lazza";
-import { Ban, Check, Loader2, Plus, RotateCcw, Trash2, Undo2, X } from "lucide-react";
+import { reclamoDeOC } from "@/lib/oc-envio";
+import EnviarOCProveedor from "@/components/enviar-oc-proveedor";
+import { Ban, Check, ClipboardCopy, Loader2, Lock, Plus, RotateCcw, Send, Trash2, Undo2, Unlock, X } from "lucide-react";
 
 const db = supabase as any;
 const faltaFuncion = (e: any) => e && (e.code === "PGRST202" || e.code === "42883" || /function .* does not exist|Could not find the function/i.test(String(e.message || "")));
@@ -44,6 +50,7 @@ type Renglon = { id: string; codigo: string; descripcion: string; cantidad: stri
 type Oc = {
   id: string; numero: string; estado: string; moneda: string | null; iva: number | null; proveedor_id: string | null;
   fecha_entrega_estimada: string | null; observaciones: string | null; presupuesto_origen_id: string | null; created_by: string | null; updated_at?: string | null;
+  fecha: string; saldo_cerrado: boolean | null; saldo_cerrado_motivo: string | null;
   presupuesto_origen: { numero: string; modalidad_emision: string | null; created_by: string | null } | null;
 };
 type Proveedor = { id: string; razon_social: string; nombre_fantasia: string | null; cuit: string | null };
@@ -74,6 +81,7 @@ export default function ComprasLazzaOc({ sociedadId, oc: ocRef, onClose }: { soc
   const [cargando, setCargando] = useState(true);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState("");
+  const [enviar, setEnviar] = useState(false);
 
   useEffect(() => {
     let vivo = true;
@@ -81,7 +89,7 @@ export default function ComprasLazzaOc({ sociedadId, oc: ocRef, onClose }: { soc
       try {
         const traerItems = (sel: string) => db.from("orden_compra_items").select(sel).eq("orden_id", ocRef.id).order("orden");
         const [o, provs, links, viejas, perfs] = await Promise.all([
-          db.from("ordenes_compra").select("id, numero, estado, moneda, iva, proveedor_id, fecha_entrega_estimada, observaciones, presupuesto_origen_id, created_by, updated_at, presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision, created_by)")
+          db.from("ordenes_compra").select("id, numero, estado, moneda, iva, proveedor_id, fecha_entrega_estimada, observaciones, presupuesto_origen_id, created_by, updated_at, fecha, saldo_cerrado, saldo_cerrado_motivo, presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision, created_by)")
             .eq("id", ocRef.id).eq("sociedad_id", sociedadId).single(),
           db.from("proveedores").select("id, razon_social, nombre_fantasia, cuit").eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social"),
           db.from("factura_compra_ocs").select("facturas_compra(id, estado)").eq("orden_compra_id", ocRef.id),
@@ -332,6 +340,31 @@ export default function ComprasLazzaOc({ sociedadId, oc: ocRef, onClose }: { soc
     window.dispatchEvent(new Event(EVENTO_FACTURAS_COMPRA));
     onClose();
   }
+  // Reclamo: solo lo que falta según lo guardado (no lo que se está editando sin guardar).
+  const reclamo = oc ? reclamoDeOC(oc, items) : null;
+  async function copiarReclamo() {
+    if (!reclamo) return;
+    try { await navigator.clipboard.writeText(reclamo); toast.success("Reclamo copiado: pegalo en el WhatsApp o el mail del proveedor"); }
+    catch { window.prompt("Copiá el reclamo (Ctrl+C):", reclamo); }
+  }
+  // Cerrar saldo: lo que falta deja de esperarse (la OC pasa a Terminadas). Se puede reabrir.
+  async function cambiarSaldo(cerrar: boolean) {
+    if (!oc) return;
+    let motivo: string | null = null;
+    if (cerrar) {
+      motivo = window.prompt(`Cerrar el saldo de ${oc.numero}: lo que falta deja de esperarse y la OC pasa a Terminadas (se puede reabrir).
+
+Motivo (opcional):`, "El proveedor no va a entregar el resto");
+      if (motivo === null) return;
+    }
+    setGuardando(true); setError("");
+    const { error: e } = await db.rpc("cerrar_saldo_oc", { p_sociedad_id: sociedadId, p_oc_id: oc.id, p_cerrar: cerrar, p_motivo: motivo });
+    setGuardando(false);
+    if (e) { setError(`No se pudo ${cerrar ? "cerrar" : "reabrir"} el saldo (${e.message})`); return; }
+    toast.success(cerrar ? `${oc.numero}: saldo cerrado` : `${oc.numero}: saldo reabierto, vuelve a esperar lo que falta`);
+    window.dispatchEvent(new Event(EVENTO_FACTURAS_COMPRA));
+    onClose();
+  }
   // Reactivar: vuelve al estado que corresponde por lo que llegó (Por pedir / Pedido / Parcial / Completo).
   async function reactivar() {
     if (!oc) return;
@@ -352,6 +385,7 @@ export default function ComprasLazzaOc({ sociedadId, oc: ocRef, onClose }: { soc
           <h2 className="text-base font-bold"><span className="font-mono">{ocRef.numero}</span>
             {oc?.presupuesto_origen?.numero && <span className="ml-2 text-xs font-normal text-zinc-500">de {oc.presupuesto_origen.numero}</span>}
             {anulada && <span className="ml-2 rounded bg-red-100 px-1.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">Anulada</span>}
+            {!anulada && oc?.saldo_cerrado && <span title={oc.saldo_cerrado_motivo || undefined} className="ml-2 rounded bg-zinc-200 px-1.5 text-xs font-medium text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200">Saldo cerrado</span>}
           </h2>
           <button onClick={onClose} disabled={guardando} className="rounded p-1 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-5 w-5" /></button>
         </div>
@@ -453,6 +487,16 @@ export default function ComprasLazzaOc({ sociedadId, oc: ocRef, onClose }: { soc
             </label>
 
             {error && <p className="mb-2 rounded-lg bg-red-50 p-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400">{error}</p>}
+            {!anulada && (
+              <div className="mb-3 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-3 text-xs dark:border-zinc-800">
+                <button onClick={() => setEnviar(true)} disabled={guardando} title="WhatsApp, mail con el PDF, bajar el PDF o copiar (con lo guardado de la OC)" className="inline-flex items-center gap-1 rounded-md border border-zinc-300 px-2 py-1 hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-600 dark:hover:bg-zinc-800"><Send className="h-3.5 w-3.5" /> Enviar al proveedor</button>
+                {reclamo && !oc.saldo_cerrado && <button onClick={() => void copiarReclamo()} disabled={guardando} title="Copia el mensaje con solo lo que falta llegar, sin precios" className="inline-flex items-center gap-1 rounded-md border border-zinc-300 px-2 py-1 hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-600 dark:hover:bg-zinc-800"><ClipboardCopy className="h-3.5 w-3.5" /> Reclamar lo que falta</button>}
+                {oc.saldo_cerrado
+                  ? <button onClick={() => void cambiarSaldo(false)} disabled={guardando} title="Volver a esperar lo que falta" className="inline-flex items-center gap-1 rounded-md border border-zinc-300 px-2 py-1 hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-600 dark:hover:bg-zinc-800"><Unlock className="h-3.5 w-3.5" /> Reabrir saldo</button>
+                  : reclamo && <button onClick={() => void cambiarSaldo(true)} disabled={guardando} title="El proveedor no va a entregar el resto: la OC pasa a Terminadas" className="inline-flex items-center gap-1 rounded-md border border-zinc-300 px-2 py-1 hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-600 dark:hover:bg-zinc-800"><Lock className="h-3.5 w-3.5" /> Cerrar saldo</button>}
+                {oc.saldo_cerrado && oc.saldo_cerrado_motivo && <span className="text-zinc-500">Saldo cerrado: {oc.saldo_cerrado_motivo}</span>}
+              </div>
+            )}
             <div className="flex flex-wrap justify-end gap-2">
               {anulada
                 ? <button onClick={() => void reactivar()} disabled={guardando} title="Vuelve a En curso (o Terminadas si ya llegó todo)" className="mr-auto inline-flex items-center gap-1 rounded-lg border border-emerald-300 px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50 disabled:opacity-40 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-950/30"><RotateCcw className="h-4 w-4" /> Reactivar</button>
@@ -465,6 +509,7 @@ export default function ComprasLazzaOc({ sociedadId, oc: ocRef, onClose }: { soc
           </>
         )}
       </div>
+      {enviar && oc && <div onClick={e => e.stopPropagation()}><EnviarOCProveedor ocIds={[oc.id]} titulo={`Enviar ${oc.numero} al proveedor`} onClose={() => setEnviar(false)} /></div>}
     </div>
   );
 }

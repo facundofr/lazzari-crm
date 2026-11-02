@@ -54,6 +54,22 @@ export function textoReclamoOC(oc: { numero: string; fecha: string }, pendientes
   ].join("\n");
 }
 
+/**
+ * Reclamo armado desde los renglones de la OC (Compras Lazza, auditoría Tanda 6, 02/11/2026): solo lo que falta llegar.
+ * null si ya llegó todo. "parcial" si llegó algo de cualquier renglón.
+ */
+export function reclamoDeOC(
+  oc: { numero: string; fecha: string },
+  items: Array<{ codigo?: string | null; descripcion?: string | null; cantidad: number | string; cantidad_recibida?: number | string | null; unidad?: string | null }>,
+): string | null {
+  const n = (v: unknown) => Number(v) || 0;
+  const pendientes = items
+    .map((i) => ({ codigo: i.codigo, descripcion: i.descripcion || i.codigo || "", unidad: i.unidad, falta: Math.round((n(i.cantidad) - n(i.cantidad_recibida)) * 100) / 100 }))
+    .filter((i) => i.falta > 0);
+  if (!pendientes.length) return null;
+  return textoReclamoOC(oc, pendientes, items.some((i) => n(i.cantidad_recibida) > 0));
+}
+
 /** Link de WhatsApp con la OC escrita (null si el número no sirve). */
 export function linkWhatsAppOC(numero: string | null | undefined, texto: string): string | null {
   const base = linkWhatsApp(numero);

@@ -82,3 +82,21 @@ export function ocDelRemito(
 export function seguroParaCargar(r: Recepcion, ocSegura: boolean): boolean {
   return ocSegura && r.cargas.length > 0 && !r.sin_atar.length && !r.de_mas.length;
 }
+
+/**
+ * Aviso en la campana al vendedor del PR cuando Compras marca "Llegó" (auditoría Tanda 6, 02/11/2026; lo hacía Compras nueva).
+ * A quién: el vendedor del PR (o quien lo cargó). null = no se avisa (OC sin PR, sin vendedor, o el que marca es el mismo vendedor).
+ */
+export function avisoLlegada(
+  p: { ocNumero: string; proveedor?: string | null; faltan: number; quien?: string | null; pr: { numero: string; vendedor_id?: string | null; created_by?: string | null } | null },
+  yo: string | null | undefined,
+): { user_id: string; title: string; description: string } | null {
+  const destino = p.pr?.vendedor_id || p.pr?.created_by || null;
+  if (!p.pr || !destino || destino === yo) return null;
+  const que = p.faltan > 0 ? `llegó una parte (faltan ${p.faltan} artículo${p.faltan === 1 ? "" : "s"})` : "llegó todo";
+  return {
+    user_id: destino,
+    title: `Llegó mercadería: ${p.pr.numero}`,
+    description: `${p.ocNumero}${p.proveedor ? ` de ${p.proveedor}` : ""}: ${que}${p.quien ? ` · lo marcó ${p.quien}` : ""}`,
+  };
+}

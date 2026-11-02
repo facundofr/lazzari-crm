@@ -1,4 +1,4 @@
-import { armarRecepcion, estadoPorRecibido, ocDelRemito, seguroParaCargar } from "../src/lib/compras-recepcion";
+import { armarRecepcion, avisoLlegada, estadoPorRecibido, ocDelRemito, seguroParaCargar } from "../src/lib/compras-recepcion";
 const ok = (c: boolean, m: string) => { if (!c) { console.error("FALLA", m); process.exit(1); } console.log("ok", m); };
 
 const items = [
@@ -44,3 +44,14 @@ ok(ocDelRemito({ proveedor: "Funcional" }, ocs) === null, "proveedor con dos OC 
 ok(ocDelRemito({ proveedor_cuit: "30722222222" }, ocs) === "o3", "por CUIT con una sola OC");
 ok(ocDelRemito({}, ocs) === null, "sin datos no inventa");
 console.log("TODO OK");
+
+// Aviso al vendedor cuando llega (Tanda 6)
+const pr = { numero: "PR-2026-1300", vendedor_id: "ven", created_by: "carga" };
+let a = avisoLlegada({ ocNumero: "OC-2026-0500", proveedor: "Funcional SA", faltan: 0, quien: "Jero", pr }, "jero");
+ok(a?.user_id === "ven" && a.title === "Llegó mercadería: PR-2026-1300" && a.description === "OC-2026-0500 de Funcional SA: llegó todo · lo marcó Jero", "avisa al vendedor");
+a = avisoLlegada({ ocNumero: "OC-2026-0500", faltan: 2, pr }, "jero");
+ok(a?.description === "OC-2026-0500: llegó una parte (faltan 2 artículos)", "parcial");
+ok(avisoLlegada({ ocNumero: "OC-1", faltan: 1, pr: { ...pr, vendedor_id: null } }, "x")?.user_id === "carga" && avisoLlegada({ ocNumero: "OC-1", faltan: 1, pr: { ...pr, vendedor_id: null } }, "x")?.description.endsWith("(faltan 1 artículo)") === true, "sin vendedor: al que cargó el PR");
+ok(avisoLlegada({ ocNumero: "OC-1", faltan: 0, pr }, "ven") === null, "el vendedor mismo no se avisa");
+ok(avisoLlegada({ ocNumero: "OC-1", faltan: 0, pr: null }, "x") === null, "OC sin PR no avisa");
+console.log("OK aviso de llegada");
