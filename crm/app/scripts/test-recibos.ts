@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { armarRecibos, textoTotalRecibo } from "../src/lib/recibos";
+import { armarRecibos, cambiosDeRecibo, textoTotalRecibo } from "../src/lib/recibos";
 
 const recibos = armarRecibos({
   recibos: [
@@ -86,5 +86,18 @@ const [enviado] = armarRecibos({
 });
 assert.deepEqual([enviado.enviado, enviado.enviadoA], ["2026-10-27T15:00:00+00:00", "a@x.com, b@x.com"]);
 assert.deepEqual([r1.enviado, r1.enviadoA], [null, null]);
+
+// Editar un cobro (Tanda 6): solo los importes que cambian; con coma o punto; cero o vacío es error
+let c = cambiosDeRecibo([
+  { id: "a", monto: 1000, texto: "1.000,00" },
+  { id: "b", monto: 250.5, texto: "300,25", medio: "Ret. IIBB" },
+  { id: "c", monto: 10, texto: "10.004" },
+]);
+assert.deepEqual(c.cambios, [{ movimiento_id: "b", monto: 300.25 }]);
+assert.deepEqual(c.errores, []);
+c = cambiosDeRecibo([{ id: "a", monto: 5, texto: "", medio: "Efectivo" }, { id: "b", monto: 5, texto: "0" }, { id: "d", monto: 5, texto: "abc" }]);
+assert.equal(c.cambios.length, 0);
+assert.deepEqual(c.errores, ["Efectivo: el importe tiene que ser mayor a cero", "Renglón: el importe tiene que ser mayor a cero", "Renglón: el importe tiene que ser mayor a cero"]);
+assert.deepEqual(cambiosDeRecibo([{ id: "x", monto: 100, texto: "100.5" }]).cambios, [{ movimiento_id: "x", monto: 100.5 }]);
 
 console.log("test-recibos OK");

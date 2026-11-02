@@ -123,3 +123,21 @@ export function armarRecibos(args: {
 export function textoTotalRecibo(t: { ARS: number; USD: number }, fmt: (v: number, m: "ARS" | "USD") => string): string {
   return [t.ARS > 0.005 ? fmt(t.ARS, "ARS") : "", t.USD > 0.005 ? fmt(t.USD, "USD") : ""].filter(Boolean).join(" + ") || fmt(0, "ARS");
 }
+
+/**
+ * Editar un cobro (auditoría Tanda 6, 02/11/2026): de lo que se escribió en cada renglón, los importes que cambian,
+ * para `editar_recibo`. Acepta "1.234,56" o "1234.56". Un importe vacío, en cero o que no se entiende va en `errores`.
+ */
+export function cambiosDeRecibo(renglones: Array<{ id: string; monto: number; texto: string; medio?: string }>): {
+  cambios: Array<{ movimiento_id: string; monto: number }>; errores: string[];
+} {
+  const cambios: Array<{ movimiento_id: string; monto: number }> = [];
+  const errores: string[] = [];
+  for (const r of renglones) {
+    const t = r.texto.trim();
+    const v = Number(t.includes(",") ? t.replace(/\./g, "").replace(",", ".") : t);
+    if (!t || !Number.isFinite(v) || v <= 0) { errores.push(`${r.medio || "Renglón"}: el importe tiene que ser mayor a cero`); continue; }
+    if (Math.abs(r2(v) - r2(n(r.monto))) >= 0.005) cambios.push({ movimiento_id: r.id, monto: r2(v) });
+  }
+  return { cambios, errores };
+}

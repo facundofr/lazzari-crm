@@ -677,6 +677,9 @@ export function FichaFacturaVenta({ factura, facturaId, cobrable = false, onCobr
 /**
  * Ficha de una factura de compra: datos, renglones, archivo del proveedor (Ver / Descargar) y las OP que la pagaron.
  * `conAcciones` (Finanzas Lazza): en cada OP, Ver, Descargar y Enviar por mail (la misma ventana de la OP).
+ * Auditoría Tanda 6 (02/11/2026, lo hacía la Finanzas vieja): Anular la factura o NC de compra cargada por error, con
+ * `anular_factura_compra` (no se borra: queda anulada con el motivo en las notas; lo pagado queda a favor del proveedor;
+ * una NC devuelve el crédito a las facturas donde se aplicó). Avisa, nunca frena.
  */
 export function FichaFacturaCompra({ factura, facturaId, onClose, conAcciones = false, onCambio, pagable = false, onPagar, soloLectura = false }: {
   factura?: FacturaCompra | null; facturaId?: string | null; onClose: () => void; conAcciones?: boolean;
@@ -769,6 +772,30 @@ export function FichaFacturaCompra({ factura, facturaId, onClose, conAcciones = 
     ]).then(([{ data }, o]) => { if (vivo) { setItems(data || []); setOps(o); } });
     return () => { vivo = false; };
   }, [compra?.id]);
+
+  const [anulando, setAnulando] = useState(false);
+  const sePuedeAnular = conAcciones && !soloLectura && !!compra && compra.estado !== "anulada";
+  async function anularCompra() {
+    if (!compra) return;
+    const esNC = String(compra.tipo_comprobante || "").toUpperCase().startsWith("NC");
+    const comp = [compra.tipo_comprobante, compra.numero_factura].filter(Boolean).join(" ");
+    const opsVivas = (ops || []).map((o) => o.numero);
+    const avisos = [
+      !esNC && opsVivas.length ? `• Tiene pagos con ${opsVivas.join(", ")}: la OP no se anula y lo pagado queda a favor del proveedor.` : "",
+      !esNC && pagosTarjeta.length ? `• Está pagada con ${pagosTarjeta[0].tarjeta}: ese pago no se anula (si no se pagó, usá "volver a Pagos" antes).` : "",
+      esNC ? "• El crédito de esta NC se saca de las facturas donde se aplicó: esas facturas vuelven a deber ese importe." : "",
+    ].filter(Boolean);
+    const motivo = window.prompt([`¿Anulás ${comp} de ${compra.proveedores?.razon_social || "este proveedor"}?`, ...(avisos.length ? ["", ...avisos] : []), "", "No se borra: queda anulada con el motivo. Motivo:"].join("\n"), "Cargada por error");
+    if (motivo === null) return;
+    setAnulando(true);
+    const { data, error } = await (supabase as any).rpc("anular_factura_compra", { p_factura_id: compra.id, p_motivo: motivo });
+    setAnulando(false);
+    if (error) { toast.error(`No se pudo anular: ${error.message}`); return; }
+    toast.success(`${comp} anulada`);
+    for (const a of (data?.avisos || []) as string[]) toast.warning(a);
+    onCambio?.();
+    onClose();
+  }
 
   async function op(opId: string, ver: boolean) {
     if (!sociedadActiva) return;
@@ -865,6 +892,14 @@ export function FichaFacturaCompra({ factura, facturaId, onClose, conAcciones = 
                   </span>
                   <button type="button" disabled={deshaciendo} onClick={deshacerTarjeta}
                     className="rounded-lg border border-blue-300 bg-white px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50 dark:border-blue-800 dark:bg-zinc-900 dark:text-blue-300">{deshaciendo ? "Anulando…" : "No se pagó con tarjeta: volver a Pagos"}</button>
+                </div>
+              )}
+              {sePuedeAnular && (
+                <div className="mt-4 border-t border-zinc-100 pt-3 dark:border-zinc-800">
+                  <button type="button" disabled={anulando || ops === null} onClick={() => void anularCompra()} title="Cargada por error: queda anulada (no se borra) y lo pagado queda a favor del proveedor"
+                    className="inline-flex items-center gap-1 rounded-lg border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/30">
+                    <Ban className="h-4 w-4" /> {anulando ? "Anulando…" : String(compra.tipo_comprobante || "").toUpperCase().startsWith("NC") ? "Anular NC" : "Anular factura"}
+                  </button>
                 </div>
               )}
             </>

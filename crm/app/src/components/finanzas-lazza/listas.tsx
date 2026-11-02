@@ -5,9 +5,10 @@
 // con Ver, Descargar y Enviar por mail (recibo-doc.tsx; el mismo PDF de recibo de Finanzas, con N°, medios, retenciones y facturas).
 // Recibos (19/10): "Nuevo cobro" → elegir cliente y facturas → la misma liquidación de Finanzas (cobrar.tsx).
 // Órdenes de pago (19/10): "Nueva OP" → la misma ventana de OP de Finanzas (pagar.tsx). 20/10: Anular (y "Anular y pagar de nuevo").
+// Recibos (Tanda 6, 02/11/2026): Editar (fecha e importes) y Anular el cobro entero (recibo-acciones.tsx).
 // Mismos datos y reglas que las pestañas de Finanzas; acá solo se miran, con filtros y orden por columna.
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { AlertTriangle, Ban, ChevronLeft, ChevronRight, Download, Eye, HandCoins, Loader2, Mail, MailCheck, Plus, Search, Wallet } from "lucide-react";
+import { AlertTriangle, Ban, ChevronLeft, ChevronRight, Download, Eye, HandCoins, Loader2, Mail, MailCheck, Pencil, Plus, Search, Wallet } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
@@ -17,6 +18,7 @@ import { armarRetenciones, comprobanteVenta, excelRetencionesSufridas, practicad
 import { periodoDeFecha, sumarMeses } from "@/lib/reportes-comprobantes";
 import { textoTotalRecibo, type Recibo } from "@/lib/recibos";
 import { abrirRecibo, EnviarRecibo, SIN_MIGRACION_RECIBOS, traerRecibo, traerRecibos } from "@/components/finanzas-lazza/recibo-doc";
+import { AnularRecibo, EditarRecibo } from "@/components/finanzas-lazza/recibo-acciones";
 import { useUser } from "@/lib/auth-context";
 import { descargarOP, EnviarOrdenPago, verOP } from "@/components/finanzas-lazza/orden-pago-doc";
 import { CobrarCliente } from "@/components/finanzas-lazza/cobrar";
@@ -370,6 +372,8 @@ export function FinanzasLazzaRecibos({ sociedadId }: { sociedadId: string }) {
   const [recarga, setRecarga] = useState(0);
   const [cobrando, setCobrando] = useState(false);
   const [enviando, setEnviando] = useState<Recibo | null>(null);
+  const [anulando, setAnulando] = useState<Recibo | null>(null);
+  const [editando, setEditando] = useState<Recibo | null>(null);
   const [sinMigracion, setSinMigracion] = useState(false);
   const [datos, setDatos] = useState<Recibo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -424,6 +428,12 @@ export function FinanzasLazzaRecibos({ sociedadId }: { sociedadId: string }) {
           className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-orange-600 dark:hover:bg-zinc-800"><Download className="h-3.5 w-3.5" /></button>
         <button type="button" title={r.enviado ? `Enviado el ${formatDate(r.enviado)}: mandarlo otra vez` : "Mandar el recibo por mail al cliente"} onClick={(e) => { e.stopPropagation(); setEnviando(r); }}
           className={`rounded p-1.5 hover:bg-orange-50 dark:hover:bg-zinc-800 ${r.enviado ? "text-emerald-600" : "text-zinc-500 hover:text-orange-600"}`}>{r.enviado ? <MailCheck className="h-3.5 w-3.5" /> : <Mail className="h-3.5 w-3.5" />}</button>
+        {!r.anulado && <>
+          <button type="button" title="Editar el cobro (fecha e importes)" onClick={(e) => { e.stopPropagation(); setEditando(r); }}
+            className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-orange-600 dark:hover:bg-zinc-800"><Pencil className="h-3.5 w-3.5" /></button>
+          <button type="button" title="Anular el cobro (cargado por error): queda anulado, no se borra" onClick={(e) => { e.stopPropagation(); setAnulando(r); }}
+            className="rounded p-1.5 text-zinc-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-zinc-800"><Ban className="h-3.5 w-3.5" /></button>
+        </>}
       </span>
     ) },
   ];
@@ -444,6 +454,8 @@ export function FinanzasLazzaRecibos({ sociedadId }: { sociedadId: string }) {
       </Marco>
       {cobrando && <CobrarCliente sociedadId={sociedadId} onClose={() => setCobrando(false)} onCobrado={() => setRecarga((n) => n + 1)} />}
       <EnviarRecibo recibo={enviando} onClose={() => setEnviando(null)} onEnviado={(id, fecha) => setEnviados((e) => ({ ...e, [id]: fecha }))} />
+      {anulando && <AnularRecibo recibo={anulando} onClose={() => setAnulando(null)} onHecho={() => { setAnulando(null); setRecarga((n) => n + 1); }} />}
+      {editando && <EditarRecibo recibo={editando} onClose={() => setEditando(null)} onHecho={() => { setEditando(null); setRecarga((n) => n + 1); }} />}
     </>
   );
 }
