@@ -11,21 +11,27 @@
  *    sumar en "Falta la factura"; la ✕ lo desmarca (no se borra). Tabla mercado_libre_sin_factura (migración 20261030170000).
  * La unión se guarda con unir_factura_mercado_libre / quitar_factura_mercado_libre (migración 20261030160000).
  * Lógica pura en lib/mercado-libre-compras (prueba: scripts/test-mercado-libre-compras.ts).
+ * Seba 02/11: la OC en naranja abre la OC (components/compras-lazza-oc); el ícono al lado tilda todos sus artículos; arriba,
+ * con artículos tildados, "Cargar factura" y "Varias facturas" (se eligen varios PDF y se cargan de a uno, todos unidos a los
+ * tildados). Así una factura va a varias OC, una OC lleva varias facturas (+ Otra) y varias facturas van a varias OC.
+ * Factura en la OC equivocada: se saca con la ✕ y se carga en la otra; si el PDF ya está cargado, la ventana ofrece
+ * «Usar la que ya está» (la une sin cargarla de nuevo). No se anula nada (Augusto 02/11: bien simple).
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast";
 import { EVENTO_FACTURAS_COMPRA } from "@/components/carga-masiva-global";
 import ComprasLazzaFactura from "@/components/compras-lazza-factura";
+import ComprasLazzaOc from "@/components/compras-lazza-oc";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { coincideTodas, normalizarTexto, palabrasBusqueda } from "@/lib/buscar-texto";
 import { linkArchivo, rutaDeLinkArchivo } from "@/lib/archivo-link";
 import { armarFilasML, faltaFactura, ordenarCandidatas, resumenML, type FacturaML, type FilaML, type OcML, type SinFacturaML } from "@/lib/mercado-libre-compras";
-import { Ban, FileUp, ListChecks, Loader2, RefreshCw, Search, X } from "lucide-react";
+import { Ban, CheckSquare, FileUp, Files, ListChecks, Loader2, Plus, RefreshCw, Search, X } from "lucide-react";
 
 const db = supabase as any;
 type Vista = FilaML & { id: string; texto: string };
@@ -63,6 +69,10 @@ export default function ComprasMercadoLibre({ sociedadId }: { sociedadId: string
   const [candidatas, setCandidatas] = useState<FacturaML[] | null>(null);
   const [buscaFc, setBuscaFc] = useState("");
   const [uniendo, setUniendo] = useState(false);
+  const [ocAbierta, setOcAbierta] = useState<{ id: string; numero: string } | null>(null);
+  // Varias facturas juntas: se cargan de a una (la ventana de siempre) y todas se unen a los mismos artículos.
+  const [cola, setCola] = useState<{ archivos: File[]; total: number; para: Vista[] } | null>(null);
+  const colaGuardada = useRef(false);
 
   const cargar = useCallback(async () => {
     setCargando(true);
@@ -148,7 +158,9 @@ export default function ComprasMercadoLibre({ sociedadId }: { sociedadId: string
   }
 
   async function quitar(fila: Vista, f: FacturaML) {
-    if (!window.confirm(`¿Sacar la factura ${f.numero} de «${fila.descripcion}»? La factura no cambia: solo deja de estar unida a este artículo.`)) return;
+    if (!window.confirm(`¿Sacar la factura ${f.numero} de «${fila.descripcion}»? La factura no cambia: solo deja de estar unida a este artículo.
+
+Si era de otro artículo, en ese tocá Elegir (o Cargar: si la volvés a subir, tocá «Usar la que ya está»).`)) return;
     const { error: e } = await db.rpc("quitar_factura_mercado_libre", { p_factura_id: f.id, p_oc_item_id: fila.ocItemId });
     if (e) { toast.error(`No se pudo sacar: ${e.message}`); return; }
     toast.success(`Factura ${f.numero} sacada de ${fila.descripcion}`);
@@ -193,6 +205,33 @@ export default function ComprasMercadoLibre({ sociedadId }: { sociedadId: string
   }, [elegirPara, candidatas, buscaFc, importeElegir]);
 
   const tildar = (id: string) => setTildados(p => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  /** Tilda todos los artículos de la OC; si ya estaban todos, los destilda. */
+  const tildarOc = (ocId: string) => setTildados(p => {
+    const ids = filas.filter(x => x.ocId === ocId).map(x => x.id);
+    const n = new Set(p);
+    if (ids.every(id => n.has(id))) ids.forEach(id => n.delete(id)); else ids.forEach(id => n.add(id));
+    return n;
+  });
+  const tildadas = useMemo(() => filas.filter(x => tildados.has(x.id)), [filas, tildados]);
+
+  function empezarCola(archivos: File[]) {
+    if (!archivos.length || !tildadas.length) return;
+    colaGuardada.current = false;
+    setCola({ archivos, total: archivos.length, para: tildadas });
+  }
+  /** Al cerrar la ventana de una factura de la tanda: pasa a la siguiente (si no se guardó, pregunta). */
+  function siguienteDeCola() {
+    if (!cola) return;
+    const resto = cola.archivos.slice(1);
+    if (resto.length && (colaGuardada.current || window.confirm(`No se guardó «${cola.archivos[0].name}». ¿Seguir con la siguiente (${resto[0].name})?`))) {
+      colaGuardada.current = false;
+      setCola({ ...cola, archivos: resto });
+      return;
+    }
+    setCola(null);
+    setTildados(new Set());
+    void cargar();
+  }
 
   const columnas: Column<Vista>[] = [
     { key: "tilde", label: "", sortable: false, render: f => (
@@ -200,7 +239,14 @@ export default function ComprasMercadoLibre({ sociedadId }: { sociedadId: string
         title="Tildá los artículos que van en la misma factura" className="h-3.5 w-3.5 accent-orange-500" />
     ) },
     { key: "fecha", label: "Fecha", render: f => <span className="whitespace-nowrap text-xs text-zinc-600 dark:text-zinc-300">{f.fecha ? formatDate(f.fecha) : "—"}</span> },
-    { key: "ocNumero", label: "OC", render: f => <span className="whitespace-nowrap font-mono text-xs font-bold">{f.ocNumero}</span> },
+    { key: "ocNumero", label: "OC", render: f => (
+      <span className="inline-flex items-center gap-1 whitespace-nowrap">
+        <button onClick={e => { e.stopPropagation(); setOcAbierta({ id: f.ocId, numero: f.ocNumero }); }} title="Ver lo que tiene esta OC"
+          className="font-mono text-xs font-bold text-orange-600 hover:underline">{f.ocNumero}</button>
+        <button onClick={e => { e.stopPropagation(); tildarOc(f.ocId); }} title="Tildar todos los artículos de esta OC (para la misma factura)"
+          className="rounded p-0.5 text-zinc-400 hover:bg-orange-50 hover:text-orange-600 dark:hover:bg-orange-950/30"><CheckSquare className="h-3 w-3" /></button>
+      </span>
+    ) },
     { key: "prNumero", label: "PR / Cliente", sortValue: f => `${f.prNumero} ${f.cliente}`, render: f => (
       <span className="block max-w-[190px] truncate text-xs" title={`${f.prNumero} · ${f.cliente}`}><span className="font-mono text-zinc-500">{f.prNumero || "—"}</span>{f.cliente ? ` · ${f.cliente}` : ""}</span>
     ) },
@@ -234,9 +280,9 @@ export default function ComprasMercadoLibre({ sociedadId }: { sociedadId: string
     { key: "acciones", label: "", sortable: false, render: f => (
       <span className="flex justify-end gap-1">
         <button onClick={e => { e.stopPropagation(); setCargarPara(objetivo(f)); }}
-          title={tildados.size ? "Cargar la factura para este artículo y los tildados" : "Cargar la factura de este artículo (ya pagada con Visa)"}
+          title={f.facturas.length ? "Cargar otra factura para este artículo (y los tildados)" : tildados.size ? "Cargar la factura para este artículo y los tildados" : "Cargar la factura de este artículo (ya pagada con Visa)"}
           className="inline-flex items-center gap-1 whitespace-nowrap rounded-md bg-emerald-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-emerald-700">
-          <FileUp className="h-3.5 w-3.5" /> Cargar
+          {f.facturas.length ? <><Plus className="h-3.5 w-3.5" /> Otra</> : <><FileUp className="h-3.5 w-3.5" /> Cargar</>}
         </button>
         <button onClick={e => { e.stopPropagation(); setBuscaFc(""); setCandidatas(null); setElegirPara(objetivo(f)); }}
           title="La factura ya está cargada en el sistema: elegila (así no se carga dos veces)"
@@ -281,6 +327,24 @@ export default function ComprasMercadoLibre({ sociedadId }: { sociedadId: string
             <button onClick={() => setTildados(new Set())} title="Destildar" className="rounded-full p-0.5 hover:bg-orange-200"><X className="h-3 w-3" /></button>
           </span>
         )}
+        {tildadas.length > 0 && (
+          <>
+            <button onClick={() => setCargarPara(tildadas)} title="Una factura para todos los artículos tildados (pueden ser de varias OC)"
+              className="inline-flex h-8 items-center gap-1 rounded-lg bg-emerald-600 px-2 text-xs font-medium text-white hover:bg-emerald-700">
+              <FileUp className="h-3.5 w-3.5" /> Cargar factura
+            </button>
+            <label title="Elegí varios PDF: se cargan de a uno y todos quedan unidos a los artículos tildados"
+              className="inline-flex h-8 cursor-pointer items-center gap-1 rounded-lg border border-emerald-600 px-2 text-xs font-medium text-emerald-700 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-950/30">
+              <Files className="h-3.5 w-3.5" /> Varias facturas
+              <input type="file" multiple accept="application/pdf,image/png,image/jpeg,image/webp" className="hidden"
+                onChange={e => { const fs = Array.from(e.target.files || []); e.target.value = ""; empezarCola(fs); }} />
+            </label>
+            <button onClick={() => { setBuscaFc(""); setCandidatas(null); setElegirPara(tildadas); }} title="La factura ya está cargada: elegila para los tildados"
+              className="inline-flex h-8 items-center gap-1 rounded-lg border border-zinc-300 px-2 text-xs hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800">
+              <ListChecks className="h-3.5 w-3.5" /> Elegir
+            </button>
+          </>
+        )}
         <button onClick={() => void cargar()} className="ml-auto rounded p-1 text-zinc-400 hover:text-zinc-700" title="Actualizar"><RefreshCw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} /></button>
       </div>
 
@@ -296,6 +360,15 @@ export default function ComprasMercadoLibre({ sociedadId }: { sociedadId: string
           onGuardada={async id => { await unir(id, cargarPara); }}
           onClose={() => { setCargarPara(null); void cargar(); }} />
       )}
+
+      {cola && (
+        <ComprasLazzaFactura key={`${cola.total - cola.archivos.length}-${cola.archivos[0].name}`} sociedadId={sociedadId} conVisaInicial archivoInicial={cola.archivos[0]}
+          para={`factura ${cola.total - cola.archivos.length + 1} de ${cola.total} · ${textoPara(cola.para)}`}
+          onGuardada={async id => { colaGuardada.current = true; await unir(id, cola.para); }}
+          onClose={siguienteDeCola} />
+      )}
+
+      {ocAbierta && <ComprasLazzaOc sociedadId={sociedadId} oc={ocAbierta} onClose={() => { setOcAbierta(null); void cargar(); }} />}
 
       <Modal open={!!elegirPara} onClose={() => { setElegirPara(null); setCandidatas(null); }} size="xl"
         title="Elegir una factura ya cargada"

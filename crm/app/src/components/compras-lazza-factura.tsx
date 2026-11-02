@@ -67,7 +67,7 @@ const btnSi = "rounded-md bg-violet-600 px-2 py-1 text-xs font-medium text-white
 const btnNo = "rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-700 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800";
 const elegido = "ring-2 ring-violet-400";
 
-export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicial, para, onGuardada, tipoInicial }: {
+export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicial, para, onGuardada, tipoInicial, archivoInicial }: {
   sociedadId: string;
   onClose: () => void;
   /** Pestaña Mercado Libre (Augusto 30/10): arranca con "Ya pagada con Visa" elegido (se puede cambiar). */
@@ -78,6 +78,8 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
   onGuardada?: (facturaId: string) => Promise<void>;
   /** Desde Transportes (Augusto 30/10): arranca con este tipo elegido ("transporte"); se puede cambiar. Sin esto, se avisa si el proveedor es transportista. */
   tipoInicial?: "mercaderia" | "transporte";
+  /** Pestaña Mercado Libre, varias facturas juntas (Seba 02/11): arranca leyendo este archivo. */
+  archivoInicial?: File;
 }) {
   const { toast } = useToast();
   const { profile } = useUser();
@@ -93,6 +95,8 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
   const ncKey = useRef<string | null>(null);
   const [otraSociedad, setOtraSociedad] = useState("");
   const [duplicada, setDuplicada] = useState(false);
+  // Pestaña Mercado Libre (Seba 02/11): la factura ya cargada que se repite, para unirla sin cargarla de nuevo.
+  const [dupId, setDupId] = useState<string | null>(null);
   const [proveedor, setProveedor] = useState<Proveedor | null>(null);
   const proveedorElegido = proveedor;
   // Mientras se busca el proveedor por CUIT no se muestra "no está cargado" (salía un instante y se corregía solo).
@@ -126,7 +130,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
   const arcaVendedor = useRef<Promise<{ razon_social?: string | null; condicion_iva?: string | null } | null> | null>(null);
 
   const plata = (n: number) => formatCurrency(n, factura?.moneda || "ARS");
-  useEffect(() => { void empezarManual(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  useEffect(() => { void (async () => { await empezarManual(); if (archivoInicial) await leer(archivoInicial); })(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
   // ── 1. Leer (sistema primero; IA opcional) ──
   function reiniciar() {
@@ -236,11 +240,12 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
 
   // ── 2. Proveedor (y aviso si la factura ya está cargada) ──
   async function elegirProveedor(p: Proveedor, f: FacturaCarga) {
-    const { data: dups } = await db.from("facturas_compra").select("numero_factura, tipo_comprobante, tipo, created_at").eq("sociedad_id", sociedadId).eq("proveedor_id", p.id).neq("estado", "anulada");
+    const { data: dups } = await db.from("facturas_compra").select("id, numero_factura, tipo_comprobante, tipo, created_at").eq("sociedad_id", sociedadId).eq("proveedor_id", p.id).neq("estado", "anulada");
     const ultima = [...(dups || [])].filter((x: any) => !String(x.tipo_comprobante || "").startsWith("NC")).sort((a: any, b: any) => String(b.created_at).localeCompare(String(a.created_at)))[0];
     setUltimoTipo(ultima?.tipo ?? null); setTipoElegido(tipoInicial ?? null);
     const norm = (n: string) => { const m = String(n || "").replace(/\s+/g, "").match(/^(\d{1,5})[-/](\d{1,8})$/); return m ? `${m[1].padStart(5, "0")}-${m[2].padStart(8, "0")}` : String(n || "").replace(/\s+/g, "").toUpperCase(); };
-    setDuplicada(!!f.numero && (dups || []).some((x: any) => norm(x.numero_factura) === norm(f.numero) && String(x.tipo_comprobante || "FC A").toUpperCase() === f.tipo.toUpperCase()));
+    const repetida = f.numero ? (dups || []).find((x: any) => norm(x.numero_factura) === norm(f.numero) && String(x.tipo_comprobante || "FC A").toUpperCase() === f.tipo.toUpperCase()) : null;
+    setDuplicada(!!repetida); setDupId(repetida?.id ?? null);
     // Sin factura: si ya hay una del mismo proveedor y día, el número sigue con (2), (3)…
     if (f.tipo === TIPO_SIN_FACTURA && esNumeroSinFactura(f.numero)) {
       const usados = new Set((dups || []).filter((x: any) => String(x.tipo_comprobante || "").toUpperCase() === f.tipo.toUpperCase()).map((x: any) => norm(x.numero_factura)));
@@ -418,6 +423,19 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
     } finally { setGuardando(false); }
   }
 
+  /** Mercado Libre: la factura ya estaba cargada (ej. se sacó de otra OC con la ✕): se une a estos artículos sin cargarla otra vez. */
+  async function usarExistente() {
+    if (!dupId || !onGuardada) return;
+    setGuardando(true); setError("");
+    try {
+      await onGuardada(dupId);
+      window.dispatchEvent(new Event(EVENTO_FACTURAS_COMPRA));
+      onClose();
+    } catch (e: any) {
+      setError(e?.message || "No se pudo unir la factura");
+    } finally { setGuardando(false); }
+  }
+
   // ── Pantalla ──
   return (
     <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-black/50 p-4"
@@ -516,7 +534,9 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
               </div>
             )}
             {otraSociedad && <p className="flex items-center gap-1 text-sm text-amber-700 dark:text-amber-400"><AlertTriangle className="h-4 w-4" /> Está a nombre de {otraSociedad}: cargala desde esa sociedad.</p>}
-            {duplicada && <p className="flex items-center gap-1 text-sm text-red-600"><AlertTriangle className="h-4 w-4" /> {esNC ? "Esta nota de crédito" : "Esta factura"} ya está cargada en el sistema.</p>}
+            {duplicada && <p className="flex flex-wrap items-center gap-1 text-sm text-red-600"><AlertTriangle className="h-4 w-4" /> {esNC ? "Esta nota de crédito" : "Esta factura"} ya está cargada en el sistema.
+              {onGuardada && dupId && !esNC && <button onClick={() => void usarExistente()} disabled={guardando} title="No se carga de nuevo: la que ya está queda unida a estos artículos (el pago no cambia)"
+                className="ml-1 rounded-md bg-emerald-600 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50">Usar la que ya está</button>}</p>}
             {esNota && <p className="flex items-center gap-1 text-sm text-amber-700 dark:text-amber-400"><AlertTriangle className="h-4 w-4" /> Es una nota de débito: esta pantalla es para facturas y notas de crédito.</p>}
             {!proveedor && !esNota && buscandoProv && (
               <p className="flex items-center gap-2 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Buscando proveedor…</p>
