@@ -19,6 +19,9 @@
  * 7. Pestaña Mercado Libre (Augusto 30/10): abre esta misma ventana con "Ya pagada con Visa" elegido y, al guardar, la une a los
  *    artículos elegidos (onGuardada → unir_factura_mercado_libre). Si la unión falla, la factura ya quedó cargada.
  *    Si el vendedor no está cargado, no se pide crearlo: se crea solo al guardar con los datos de ARCA (vendedorML).
+ * 8. Solo IVA (Augusto 02/11): «Es: Solo IVA» = la factura solo cuenta en el libro de IVA. No se elige pago: queda tipo
+ *    "solo_iva", solo_iva = true y estado "pagada" sin pagos (igual que «Ya pagada por otro medio» de la ventana vieja), así no
+ *    va a Pagos ni suma en la cuenta corriente del proveedor.
  * Guardar usa guardar_conciliacion_compra (la de siempre), sin OC, sin aceptar costos ni aprender equivalencias.
  */
 import { useEffect, useRef, useState } from "react";
@@ -111,6 +114,8 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
   const [diasTxt, setDiasTxt] = useState<string | null>(null);
   // Nota para Finanzas (opcional): queda en las notas de la factura.
   const [notaPago, setNotaPago] = useState("");
+  // Solo IVA: lo que se pagó de verdad por la factura (opcional). Va a Gastos como "Compra crédito fiscal IVA" (Impuestos).
+  const [costoTxt, setCostoTxt] = useState("");
   // Recordatorio: si al proveedor le falta el email o los datos bancarios, se completan acá y se guardan en el proveedor.
   const [emailProv, setEmailProv] = useState("");
   const [bancoProv, setBancoProv] = useState("");
@@ -121,8 +126,8 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
   const [totalTxt, setTotalTxt] = useState("");
   // Cambia al sacar/agregar renglones: los campos de texto de la tabla se rearman con los valores nuevos.
   const [filasKey, setFilasKey] = useState(0);
-  // Compra o Transporte (null = lo sugerido). ultimoTipo = tipo de la última factura del proveedor.
-  const [tipoElegido, setTipoElegido] = useState<"mercaderia" | "transporte" | null>(tipoInicial ?? null);
+  // Compra, Transporte o Solo IVA (null = lo sugerido). ultimoTipo = tipo de la última factura del proveedor.
+  const [tipoElegido, setTipoElegido] = useState<"mercaderia" | "transporte" | "solo_iva" | null>(tipoInicial ?? null);
   const [ultimoTipo, setUltimoTipo] = useState<string | null>(null);
   // Pestaña Mercado Libre: el vendedor que no está cargado se busca en ARCA y se crea solo al guardar.
   const deMercadoLibre = !!para;
@@ -137,7 +142,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
     ncKey.current = null;
     setError(""); setFactura(null); setProveedor(null); setBuscandoProv(false);
     setConVisa(conVisaInicial ?? null); setFaltaElegirPago(false); setForma(null); setDiasTxt(null); setNotaPago(""); setDuplicada(false); setEsNota(false); setOtraSociedad(""); setNoSeLeyo(false); setOrigen("");
-    setPercTxt(""); setTotalTxt(""); setTipoElegido(tipoInicial ?? null); setUltimoTipo(null); setVendedorArca(null); arcaVendedor.current = null;
+    setPercTxt(""); setTotalTxt(""); setCostoTxt(""); setTipoElegido(tipoInicial ?? null); setUltimoTipo(null); setVendedorArca(null); arcaVendedor.current = null;
   }
 
   async function leer(file: File) {
@@ -297,6 +302,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
   const esNC = !!factura && factura.tipo.startsWith("NC");
   const motivoTransporte = proveedor && factura ? sugerenciaTransporte({ esTransportista: proveedor.es_transportista, ultimoTipo, descripciones: factura.items.map(it => it.descripcion) }) : null;
   const tipoFactura = tipoElegido ?? (motivoTransporte ? "transporte" : "mercaderia");
+  const soloIva = !esNC && tipoFactura === "solo_iva";
 
   // ── 4. Guardar ──
   /** PDF de la factura / NC al Storage (si falla, el comprobante ya quedó: no se avisa). */
@@ -356,7 +362,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
   async function guardar() {
     if (!factura || !listo) return;
     if (!factura.numero.trim()) { setError("Falta el número de la factura."); return; }
-    if (!esNC && conVisa === null) { setFaltaElegirPago(true); return; }
+    if (!esNC && !soloIva && conVisa === null) { setFaltaElegirPago(true); return; }
     let proveedor = proveedorElegido;
     if (!proveedor) {
       setGuardando(true); setError("");
@@ -376,7 +382,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
         ? itemsFC.map((it, i) => ({ key: lineKey(factura, i), ...it }))
         : [{ key: "fc", codigo: "", descripcion: "Factura (sin detalle de artículos)", cantidad: 1, precio_unitario: num(netoTxt), descuento_porcentaje: 0, iva_porcentaje: iva, unidad: "UN" }];
       const notas = [
-        pagaVisa ? "" : textoPago,
+        soloIva ? "Solo IVA: no se paga (solo cuenta en el libro de IVA)" : pagaVisa ? "" : textoPago,
         factura.tipo === TIPO_SIN_FACTURA ? "Sin factura del proveedor (comprobante manual)" : "",
         notaPago.trim() ? `Nota para Finanzas: ${notaPago.trim()}` : "",
         "Cargada con «Compras Lazza»",
@@ -385,7 +391,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
         p_sociedad_id: sociedadId, p_factura_id: null,
         p_factura: {
           proveedor_id: proveedor.id, numero_factura: numero, tipo_comprobante: factura.tipo, fecha: factura.fecha,
-          fecha_vencimiento: pagaVisa ? factura.vencimiento || null : vencimientoPorDias(factura.fecha, dias, factura.vencimiento), cae: factura.cae || null, moneda: factura.moneda, subtotal: num(netoTxt),
+          fecha_vencimiento: soloIva ? null : pagaVisa ? factura.vencimiento || null : vencimientoPorDias(factura.fecha, dias, factura.vencimiento), cae: factura.cae || null, moneda: factura.moneda, subtotal: num(netoTxt),
           iva: ivaFactura, iva_porcentaje: factura.ivaPorcentaje, percepciones: percepcionesFactura, total: factura.total, notas,
         },
         // Sin OC: no se tocan los costos de la OC ni del PR.
@@ -402,7 +408,23 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
       // d) PDF y pago (si algo de esto falla, la factura ya quedó: solo se avisa).
       if (facturaId) await subirArchivo(facturaId);
       let pagoTxt = "va a Pagos";
-      if (facturaId && pagaVisa) {
+      if (facturaId && soloIva) {
+        // Solo IVA: "pagada" sin pagos = no va a Pagos ni suma en la cuenta corriente; cuenta en el libro de IVA (marca violeta).
+        const { error: eIva } = await db.from("facturas_compra").update({ tipo: "solo_iva", solo_iva: true, estado: "pagada" }).eq("id", facturaId);
+        if (eIva) { toast.warning(`No se pudo marcar como Solo IVA (${eIva.message}): la factura quedó para Pagos.`); await db.from("facturas_compra").update({ estado: "pendiente" }).eq("id", facturaId).eq("estado", "pendiente_aprobacion"); }
+        else pagoTxt = "Solo IVA (no va a Pagos)";
+        // Costo real: gasto en Impuestos con "crédito fiscal" en el detalle (Contabilidad → Compra de crédito fiscal IVA). Mismo formato que la ventana vieja.
+        const costo = round2(num(costoTxt));
+        if (costo > 0) {
+          const { error: eGasto } = await db.from("gastos_manuales").insert({
+            descripcion: `Compra crédito fiscal IVA — ${factura.tipo} ${numero} — ${proveedor.razon_social}`, categoria: "Impuestos", grupo: "Impuestos",
+            monto: costo, moneda: factura.moneda, fecha: factura.fecha || todayAR(), proveedor_id: proveedor.id, sociedad_id: sociedadId, created_by: profile?.id,
+            tipo_recurrencia: "eventual", tipo_gasto: "Compra IVA", medio_pago: "efectivo",
+          });
+          if (eGasto) toast.warning(`La factura quedó, pero no se pudo cargar el costo en Gastos (${eGasto.message}): cargalo a mano en Finanzas › Gastos.`);
+          else pagoTxt += ` · costo ${formatCurrency(costo, factura.moneda)} a Gastos`;
+        }
+      } else if (facturaId && pagaVisa) {
         const visa = tarjetaSugerida(await traerTarjetas(db, sociedadId), { ocConTarjeta: true });
         const r = visa ? await registrarPagoTarjeta(db, facturaId, visa, movimientoPagoTarjeta({
           sociedadId, proveedorId: proveedor.id, facturaId, tarjeta: visa, total: factura.total, moneda: factura.moneda, fecha: factura.fecha || todayAR(),
@@ -561,20 +583,30 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
             )}
 
             {listo && !esNC && (
-              <p className="text-xs text-zinc-600 dark:text-zinc-300">La factura va directo a la cuenta corriente de <b>{nombreProveedor}</b> (no se ata a ninguna OC).</p>
+              <p className="text-xs text-zinc-600 dark:text-zinc-300">{soloIva
+                ? <>Solo IVA: cuenta en el libro de IVA. No va a Pagos ni suma en la cuenta corriente de <b>{nombreProveedor}</b>.</>
+                : <>La factura va directo a la cuenta corriente de <b>{nombreProveedor}</b> (no se ata a ninguna OC).</>}</p>
             )}
             {listo && !esNC && (
               <div className="flex flex-wrap items-center gap-1.5 px-2 text-sm">
                 <span className="mr-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Es</span>
-                {(["mercaderia", "transporte"] as const).map(t => (
-                  <button key={t} onClick={() => setTipoElegido(t)} className={`${btnNo} ${tipoFactura === t ? elegido : ""}`}>{t === "transporte" ? "Transporte (flete)" : "Compra"}</button>
+                {(["mercaderia", "transporte", "solo_iva"] as const).map(t => (
+                  <button key={t} onClick={() => setTipoElegido(t)} className={`${btnNo} ${tipoFactura === t ? elegido : ""}`}>{t === "transporte" ? "Transporte (flete)" : t === "solo_iva" ? "Solo IVA" : "Compra"}</button>
                 ))}
                 {tipoElegido === null && motivoTransporte && <span className="text-xs text-zinc-500">sugerido: {motivoTransporte === "proveedor" ? "el proveedor hace fletes" : "los renglones son flete"}</span>}
                 {tipoFactura === "transporte" && <span className="text-xs text-zinc-500">· cuenta en Transportes (Gastos y Reportes)</span>}
               </div>
             )}
+            {listo && soloIva && (
+              <label className="flex flex-wrap items-center gap-2 px-2 text-sm">
+                <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Costo real</span>
+                <input value={costoTxt} onChange={e => setCostoTxt(e.target.value)} inputMode="decimal" placeholder="0,00" aria-label="Costo real"
+                  className="w-32 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-right dark:border-zinc-600 dark:bg-zinc-900" />
+                <span className="text-xs text-zinc-500">{num(costoTxt) > 0 ? `va a Gastos (Impuestos) como Compra crédito fiscal IVA: ${plata(num(costoTxt))}` : "lo que pagaste por la factura (opcional); va a Gastos como gasto real"}</span>
+              </label>
+            )}
 
-            {listo && !esNC && (
+            {listo && !esNC && !soloIva && (
               <div className={`flex flex-wrap items-center gap-3 rounded-lg px-2 py-1 text-sm ${faltaElegirPago && conVisa === null ? "border border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/30" : ""}`}>
                 <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">¿Cómo se paga?</span>
                 <label className="flex items-center gap-1"><input type="radio" checked={conVisa === false} onChange={() => setConVisa(false)} /> Va a Pagos</label>
@@ -583,7 +615,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
                 {faltaElegirPago && conVisa === null && <span className="text-xs font-semibold text-red-600">Elegí cómo se paga</span>}
               </div>
             )}
-            {listo && !esNC && conVisa === false && (
+            {listo && !esNC && !soloIva && conVisa === false && (
               <div className="flex flex-wrap items-center gap-1.5 rounded-lg bg-zinc-50 px-3 py-2 text-sm dark:bg-zinc-800/60">
                 <span className="mr-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">Para Pagos</span>
                 {(["transferencia", "echeq"] as const).map(f => (
@@ -597,7 +629,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
                 {vencePago && <span className="text-xs text-zinc-500">vence {vencePago.split("-").reverse().join("/")}</span>}
               </div>
             )}
-            {listo && !deMercadoLibre && (faltaEmail || (faltaBanco && !pagaVisa && !esNC)) && (
+            {listo && !deMercadoLibre && !soloIva && (faltaEmail || (faltaBanco && !pagaVisa && !esNC)) && (
               <div className="flex flex-wrap items-center gap-1.5 text-xs">
                 <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
                 <span className="text-amber-700 dark:text-amber-400">A {proveedor!.razon_social} le falta {[faltaEmail && "el email", faltaBanco && !pagaVisa && !esNC && "los datos bancarios"].filter(Boolean).join(" y ")}:</span>
