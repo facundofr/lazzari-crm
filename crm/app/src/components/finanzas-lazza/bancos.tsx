@@ -4,6 +4,8 @@
 // - Cuentas: saldo según el banco y su fecha (aviso si tiene más de 3 días), efectivo y BAVSA (US$; en $ lo que debe y el
 //   vencimiento de la caución, leídos de las observaciones; si no están, "a definir"). Sin extractos acá.
 // - Tarjetas: por resumen. "Subir resumen" → la IA lee el PDF (api/finanzas/leer-resumen-tarjeta) → Augusto revisa y guarda (tarjeta_resumenes).
+//   02/11: el PDF del BBVA se lee sin IA (lib/visa-resumen) y se guardan también sus consumos y cargos, renglón por renglón
+//   (guardar_consumos_tarjeta); "Consumos" en la tarjeta los muestra cruzados con el CRM (tarjeta-consumos). La IA queda para otros PDF.
 // - Préstamos en dos partes: "Lo que debo" y "Lo que me deben", cada uno con su lista de cuotas o pagos (fecha, monto, falta).
 //   Los de la familia no tienen cuotas fijas: "Anotar pago" agrega el pago como cuota pagada.
 // 20/10 (Augusto): todo en tarjetas, pestañas "Cuentas y tarjetas" | "Préstamos"; en las cuotas del banco capital, interés y cargos
@@ -21,6 +23,9 @@ import { MovimientosPorTipo } from "./movimientos-por-tipo";
 import { CargaDiaria } from "./carga-diaria";
 import { BancoSimple } from "./banco-simple";
 import { linkArchivo } from "@/lib/archivo-link";
+import { Modal } from "@/components/ui/modal";
+import { ConsumosTarjeta, leerPdfTarjeta } from "./tarjeta-consumos";
+import type { ResumenLeido } from "@/lib/visa-resumen";
 
 const db = supabase as any;
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
@@ -71,6 +76,7 @@ export function FinanzasLazzaBancos({ sociedadId, pestanaInicial = "cuentas" }: 
   const [subiendo, setSubiendo] = useState<Cuenta | null>(null);
   const [abiertoP, setAbiertoP] = useState<string | null>(null);
   const [abiertaT, setAbiertaT] = useState<string | null>(null);
+  const [verConsumos, setVerConsumos] = useState<{ nombre: string; resumenId: string } | null>(null);
   const [pago, setPago] = useState<{ prestamo: Prestamo; fecha: string; monto: string } | null>(null);
   const [guardando, setGuardando] = useState(false);
   const [pestana, setPestana] = useState<"cuentas" | "prestamos" | "cheques" | "extracto">(pestanaInicial);
@@ -283,6 +289,8 @@ export function FinanzasLazzaBancos({ sociedadId, pestanaInicial = "cuentas" }: 
                           {ultimo.minimo_ars !== null && <span>Mínimo <span className="font-mono">{formatCurrency(ultimo.minimo_ars)}</span></span>}
                           {(ultimo.personal_ars > 0 || ultimo.personal_usd > 0) && <span>Personal <span className="font-mono">{formatCurrency(ultimo.personal_ars)}{ultimo.personal_usd ? ` + ${formatCurrency(ultimo.personal_usd, "USD")}` : ""}</span> · Empresa <span className="font-mono">{formatCurrency(ultimo.total_ars - ultimo.personal_ars)}</span></span>}
                           {ultimo.archivo_url && <a href={ultimo.archivo_url} target="_blank" rel="noopener noreferrer" className="text-orange-600 hover:underline">PDF</a>}
+                          <button type="button" onClick={() => setVerConsumos({ nombre: t.nombre, resumenId: ultimo.id })} title="Cada consumo del resumen y si está cargado en el CRM"
+                            className="font-medium text-orange-600 hover:underline">Consumos</button>
                           {res.length > 1 && (
                             <button type="button" onClick={() => setAbiertaT(abierta ? null : t.id)} className="inline-flex items-center text-orange-600 hover:underline">
                               {abierta ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />} Resúmenes anteriores
@@ -436,6 +444,10 @@ export function FinanzasLazzaBancos({ sociedadId, pestanaInicial = "cuentas" }: 
       )}
 
       {subiendo && <SubirResumen sociedadId={sociedadId} tarjeta={subiendo} onClose={() => setSubiendo(null)} onGuardado={() => { setSubiendo(null); cargar(); }} />}
+      <Modal open={!!verConsumos} onClose={() => setVerConsumos(null)} size="2xl" title={`Consumos · ${verConsumos?.nombre || ""}`}
+        description="Cada consumo del resumen y si está cargado en el CRM. La clase se marca una vez por comercio; los chicos ven solo las compras (Compras → Mercado Libre).">
+        {verConsumos && <ConsumosTarjeta sociedadId={sociedadId} modo="finanzas" resumenInicial={verConsumos.resumenId} />}
+      </Modal>
     </div>
   );
 }
@@ -446,11 +458,20 @@ function SubirResumen({ sociedadId, tarjeta, onClose, onGuardado }: { sociedadId
   const [leyendo, setLeyendo] = useState(false);
   const [guardando, setGuardando] = useState(false);
   const [f, setF] = useState({ cierre: "", vencimiento: "", total_ars: "", total_usd: "", minimo_ars: "", personal_ars: "", personal_usd: "", notas: "" });
+  const [leido, setLeido] = useState<ResumenLeido | null>(null);
   const numero = (s: string) => { const t = s.trim(); if (!t) return null; const n = Number(t.includes(",") ? t.replace(/\./g, "").replace(",", ".") : t); return Number.isFinite(n) ? n : null; };
 
   async function leer(file: File) {
-    setArchivo(file); setLeyendo(true);
+    setArchivo(file); setLeyendo(true); setLeido(null);
     try {
+      // PDF del BBVA: se lee sin IA (cabecera + consumos renglón por renglón). Si no se entiende, la IA lee los totales.
+      const r = await leerPdfTarjeta(file).catch(() => null);
+      if (r?.cierre) {
+        setLeido(r.consumos.length ? r : null);
+        setF((x) => ({ ...x, cierre: r.cierre || "", vencimiento: r.vencimiento || "", total_ars: r.saldoArs !== null ? String(r.saldoArs) : "", total_usd: r.saldoUsd ? String(r.saldoUsd) : "",
+          minimo_ars: r.minimoArs !== null ? String(r.minimoArs) : "" }));
+        return;
+      }
       const fd = new FormData();
       fd.append("file", file);
       const res = await fetch("/api/finanzas/leer-resumen-tarjeta", { method: "POST", body: fd });
@@ -476,13 +497,24 @@ function SubirResumen({ sociedadId, tarjeta, onClose, onGuardado }: { sociedadId
         const up = await supabase.storage.from("comprobantes").upload(ruta, archivo, { upsert: true });
         if (!up.error) archivo_url = linkArchivo("comprobantes", ruta);
       }
-      const { error } = await db.from("tarjeta_resumenes").upsert({
+      // Si se vuelve a subir el mismo resumen sin PDF nuevo, no se pierde el PDF que ya estaba.
+      const { data: guardado, error } = await db.from("tarjeta_resumenes").upsert({
         sociedad_id: sociedadId, cuenta_id: tarjeta.id, cierre: f.cierre, vencimiento: f.vencimiento || null,
         total_ars: numero(f.total_ars) ?? 0, total_usd: numero(f.total_usd) ?? 0, minimo_ars: numero(f.minimo_ars),
         personal_ars: numero(f.personal_ars) ?? 0, personal_usd: numero(f.personal_usd) ?? 0,
-        archivo_url, archivo_nombre: archivo?.name ?? null, notas: f.notas || null,
-      }, { onConflict: "cuenta_id,cierre" });
+        ...(archivo_url ? { archivo_url, archivo_nombre: archivo?.name ?? null } : {}), notas: f.notas || null,
+      }, { onConflict: "cuenta_id,cierre" }).select("id").single();
       if (error) throw error;
+      // Consumos y cargos, renglón por renglón (si ya estaban, no se duplican). Solo si son del mismo cierre que se guarda.
+      if (leido && leido.cierre === f.cierre && guardado?.id) {
+        const { data: r, error: eC } = await db.rpc("guardar_consumos_tarjeta", {
+          p_resumen_id: guardado.id,
+          p_consumos: leido.consumos.map((c) => ({ fecha: c.fecha, descripcion: c.descripcion, comercio: c.comercio, cupon: c.cupon, cuota_n: c.cuotaN, cuota_de: c.cuotaDe,
+            importe: c.importe, moneda: c.moneda, tipo: c.tipo, clave: c.clave })),
+        });
+        if (eC) alert(`El resumen quedó guardado, pero no los consumos: ${errorTexto(eC)}`);
+        else if (r?.nuevos) alert(`✔ Resumen guardado con ${r.nuevos} renglones nuevos${r.ya_estaban ? ` (${r.ya_estaban} ya estaban)` : ""}. Tocá «Consumos» en la tarjeta para ver qué falta cargar.`);
+      }
       onGuardado();
     } catch (e) {
       alert(`No se pudo guardar el resumen: ${errorTexto(e)}`);
@@ -504,7 +536,7 @@ function SubirResumen({ sociedadId, tarjeta, onClose, onGuardado }: { sociedadId
         <div className="flex items-start justify-between gap-2">
           <div>
             <h2 className="text-base font-bold text-zinc-900 dark:text-white">Resumen · {tarjeta.nombre}</h2>
-            <p className="text-xs text-zinc-500">Subí el PDF: ✨ la IA completa los datos y vos los revisás antes de guardar.</p>
+            <p className="text-xs text-zinc-500">Subí el PDF: se completan los datos (y los consumos, si es del BBVA) y vos los revisás antes de guardar.</p>
           </div>
           <button type="button" aria-label="Cerrar" onClick={onClose} className="rounded p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
         </div>
@@ -523,6 +555,13 @@ function SubirResumen({ sociedadId, tarjeta, onClose, onGuardado }: { sociedadId
           {campo("personal_usd", "Parte personal US$")}
         </div>
         {campo("notas", "Notas", "text")}
+        {leido && (() => {
+          const n = leido.consumos.filter((c) => c.tipo === "consumo").length, cargos = leido.consumos.length - n;
+          const dif = leido.totalConsumos ? leido.sumaConsumos.ars - leido.totalConsumos.ars : 0;
+          return leido.cierra
+            ? <p className="rounded-lg bg-emerald-50 px-2 py-1 text-xs text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">✔ Leído sin IA: {n} consumos y {cargos} cargos del banco. La suma da el total del resumen ({formatCurrency(leido.sumaConsumos.ars)}{leido.sumaConsumos.usd ? ` + ${formatCurrency(leido.sumaConsumos.usd, "USD")}` : ""}).</p>
+            : <p className="rounded-lg bg-amber-50 px-2 py-1 text-xs text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">⚠ Leí {n} consumos, pero no dan el total del resumen{leido.totalConsumos ? ` (diferencia ${formatCurrency(dif)})` : ""}. Se guardan igual: revisalos en «Consumos».</p>;
+        })()}
         <p className="text-[11px] text-zinc-400">Empresa = total − parte personal. No mueve plata: el pago de la tarjeta sigue como siempre.</p>
         <button type="button" disabled={guardando || leyendo || !f.cierre} onClick={() => void guardar()} className="rounded-lg bg-orange-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
           {guardando ? <Loader2 className="h-4 w-4 animate-spin" /> : "Guardar resumen"}

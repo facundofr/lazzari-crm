@@ -16,6 +16,8 @@
  * tildados). Así una factura va a varias OC, una OC lleva varias facturas (+ Otra) y varias facturas van a varias OC.
  * Factura en la OC equivocada: se saca con la ✕ y se carga en la otra; si el PDF ya está cargado, la ventana ofrece
  * «Usar la que ya está» (la une sin cargarla de nuevo). No se anula nada (Augusto 02/11: bien simple).
+ * Augusto 02/11: arriba «Por artículo» | «Consumos de la Visa»: los consumos de compras del resumen de la Visa, cada uno con su
+ * factura o «Falta la factura» (components/finanzas-lazza/tarjeta-consumos, modo compras); 💡 la OC del mismo importe con IVA.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Card } from "@/components/ui/card";
@@ -25,6 +27,8 @@ import { useToast } from "@/components/ui/toast";
 import { EVENTO_FACTURAS_COMPRA } from "@/components/carga-masiva-global";
 import ComprasLazzaFactura from "@/components/compras-lazza-factura";
 import ComprasLazzaOc from "@/components/compras-lazza-oc";
+import { ConsumosTarjeta } from "@/components/finanzas-lazza/tarjeta-consumos";
+import type { OcSugerible } from "@/lib/visa-cruce";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
@@ -73,6 +77,7 @@ export default function ComprasMercadoLibre({ sociedadId }: { sociedadId: string
   // Varias facturas juntas: se cargan de a una (la ventana de siempre) y todas se unen a los mismos artículos.
   const [cola, setCola] = useState<{ archivos: File[]; total: number; para: Vista[] } | null>(null);
   const colaGuardada = useRef(false);
+  const [vista, setVista] = useState<"articulos" | "visa">("articulos");
 
   const cargar = useCallback(async () => {
     setCargando(true);
@@ -136,6 +141,10 @@ export default function ComprasMercadoLibre({ sociedadId }: { sociedadId: string
   }), [filas, rango, palabras]);
   const visibles = useMemo(() => (soloFalta ? enPeriodo.filter(faltaFactura) : enPeriodo), [enPeriodo, soloFalta]);
   const resumen = useMemo(() => resumenML(enPeriodo), [enPeriodo]);
+  /** Para «Consumos de la Visa»: la OC del mismo importe con IVA (💡, solo sugerencia). */
+  const articulosOc = useMemo<OcSugerible[]>(() => filas.map(f => ({
+    ocId: f.ocId, ocNumero: f.ocNumero, fecha: f.fecha || null, importe: f.importe, moneda: f.moneda === "USD" ? "USD" : "ARS", conFactura: f.facturas.length > 0 || !!f.noTiene,
+  })), [filas]);
 
   /** Lo que va a llevar la factura: la fila tocada más las tildadas. */
   const objetivo = useCallback((f: Vista) => [f, ...filas.filter(x => tildados.has(x.id) && x.id !== f.id)], [filas, tildados]);
@@ -299,8 +308,18 @@ Si era de otro artículo, en ese tocá Elegir (o Cargar: si la volvés a subir, 
     ) },
   ];
 
+  const botonVista = (v: typeof vista, texto: string) => (
+    <button onClick={() => setVista(v)} className={`rounded-md px-3 py-1 text-sm font-medium ${vista === v ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"}`}>{texto}</button>
+  );
+
   return (
     <div className="space-y-2">
+      <div className="flex w-fit gap-1 rounded-lg border border-zinc-200 p-0.5 dark:border-zinc-700">
+        {botonVista("articulos", "Por artículo")}
+        {botonVista("visa", "Consumos de la Visa")}
+      </div>
+      {vista === "visa" && <ConsumosTarjeta sociedadId={sociedadId} modo="compras" articulos={articulosOc} onAbrirOc={setOcAbierta} />}
+      {vista === "articulos" && <>
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative w-full max-w-xs">
           <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
@@ -354,6 +373,7 @@ Si era de otro artículo, en ese tocá Elegir (o Cargar: si la volvés a subir, 
         <DataTable<Vista> data={visibles} loading={cargando && !filas.length} columns={columnas}
           emptyMessage={soloFalta ? "Todos los artículos de Mercado Libre tienen su factura." : "No hay compras de Mercado Libre con estos filtros."} />
       </Card>
+      </>}
 
       {cargarPara && (
         <ComprasLazzaFactura sociedadId={sociedadId} conVisaInicial para={textoPara(cargarPara)}
