@@ -154,6 +154,28 @@ export interface Deudas {
   vencimientos: FilaVencimiento[];
   saldosClientes: Record<string, SaldoCliente>;
   saldosProveedores: Record<string, SaldoProveedor>;
+  /** Saldos chicos sacados de pendientes ("venta:<id>" / "compra:<id>", lib/saldos-pendientes). `vencimientos` los trae igual:
+   *  cada pantalla de pendientes los separa; Cuentas corrientes y el Cashflow no cambian. */
+  sacados: Set<string>;
+  /** Dólar divisa BNA del día (el último cargado), para saber si un saldo en dólares es chico. */
+  dolar: number | null;
+}
+
+/** Saldos chicos sacados de pendientes (02/11/2026, tabla saldos_fuera_de_pendientes). Sin la tabla todavía, ninguno. */
+export async function traerSaldosSacados(sociedadId: string): Promise<Set<string>> {
+  const { data, error } = await db.from("saldos_fuera_de_pendientes").select("factura_id, factura_compra_id")
+    .eq("sociedad_id", sociedadId).eq("anulado", false);
+  if (error) return new Set();
+  return new Set(((data || []) as any[]).map((r) => (r.factura_id ? `venta:${r.factura_id}` : `compra:${r.factura_compra_id}`)));
+}
+
+/** Dólar divisa BNA del día: el último cargado hasta hoy (el mismo que usa Finanzas). */
+export async function traerDolarDelDia(hoy: string): Promise<number | null> {
+  const { data, error } = await db.from("cotizaciones_dolar").select("valor_venta").eq("tipo", "oficial_divisas")
+    .lte("fecha", hoy).order("fecha", { ascending: false }).limit(1);
+  if (error) return null;
+  const v = Number((data || [])[0]?.valor_venta);
+  return v > 0 ? v : null;
 }
 
 /**
@@ -161,7 +183,7 @@ export interface Deudas {
  * Vencimientos = facturas con saldo; saldos por cliente/proveedor incluyen NC, a favor, anticipos y ajustes.
  */
 export async function traerDeudas(sociedadId: string, hoy: string): Promise<Deudas> {
-  const [cc, compras, pagosDirectos, ncMovs, creditos] = await Promise.all([
+  const [cc, compras, pagosDirectos, ncMovs, creditos, sacados, dolar] = await Promise.all([
     traerDatosSaldoClientes(db, sociedadId, traerTodo),
     traerTodo<any>(() => db.from("facturas_compra")
       .select("id, proveedor_id, fecha, fecha_vencimiento, tipo_comprobante, estado, moneda, iva, total, total_acreditado, numero_factura, proveedores(razon_social), op_facturas_compra(monto, ordenes_pago(estado))")
@@ -173,6 +195,8 @@ export async function traerDeudas(sociedadId: string, hoy: string): Promise<Deud
       .select("id, nota_credito_compra_id, monto, anulado")
       .eq("sociedad_id", sociedadId).not("nota_credito_compra_id", "is", null).order("id")),
     traerCreditosProveedores(db, sociedadId, traerTodo, sentidoAjuste),
+    traerSaldosSacados(sociedadId),
+    traerDolarDelDia(hoy),
   ]);
   // Ventas: saldo por factura con la regla de CC de clientes; los datos para mostrar se traen solo de las que deben.
   const cobrado = cobradoPorFactura(cc.facturas, cc.movimientos, cc.aplicaciones);
@@ -192,6 +216,8 @@ export async function traerDeudas(sociedadId: string, hoy: string): Promise<Deud
     vencimientos: armarVencimientos({ hoy, ventas, saldoVenta: (f) => saldos.get(f.id) ?? 0, compras: comprasFL, pagosDirectos }),
     saldosClientes: calcularSaldosClientes(cc.facturas, cc.movimientos, cc.aplicaciones, cc.ajustes),
     saldosProveedores: calcularSaldosProveedores(compras, pagosDirectos, ncMovs, creditos),
+    sacados,
+    dolar,
   };
 }
 

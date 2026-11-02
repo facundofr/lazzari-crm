@@ -13,7 +13,9 @@ import { DataTable, type Column } from "@/components/ui/data-table";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { conVencimiento, filtrarVencimientos, sumarDias, type FilaVencimiento } from "@/lib/finanzas-lazza";
 import { supabase } from "@/lib/supabase/client";
+import { separarSacados } from "@/lib/saldos-pendientes";
 import { traerDeudas } from "./datos";
+import { VenceChip, claseFilaVence } from "./saldos-chicos";
 import { CobrarCliente } from "./cobrar";
 import { PagarProveedor } from "./pagar";
 
@@ -27,9 +29,9 @@ const columnas = (editar: (f: Fila) => void, cobrar: (f: Fila) => void, pagar: (
   { key: "fecha", label: "Fecha de factura", sortable: true, sortValue: (f) => f.fecha, render: (f) => <span className="whitespace-nowrap">{formatDate(f.fecha)}</span> },
   { key: "vence", label: "Vence", sortable: true, sortValue: (f) => f.vence, render: (f) => (
     <button type="button" onClick={(e) => { e.stopPropagation(); editar(f); }} title="Cambiar el vencimiento o los días de pago"
-      className={`group whitespace-nowrap rounded px-1 text-left hover:bg-orange-50 dark:hover:bg-zinc-800 ${f.dias < 0 ? "font-semibold text-red-600" : f.dias <= 7 ? "text-amber-600" : ""}`}>
-      {formatDate(f.vence)} <Pencil className="inline h-3 w-3 text-zinc-300 group-hover:text-orange-500" />
-      <span className="block text-[10px] font-normal text-zinc-400">{f.sinVencimiento ? "sin vto · fecha factura" : f.dias < 0 ? `vencida hace ${-f.dias} d` : f.dias === 0 ? "hoy" : `en ${f.dias} d`}</span>
+      className="group rounded px-1 text-left hover:bg-orange-50 dark:hover:bg-zinc-800">
+      <VenceChip vence={f.vence} dias={f.dias} sinVencimiento={f.sinVencimiento}
+        extra={<> <Pencil className="inline h-3 w-3 text-zinc-300 group-hover:text-orange-500" /></>} />
     </button>
   ) },
   { key: "lado", label: "Tipo", sortable: true, sortValue: (f) => f.lado, render: (f) => <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${f.lado === "venta" ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300" : "bg-orange-50 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300"}`}>{f.lado === "venta" ? "Venta" : "Compra"}</span> },
@@ -73,7 +75,8 @@ export function FinanzasLazzaVencimientos({ sociedadId }: { sociedadId: string }
     let vivo = true;
     setFilas(null); setError(null);
     traerDeudas(sociedadId, hoy)
-      .then((d) => { if (vivo) setFilas(d.vencimientos); })
+      // Sin los saldos chicos sacados de pendientes (Cobrar y Pagar, 02/11/2026): siguen en Cuentas corrientes.
+      .then((d) => { if (vivo) setFilas(separarSacados(d.vencimientos, d.sacados).pendientes); })
       .catch((e) => { console.error("Finanzas Lazza · Vencimientos:", e); if (vivo) setError("No se pudieron cargar los vencimientos. Recargá la página."); });
     return () => { vivo = false; };
   }, [sociedadId, hoy, recarga]);
@@ -125,7 +128,8 @@ export function FinanzasLazzaVencimientos({ sociedadId }: { sociedadId: string }
         <p className="flex items-center gap-2 py-6 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Cargando…</p>
       ) : (
         <div className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-          <DataTable columns={columnas(setEditando, setCobrando, setPagando)} data={visibles} emptyMessage="No hay facturas con saldo con ese filtro" />
+          <DataTable columns={columnas(setEditando, setCobrando, setPagando)} data={visibles} rowClassName={(f) => claseFilaVence(f.dias)}
+            emptyMessage="No hay facturas con saldo con ese filtro" />
           <div className="flex flex-wrap justify-end gap-x-6 gap-y-1 border-t border-zinc-200 px-3 py-2 text-xs dark:border-zinc-700">
             <span className="text-zinc-400">{visibles.length} facturas con saldo</span>
             {filtro !== "compra" && <span className="text-zinc-500">A cobrar <b className="font-mono text-emerald-700 dark:text-emerald-400">{montos(totales.venta)}</b></span>}

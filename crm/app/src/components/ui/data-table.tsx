@@ -18,6 +18,8 @@ interface DataTableProps<T> {
   columns: Column<T>[];
   data: T[];
   onRowClick?: (row: T) => void;
+  /** Clase extra de cada renglón (ej. el fondo rojo o naranja de una factura vencida o por vencer). */
+  rowClassName?: (row: T) => string | undefined;
   emptyMessage?: string;
   pageSize?: number;
   loading?: boolean;
@@ -33,6 +35,7 @@ export function DataTable<T extends { id: string }>({
   columns,
   data,
   onRowClick,
+  rowClassName,
   emptyMessage = "No hay datos para mostrar",
   pageSize: pageSizeFijo,
   loading = false,
@@ -172,7 +175,8 @@ export function DataTable<T extends { id: string }>({
                     rowIdx % 2 === 1 && "bg-zinc-50/50 dark:bg-zinc-800/20",
                     onRowClick
                       ? "cursor-pointer hover:bg-orange-50/50 dark:hover:bg-orange-950/20"
-                      : ""
+                      : "",
+                    rowClassName?.(row)
                   )}
                 >
                   {columns.map((col) => (

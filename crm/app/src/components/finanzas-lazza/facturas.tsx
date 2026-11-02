@@ -25,7 +25,9 @@ import { useArcaStatus } from "@/lib/use-arca-status";
 import { saldoClienteEn } from "@/lib/saldo-clientes";
 import { useSaldosClientes } from "./use-saldos-clientes";
 import { sumarMeses } from "@/lib/reportes-comprobantes";
-import { traerComprobantesMes, traerFacturasFL } from "./datos";
+import { traerComprobantesMes, traerDolarDelDia, traerFacturasFL, traerSaldosSacados } from "./datos";
+import { PanelSacados, TildeSaldo, VenceChip, claseFilaVence } from "./saldos-chicos";
+import { claveSaldo, esSaldoChico, separarSacados } from "@/lib/saldos-pendientes";
 import { CobrarCliente } from "./cobrar";
 import { FinanzasLazzaFacturar } from "./facturar";
 import { PagarProveedor } from "./pagar";
@@ -107,6 +109,22 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta", soloL
 
   const recargar = () => { setTildadas([]); setDatos(null); setRecarga((n) => n + 1); };
 
+  // Saldos chicos sacados de pendientes (Augusto 02/11/2026): no cuentan en Pendientes, Por vencer ni Vencidas (siguen en Cuentas
+  // corrientes y en «Todas»). «Ver saldos sacados» los muestra abajo para volverlos.
+  const [saldos, setSaldos] = useState<{ sacados: Set<string>; dolar: number | null }>({ sacados: new Set(), dolar: null });
+  const [verSacados, setVerSacados] = useState(false);
+  useEffect(() => {
+    let vivo = true;
+    Promise.all([traerSaldosSacados(sociedadId), traerDolarDelDia(hoy)])
+      .then(([sacados, dolar]) => { if (vivo) setSaldos({ sacados, dolar }); })
+      .catch((e) => console.error("Finanzas Lazza · Saldos sacados:", e));
+    return () => { vivo = false; };
+  }, [sociedadId, hoy, recarga]);
+  const { pendientes, sacadas } = useMemo(() => {
+    const r = separarSacados(datos?.filas || [], saldos.sacados);
+    return { pendientes: r.pendientes, sacadas: r.sacados.filter((f) => f.saldo > 0.005) };
+  }, [datos, saldos]);
+
   // Facturado del mes (solo ventas): aparte de la lista, no depende del filtro.
   useEffect(() => {
     if (lado !== "venta") return;
@@ -118,9 +136,10 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta", soloL
     return () => { vivo = false; };
   }, [sociedadId, lado, mes, recarga]);
 
-  const visibles = useMemo(() => filtrarFacturas(datos?.filas || [], { filtro, texto, envio: lado === "venta" ? envio : "" }), [datos, filtro, texto, envio, lado]);
+  const visibles = useMemo(() => filtrarFacturas(filtro === "todas" ? datos?.filas || [] : pendientes, { filtro, texto, envio: lado === "venta" ? envio : "" }),
+    [datos, pendientes, filtro, texto, envio, lado]);
   const totales = useMemo(() => totalesFacturas(visibles), [visibles]);
-  const venc = useMemo(() => resumenVencimientos(datos?.filas || []), [datos]);
+  const venc = useMemo(() => resumenVencimientos(pendientes), [pendientes]);
   const porId = useMemo(() => new Map((datos?.filas || []).map((f) => [f.id, f])), [datos]);
   const seleccion = useMemo(() => prepararSeleccion(tildadas.map((id) => porId.get(id)).filter(Boolean) as FilaFactura[], lado), [tildadas, porId, lado]);
   const recibosPorId = useMemo(() => new Map((datos?.recibos || []).map((r) => [r.id, r])), [datos]);
@@ -158,12 +177,12 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta", soloL
     { key: "vence", label: "Vence", sortable: true, sortValue: (f) => f.vence, render: (f) => {
       const conSaldo = f.saldo > 0.005;
       const editable = conSaldo && !soloLectura;
-      const color = !conSaldo ? "text-zinc-400" : f.dias < 0 ? "font-semibold text-red-600" : f.dias <= 7 ? "text-amber-600" : "";
+      // 02/11/2026 (Augusto): más color a vencidas (rojo) y por vencer (naranja, de hoy a 7 días); sin saldo, gris.
       return (
         <button type="button" disabled={!editable} onClick={(e) => { e.stopPropagation(); setEditando(f); }} title={editable ? "Cambiar el vencimiento o los días de pago" : undefined}
-          className={`group whitespace-nowrap rounded px-1 text-left enabled:hover:bg-orange-50 dark:enabled:hover:bg-zinc-800 ${color}`}>
-          {formatDate(f.vence)} {editable && <Pencil className="inline h-3 w-3 text-zinc-300 group-hover:text-orange-500" />}
-          {conSaldo && <span className="block text-[10px] font-normal text-zinc-400">{f.sinVencimiento ? "sin vto · fecha factura" : f.dias < 0 ? `vencida hace ${-f.dias} d` : f.dias === 0 ? "vence hoy" : `vence en ${f.dias} d`}</span>}
+          className={`group rounded px-1 text-left enabled:hover:bg-orange-50 dark:enabled:hover:bg-zinc-800 ${conSaldo ? "" : "text-zinc-400"}`}>
+          <VenceChip vence={f.vence} dias={f.dias} conSaldo={conSaldo} sinVencimiento={f.sinVencimiento}
+            extra={editable ? <> <Pencil className="inline h-3 w-3 text-zinc-300 group-hover:text-orange-500" /></> : null} />
         </button>
       );
     } },
@@ -178,7 +197,17 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta", soloL
       { key: "neto", label: "Neto", sortable: true, sortValue: (f: FilaFactura) => f.neto, className: "text-right", render: (f: FilaFactura) => <span className="whitespace-nowrap font-mono text-zinc-500">{formatCurrency(f.neto, f.moneda)}</span> },
     ] : []),
     { key: "total", label: "Total", sortable: true, sortValue: (f) => f.total, className: "text-right", render: (f) => <span className="whitespace-nowrap font-mono text-zinc-500">{formatCurrency(f.total, f.moneda)}</span> },
-    { key: "saldo", label: "Saldo", sortable: true, sortValue: (f) => f.saldo, className: "text-right", render: (f) => <span className={`whitespace-nowrap font-mono ${f.saldo > 0.005 ? "font-semibold" : "text-zinc-400"}`}>{formatCurrency(f.saldo, f.moneda)}</span> },
+    { key: "saldo", label: "Saldo", sortable: true, sortValue: (f) => f.saldo, className: "text-right", render: (f) => {
+      // Saldo chico (factura ya pagada en parte, menos de $ 20.000): el tilde para sacarlo de pendientes o volverlo.
+      const sacado = saldos.sacados.has(claveSaldo(f));
+      const tilde = !soloLectura && f.saldo > 0.005 && (sacado || esSaldoChico(f, saldos.dolar));
+      return (
+        <span className={`whitespace-nowrap font-mono ${f.saldo > 0.005 ? "font-semibold" : "text-zinc-400"}`}>
+          {formatCurrency(f.saldo, f.moneda)}
+          {tilde && <span className="mt-0.5 block font-sans text-[11px] font-normal"><TildeSaldo f={f} sacado={sacado} onCambio={recargar} /></span>}
+        </span>
+      );
+    } },
     { key: "estado", label: "Estado", sortable: true, sortValue: (f) => f.estado, render: (f) => (
       <span className="whitespace-nowrap">
         <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${ESTILO_ESTADO[f.estado]}`}>{etiquetaEstado(f.estado, lado)}</span>
@@ -256,6 +285,11 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta", soloL
             <button key={k} type="button" onClick={() => setFiltro(k)} className={boton(filtro === k)}>{l}</button>
           ))}
         </div>
+        {sacadas.length > 0 && filtro !== "todas" && !soloLectura && (
+          <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-300">
+            <input type="checkbox" checked={verSacados} onChange={(e) => setVerSacados(e.target.checked)} className="h-4 w-4 accent-orange-500" /> Ver saldos sacados ({sacadas.length})
+          </label>
+        )}
         <div className="relative min-w-[200px] flex-1">
           <Search className="absolute left-2.5 top-2 h-4 w-4 text-zinc-400" />
           <input value={texto} onChange={(e) => setTexto(e.target.value)} placeholder={esVenta ? "Buscar cliente, N° factura, OC, vendedor o recibo" : "Buscar proveedor, N° factura u OP"} className={`${control} w-full pl-8`} />
@@ -327,7 +361,7 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta", soloL
               Tildar todas las de la lista
             </label>
           )}
-          <DataTable columns={cols} data={visibles} onRowClick={setFicha} pageSize={50}
+          <DataTable columns={cols} data={visibles} onRowClick={setFicha} pageSize={50} rowClassName={(f) => claseFilaVence(f.dias, f.saldo > 0.005)}
             emptyMessage={filtro === "todas" ? "No hay facturas con esa búsqueda" : esVenta ? "No hay facturas para cobrar con ese filtro" : "No hay facturas para pagar con ese filtro"} />
           <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1 border-t border-zinc-200 px-3 py-2 text-xs text-zinc-500 dark:border-zinc-700">
             <span className="flex flex-wrap gap-x-4">
@@ -343,6 +377,7 @@ export function FinanzasLazzaFacturas({ sociedadId, ladoInicial = "venta", soloL
           )}
         </div>
       )}
+      {verSacados && filtro !== "todas" && !soloLectura && <PanelSacados filas={sacadas} onCambio={recargar} />}
 
       {/* Barra fija (auditoría UX 27/10, arreglo 1): lo tildado y su suma siempre a la vista, sin bajar hasta el final de la tabla. */}
       {datos && tildadas.length > 0 && seleccion && (

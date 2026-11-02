@@ -16,7 +16,7 @@ import { useToast } from "@/components/ui/toast";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { todayAR } from "@/lib/utils";
-import { traerFacturasFL } from "@/components/finanzas-lazza/datos";
+import { traerFacturasFL, traerSaldosSacados } from "@/components/finanzas-lazza/datos";
 import { avisoDePagoReciente } from "@/lib/correo-finanzas";
 import { facturaPDFBase64 } from "@/lib/factura-pdf";
 import { fechaHoraAR } from "@/lib/presupuesto-envios";
@@ -83,9 +83,10 @@ export default function CobranzasPage() {
     setCargando(true);
     setError(null);
     try {
-      const { filas } = await traerFacturasFL(sociedadId, "venta", hoy, false);
-      // Con saldo y sin cobrar con cheque (el cheque sin acreditar ya es un cobro).
-      const conSaldo = filas.filter((f) => f.entidadId && f.saldo >= 1 && !f.estado.startsWith("cheque_"));
+      const [{ filas }, sacados] = await Promise.all([traerFacturasFL(sociedadId, "venta", hoy, false), traerSaldosSacados(sociedadId)]);
+      // Con saldo y sin cobrar con cheque (el cheque sin acreditar ya es un cobro). Sin los saldos chicos que Augusto sacó de
+      // pendientes en Cobrar (02/11/2026): a esos no se les manda aviso.
+      const conSaldo = filas.filter((f) => f.entidadId && f.saldo >= 1 && !f.estado.startsWith("cheque_") && !sacados.has(`venta:${f.id}`));
       const ids = [...new Set(conSaldo.map((f) => f.entidadId as string))];
       const cli: any[] = [];
       const con: any[] = [];

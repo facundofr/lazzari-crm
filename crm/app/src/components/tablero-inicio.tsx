@@ -17,6 +17,7 @@ import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { facturadoMesNeto } from "@/lib/facturado-mes";
 import { periodoDeFecha, sumarMeses } from "@/lib/reportes-comprobantes";
 import type { FilaVencimiento } from "@/lib/finanzas-lazza";
+import { separarSacados } from "@/lib/saldos-pendientes";
 import {
   MESES, agendaSemana, aPesos, chequesPorDia, frasesInicio, listaDias, mayorVencido, nombreDia, pesosCorto, plazosCheques, plazosFacturas,
   semanasTablero, type ChequeTablero, type ItemAgenda, type Parte, type Plazos,
@@ -50,7 +51,8 @@ async function traerDatos(sociedadId: string, hoy: string): Promise<Datos> {
     try { return await p(); } catch (e) { console.error(`Inicio · ${nombre}:`, e); return null; }
   };
   const [filas, cheques, dolar, facturado, objetivo, cuentas, ultimaSubida] = await Promise.all([
-    parte(async () => (await traerDeudas(sociedadId, hoy)).vencimientos, "a cobrar y a pagar"),
+    // Sin los saldos chicos sacados de pendientes (Cobrar y Pagar, 02/11/2026).
+    parte(async () => { const d = await traerDeudas(sociedadId, hoy); return separarSacados(d.vencimientos, d.sacados).pendientes; }, "a cobrar y a pagar"),
     parte(() => traerTodo<ChequeTablero>(() => db.from("echeqs").select("id, numero, monto, moneda, fecha_pago, estado, direccion, destino_nombre")
       .eq("sociedad_id", sociedadId).eq("direccion", "emitido").in("estado", ["pendiente", "entregado"]).order("id")), "cheques"),
     parte(async () => {

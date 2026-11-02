@@ -15,6 +15,7 @@ import { rangoProximaSemana } from "@/lib/cheques-lazza";
 import { armarRetenciones, ivaDelMes } from "@/lib/finanzas-lazza";
 import { useUser } from "@/lib/auth-context";
 import { esCobroDeCliente } from "@/lib/tipos-movimiento";
+import { separarSacados } from "@/lib/saldos-pendientes";
 import { traerParaFacturar } from "./facturar";
 import { CargaDiaria } from "./carga-diaria";
 import { traerComprasDelMes, traerDeudas, traerIvaACuenta, traerTcDelDia, traerVentasDelMes, rangoMes } from "./datos";
@@ -96,11 +97,13 @@ function loaders(sociedadId: string, periodo: string, hoy: string, esLazzari: bo
     // Vencimientos y cuentas corrientes.
     async () => {
       const d = await traerDeudas(sociedadId, hoy);
-      const vencidas = d.vencimientos.filter((v) => v.dias < 0);
+      // Sin los saldos chicos sacados de pendientes (02/11/2026); Cuentas corrientes sigue con el saldo de cada cliente.
+      const pendientes = separarSacados(d.vencimientos, d.sacados).pendientes;
+      const vencidas = pendientes.filter((v) => v.dias < 0);
       let ars = 0, usd = 0;
       for (const s of Object.values(d.saldosClientes)) { if (s.ARS.saldo > 0) ars += s.ARS.saldo; if (s.USD.saldo > 0) usd += s.USD.saldo; }
       const deLado = (lado: "venta" | "compra") => {
-        const l = d.vencimientos.filter((v) => v.lado === lado);
+        const l = pendientes.filter((v) => v.lado === lado);
         const venc = { ARS: 0, USD: 0 };
         for (const v of l) if (v.dias < 0) venc[v.moneda] += v.saldo;
         return { n: l.length, entidades: new Set(l.map((v) => v.entidadId)).size, venc };
@@ -109,7 +112,7 @@ function loaders(sociedadId: string, periodo: string, hoy: string, esLazzari: bo
       return {
         cobrar: { valor: `${cob.n} facturas`, sub: `${cob.entidades} clientes · vencido ${mas(cob.venc.ARS, cob.venc.USD)}`, tono: cob.venc.ARS || cob.venc.USD ? "rojo" : undefined },
         pagar: { valor: `${pag.n} facturas`, sub: `${pag.entidades} proveedores · vencido ${mas(pag.venc.ARS, pag.venc.USD)}` },
-        vencimientos: { valor: `${vencidas.length} vencidas`, sub: `${d.vencimientos.length} con saldo`, tono: vencidas.length ? "rojo" : undefined },
+        vencimientos: { valor: `${vencidas.length} vencidas`, sub: `${pendientes.length} con saldo`, tono: vencidas.length ? "rojo" : undefined },
         cuentas: { valor: mas(ars, usd), sub: "nos deben" },
       };
     },
