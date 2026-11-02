@@ -31,6 +31,7 @@ import {
   ArrowUpDown,
   ChevronUp,
   ChevronDown,
+  Home,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { aplicarOrdenMenu, moverEnLista } from "@/lib/orden-menu";
@@ -48,6 +49,7 @@ import { APP_VERSION_LABEL } from "@/lib/app-version";
 // Este es el orden de fábrica: Augusto lo cambia con "Ordenar menú" y ese orden lo ven todos (lib/orden-menu.ts).
 const navigation: { grupo: string; items: { name: string; href: string; icon: typeof Users; module: string; oculto?: boolean; soloSuperAdmin?: boolean; soloRoles?: string[] }[] }[] = [
   { grupo: "Menú", items: [
+    { name: "Inicio", href: "/inicio", icon: Home, module: "finanzas", soloSuperAdmin: true }, // Augusto 02/11: su pantalla de entrada (la plata de un vistazo); el CRM le abre acá
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, module: "dashboard", oculto: true }, // Augusto 20/10: fuera del menú (sigue por link); el sistema abre en Presupuestos
     { name: "Clientes", href: "/clientes", icon: Users, module: "clientes" },
     { name: "Proveedores", href: "/proveedores", icon: Factory, module: "proveedores" },
@@ -152,7 +154,7 @@ export function Sidebar() {
       {/* Logo */}
       <div className="dn-logo flex h-16 items-center justify-between border-b border-zinc-200 px-4 dark:border-zinc-800">
         {(!collapsed || mobileSidebarOpen) && (
-          <Link href="/presupuestos" className="flex items-center gap-2" onClick={handleNavClick}>
+          <Link href={role === "super_admin" ? "/inicio" : "/presupuestos"} className="flex items-center gap-2" onClick={handleNavClick}>
             <div
               className="flex h-8 w-8 items-center justify-center rounded-lg font-bold text-white text-sm"
               style={{ backgroundColor: accentColor }}
@@ -166,7 +168,7 @@ export function Sidebar() {
           </Link>
         )}
         {collapsed && !mobileSidebarOpen && (
-          <Link href="/presupuestos" className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg font-bold text-white text-sm" style={{ backgroundColor: accentColor }}>
+          <Link href={role === "super_admin" ? "/inicio" : "/presupuestos"} className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg font-bold text-white text-sm" style={{ backgroundColor: accentColor }}>
             {logoInitial}
           </Link>
         )}

@@ -516,6 +516,9 @@ function clasificarPorConcepto(l: LineaCruce, ctx: Contexto): Omit<Propuesta, "l
   if (/SIRCREB|REG REC SIRC/.test(c)) return fam({ ...base, clasificacion: "impuesto", subtipo: "sircreb", motivo: "SIRCREB (Ingresos Brutos)" });
   if (/MANT(\.|ENIMIENTO)? ?MENS|CO\.MANT/.test(c)) return fam({ ...base, clasificacion: "gasto_bancario", subtipo: "mantenimiento", motivo: "Mantenimiento de cuenta" });
   if (/^COMI(SION|\s)|COMISION/.test(c)) return fam({ ...base, clasificacion: "gasto_bancario", subtipo: "comision", motivo: "Comisión del banco" });
+  // 02/11/2026: códigos 030 y 122, nuevos en el extracto del 02/11 (no están en la tabla de Augusto): son del banco.
+  if (/IMPUESTO (DE )?SELLOS/.test(c)) return fam({ ...base, clasificacion: "impuesto", subtipo: "sellos", motivo: "Impuesto de sellos" });
+  if (/INTERES(ES)? (POR )?SALDO DEUDOR/.test(c)) return fam({ ...base, clasificacion: "intereses", subtipo: "intereses", motivo: "Intereses por saldo deudor (descubierto)" });
   // Repaso del historial (23/10): estas tres se confirmaron siempre igual, pero mueven plata en serio: se SUGIEREN (no se aplican solas).
   if (!credito && /PAGO (DE )?SERVICI[A-Z]* (TARJETA )?17779347/.test(c)) return { clasificacion: "impuesto" as const, subtipo: "afip", auto: false, candidatos: [] as string[], motivo: "Pago de servicios con la tarjeta de débito 17779347: en el historial siempre fue un VEP de ARCA (confirmalo con el mail del VEP)" };
   if (credito && /REINT.? TARJETA/.test(c)) return { clasificacion: "intereses" as const, subtipo: "reintegro", auto: false, candidatos: [] as string[], motivo: "Reintegro de la tarjeta de crédito" };

@@ -225,7 +225,11 @@ assert.deepEqual(tot, { "2026-10": { iva: -5921.82, ley_25413: 1829.52 }, "2026-
     lin("f1", "OPER. FDO.CO 023354551502CUT #654", 5000000), lin("e1", "TRANSFERENCI 400913395493 · CTA.ORIGEN: CA $ 091-339549/3 #263", 1000000),
     lin("a1", "PAGO SERVICI 17779347 OP5532 #137", -677120.73), lin("i1", "IVA TASA GRA #236", -199.5), lin("s1", "REG REC SIRC 14/10/26 00024X · CTE 000000000983 #550", -37478.49),
     lin("l1", "LEY NRO 25.4 20/10/26 00017 #609", 60662.95), lin("x1", "TRANSF CREDITO BANELCO #135", 60500),
+    lin("se", "IMPUESTO SELLOS #030", -197.26), lin("in", "INTERES SALDO DEUDOR ACORDA #122", -20547.96),
   ], [], [], [], [], new Set());
+  // 02/11: códigos 030 y 122 (no están en la tabla de Augusto): del banco, solos.
+  assert.equal(g(r, "se").clasificacion, "impuesto"); assert.equal(g(r, "se").subtipo, "sellos"); assert.equal(g(r, "se").auto, true);
+  assert.equal(g(r, "in").clasificacion, "intereses"); assert.equal(g(r, "in").subtipo, "intereses"); assert.equal(g(r, "in").auto, true);
   assert.equal(g(r, "c1").clasificacion, "gasto_bancario"); assert.equal(g(r, "c1").auto, true);
   assert.equal(g(r, "c2").clasificacion, "gasto_bancario");
   for (const id of ["t1", "t2"]) { assert.equal(g(r, id).clasificacion, "tarjeta"); assert.equal(g(r, id).auto, false); }

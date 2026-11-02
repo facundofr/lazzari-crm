@@ -33,7 +33,7 @@ export default function LoginPage() {
       return;
     }
 
-    router.push("/presupuestos");
+    router.push("/"); // el middleware lleva a cada uno a su pantalla de entrada (Augusto: Inicio; el resto: Presupuestos)
     router.refresh();
   }
 

@@ -36,7 +36,7 @@ const PRUEBAS = [
   "test-remitos-armado.ts", "test-remitos-crear.ts", "test-resto-facturar.ts", "test-resumen-bbva.ts",
   "test-resumen-cuenta.ts", "test-resumen-economico.mjs", "test-revisar-finanzas.ts", "test-saldo-cuentas.ts", "test-retencion-conceptos.ts", "test-saldo-clientes.ts",
   "test-saldo-favor-proveedor.ts", "test-saldo-proveedores.ts", "test-sicore-linea.ts", "test-soap-fault.mjs",
-  "test-sugerir-concepto.ts", "test-tc-cobro-usd.mjs", "test-texto-mayusculas.ts", "test-tipos-movimiento.ts",
+  "test-sugerir-concepto.ts", "test-tablero-inicio.ts", "test-tc-cobro-usd.mjs", "test-texto-mayusculas.ts", "test-tipos-movimiento.ts",
   "test-transportes-anotador.ts", "test-ventas-documentos.ts", "test-ventas-etapas.ts", "test-vep.ts", "test-avisos-cobranza.ts",
   "test-whatsapp-ar.ts",
 ];

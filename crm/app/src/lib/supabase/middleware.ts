@@ -68,12 +68,14 @@ export async function updateSession(request: NextRequest) {
   // Una cuenta desactivada conserva su perfil para trazabilidad contable, pero
   // no debe seguir operando con una sesión emitida antes de la baja.
   // Sin ficha = no fue invitado por el super_admin: tampoco entra (ni a mirar).
+  let role: string | null = null;
   if (user && !isPublicAuthFlow) {
     const { data: profile, error: profileError } = await supabase
       .from("profiles")
-      .select("active")
+      .select("active, role")
       .eq("id", user.id)
       .maybeSingle();
+    role = profile?.role ?? null;
     if (!profileError && (!profile || profile.active === false)) {
       await supabase.auth.signOut();
       if (pathname.startsWith("/api/")) {
@@ -85,10 +87,11 @@ export async function updateSession(request: NextRequest) {
     }
   }
 
-  // Logged in and on login page -> redirect to Presupuestos (sin Dashboard desde 20/10)
-  if (user && isLoginPage) {
+  // Logged in and on login page (o en la raíz) -> a su pantalla de entrada: Augusto (super_admin) a Inicio (02/11/2026),
+  // el resto a Presupuestos (sin Dashboard desde 20/10).
+  if (user && (isLoginPage || pathname === "/")) {
     const url = request.nextUrl.clone();
-    url.pathname = "/presupuestos";
+    url.pathname = role === "super_admin" ? "/inicio" : "/presupuestos";
     return redirectWithSessionCookies(url);
   }
 
