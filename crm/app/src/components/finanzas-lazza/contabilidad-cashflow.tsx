@@ -8,13 +8,13 @@ import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Download, Loader2 } from "lucide-react";
 import { useUser } from "@/lib/auth-context";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
-import { FILAS_CF, SEMANAS_PROYECTADAS, armarCashflow, flujo, fotoDelMes, planillaCF, proyeccionCF, totalEntra, totalSale, type FilaCF, type ItemCF, type SemanaCF, type ValoresCF } from "@/lib/cashflow";
+import { DIA_IIBB, FILAS_CF, SEMANAS_PROYECTADAS, armarCashflow, flujo, fotoDelMes, otrasDisponibilidades, planillaCF, proyeccionCF, totalEntra, totalSale, type FilaCF, type ItemCF, type SemanaCF, type ValoresCF } from "@/lib/cashflow";
 import { lunesDe, sumarDias } from "@/lib/caja-proyectada";
 import { guardarFotoCashflow, traerDatosCashflow } from "./datos";
 
 const pesos = (n: number) => new Intl.NumberFormat("es-AR", { maximumFractionDigits: 0 }).format(Math.round(n));
 const semanaCorta = (desde: string) => `${desde.slice(8, 10)}/${desde.slice(5, 7)}`;
-const ORIGEN: Record<ItemCF["origen"], string> = { banco: "Banco", factura_venta: "Factura de venta", factura_compra: "Factura de compra", cheque_recibido: "Cheque en cartera", cheque_emitido: "Cheque propio", gasto_fijo: "Gasto fijo", premio: "Premio (estimado)" };
+const ORIGEN: Record<ItemCF["origen"], string> = { banco: "Banco", factura_venta: "Factura de venta", factura_compra: "Factura de compra", cheque_recibido: "Cheque en cartera", cheque_emitido: "Cheque propio", gasto_fijo: "Gasto fijo", premio: "Premio (estimado)", iibb: "IIBB y tasas (estimado)" };
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
 type Col = { s: SemanaCF; cual: "real" | "proy" };
 type Abierta = { desde: string; cual: "real" | "proy"; fila: FilaCF | "todo" };
@@ -42,8 +42,8 @@ export function ContabilidadCashflow({ sociedadId }: { sociedadId: string }) {
     if (!datos) return null;
     const hasta = sumarDias(lunesDe(hoy), SEMANAS_PROYECTADAS * 7 - 1);
     const p = proyeccionCF({ hoy, hasta, ...datos });
-    const cf = armarCashflow({ hoy, lineas: datos.lineas, cuentas: datos.cuentas, proyeccion: p.items, fotos: datos.fotos, saldosBanco: datos.saldosBanco });
-    return { p, cf };
+    const cf = armarCashflow({ hoy, lineas: datos.lineas, cuentas: datos.cuentas, proyeccion: p.items, fotos: datos.fotos });
+    return { p, cf, otras: otrasDisponibilidades(datos.otras, datos.dolar) };
   }, [datos, hoy]);
 
   // La foto del mes se guarda sola la primera vez (Augusto 29/10). En la compu local no: se prueba sin guardar.
@@ -57,7 +57,7 @@ export function ContabilidadCashflow({ sociedadId }: { sociedadId: string }) {
 
   if (error) return <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30">{error}</p>;
   if (!calc || !datos) return <p className="flex items-center gap-2 py-6 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Armando las semanas…</p>;
-  const { p, cf } = calc;
+  const { p, cf, otras } = calc;
 
   const reales = cf.semanas.filter((s) => s.tipo === "real");
   const visibles = [...(pasadas === "todas" ? reales : reales.slice(-Number(pasadas))), ...cf.semanas.filter((s) => s.tipo === "proyectada")];
@@ -126,7 +126,8 @@ export function ContabilidadCashflow({ sociedadId }: { sociedadId: string }) {
   if (p.vencidoSinCobrar.cantidad) avisos.push(`${p.vencidoSinCobrar.cantidad} factura${p.vencidoSinCobrar.cantidad === 1 ? "" : "s"} de venta vencida${p.vencidoSinCobrar.cantidad === 1 ? "" : "s"} sin cobrar por ${formatCurrency(p.vencidoSinCobrar.total)}: no se cuentan (no se sabe cuándo entran). Están en Cobrar.`);
   if (p.chequesDeTerceros.cantidad) avisos.push(`${p.chequesDeTerceros.cantidad} cheque${p.chequesDeTerceros.cantidad === 1 ? "" : "s"} propio${p.chequesDeTerceros.cantidad === 1 ? "" : "s"} que cubre un tercero (${formatCurrency(p.chequesDeTerceros.total)}): no se restan.`);
   if (p.sinDolar.length) avisos.push(`Sin dólar del día, no se proyectan: ${p.sinDolar.join(", ")}.`);
-  avisos.push("Todavía no se proyectan: IVA, SICORE y anticipos de Ganancias (VEP), IIBB y Seguridad e Higiene (falta saber qué día se pagan), la comisión de José y Ganancias (se paga en mayo 2027). En las semanas reales sí están, porque salen del banco.");
+  avisos.push(`IIBB y tasas: el ${datos.iibb.pct} % de las ventas de cada mes, el ${DIA_IIBB} del mes siguiente (sábado o domingo, el lunes). El mes en curso va con lo facturado hasta hoy; el vencido no se cuenta.`);
+  avisos.push("Todavía no se proyectan: IVA, SICORE y anticipos de Ganancias (VEP), la comisión de José y Ganancias (se paga en mayo 2027). En las semanas reales sí están, porque salen del banco.");
 
   return (
     <div className="space-y-3">
@@ -189,6 +190,18 @@ export function ContabilidadCashflow({ sociedadId }: { sociedadId: string }) {
           {mesFoto ? ` La foto de este mes es del ${formatDate(mesFoto.tomada)}.` : fotoHoy === "guardada" ? " La foto de este mes se guardó recién." : fotoHoy === "local" ? " En la compu local la foto del mes no se guarda (se guarda sola en el CRM publicado)." : ""}
           {" "}Saldo de las semanas reales: el del extracto al arrancar, más lo que entró y menos lo que salió según las líneas cargadas en Bancos.
         </p>
+        {otras.cuentas.length > 0 && (
+          <p className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-300">
+            <span className="font-semibold">Otras disponibilidades</span> <span className="text-zinc-400">(último saldo cargado; no suman al saldo de arriba)</span>:{" "}
+            {otras.cuentas.map((c, i) => (
+              <span key={c.nombre}>
+                {i > 0 && " · "}{c.nombre} {c.moneda === "USD" ? `US$ ${c.saldo.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${c.enPesos !== null ? ` (≈ $ ${pesos(c.enPesos)})` : ""}` : `$ ${pesos(c.saldo)}`}
+                {c.fecha && <span className="text-zinc-400"> al {formatDate(c.fecha)}</span>}
+              </span>
+            ))}
+            {" · "}<span className="font-semibold">Total ≈ $ {pesos(otras.total)}</span>
+          </p>
+        )}
       </div>
 
       {colAbierta && abierta && (

@@ -1,6 +1,6 @@
 // Prueba de lib/cashflow.ts (Cashflow semanal: real del banco + 12 semanas proyectadas) — npx tsx scripts/test-cashflow.ts
 import assert from "node:assert/strict";
-import { armarCashflow, cierreDelDia, filaDeGasto, filaDeLineaBanco, flujo, fotoDelMes, planillaCF, proyeccionCF, saldoAlArrancar, totalEntra, totalSale, type LineaBancoCF } from "../src/lib/cashflow";
+import { armarCashflow, cierreDelDia, filaDeGasto, filaDeLineaBanco, flujo, fotoDelMes, iibbCargado, otrasDisponibilidades, planillaCF, proyeccionCF, saldoAlArrancar, totalEntra, totalSale, vencimientoIibb, type LineaBancoCF } from "../src/lib/cashflow";
 
 // ── A qué fila va cada cosa ──
 const gasto = (grupo: string, categoria: string, descripcion: string) => filaDeGasto({ grupo, categoria, descripcion });
@@ -27,6 +27,8 @@ assert.equal(fila(-100, { clasificacion: "pago", gasto: { grupo: "Personal", cat
 assert.equal(fila(-100, { clasificacion: "personal" }), "retiros");
 assert.equal(fila(-100, { clasificacion: "fci" }), "pases");
 assert.equal(fila(-100, { clasificacion: "tarjeta" }), "bancos");
+assert.equal(fila(-100, { clasificacion: "tarjeta", contra_cuenta_id: "f2caa8a4-594a-4055-aea4-f2a58e953b25" }), "bancos", "Visa ·1582: de la empresa");
+assert.equal(fila(-4_402_026.27, { clasificacion: "tarjeta", contra_cuenta_id: "187c971f-c4ab-47d1-b79d-970725de42cd" }), "retiros", "Mastercard ·4775: personal de Augusto");
 assert.equal(fila(100, { clasificacion: "intereses", subtipo: "reintegro" }), "otros_ingresos");
 assert.equal(fila(-100, { clasificacion: "impuesto", subtipo: "sircreb" }), "impuestos");
 assert.equal(fila(-100, { clasificacion: "otro" }), "otros_pagos");
@@ -91,9 +93,29 @@ assert.equal(de("Cheque 62245659").length, 0, "endosado: ya no está");
 assert.deepEqual(de("Sueldo Sebastián").map((i) => [i.fecha, i.monto, i.fila]),
   [[HOY, -1_500_000, "sueldos"], ["2026-11-10", -1_500_000, "sueldos"], ["2026-12-10", -1_500_000, "sueldos"], ["2027-01-10", -1_500_000, "sueldos"]],
   "octubre sin pagar va hoy; después el 10 de cada mes");
+assert.deepEqual(de("Sueldo Sebastián").map((i) => i.detalle), ["Sueldo Sebastián Pereyra — septiembre", "Sueldo Sebastián Pereyra — octubre", "Sueldo Sebastián Pereyra — noviembre", "Sueldo Sebastián Pereyra — diciembre"],
+  "el que se paga el 10 de noviembre es el de octubre");
+assert.deepEqual(de("ARBA").map((i) => i.detalle.split(" — ")[1]), ["noviembre", "diciembre", "enero"], "lo que no es sueldo: el mes del pago");
 assert.deepEqual(de("ARBA").map((i) => [i.fecha, i.fila]), [["2026-11-10", "retiros"], ["2026-12-10", "retiros"], ["2027-01-10", "retiros"]], "octubre ya pagado");
 assert.deepEqual(de("Google").map((i) => [i.fecha, i.monto]), [[HOY, -100_000], ["2026-11-01", -100_000], ["2026-12-01", -100_000], ["2027-01-01", -100_000]]);
 assert.deepEqual(de("Premio").map((i) => [i.fecha, i.monto, i.fila]), [["2026-11-10", -300_000, "sueldos"]], "premio de octubre con el sueldo de noviembre");
+
+// ── IIBB y tasas: % de las ventas, el 22 del mes siguiente (sábado o domingo, el lunes) ──
+assert.equal(vencimientoIibb("2026-08"), "2026-09-22");
+assert.equal(vencimientoIibb("2026-10"), "2026-11-23", "22/11/2026 es domingo: el lunes");
+assert.equal(vencimientoIibb("2026-12"), "2027-01-22");
+const cargados = [{ descripcion: "IIBB Convenio Multilateral agosto 2026 (Buenos Aires $ 3.984.359,02 + Santa Fe $ 455.515,80) — pago 22/09 (BBVA OP2194)", fecha: "2026-09-22" }];
+assert.equal(iibbCargado(cargados, "2026-08"), true);
+assert.equal(iibbCargado(cargados, "2026-09"), false);
+assert.equal(iibbCargado([{ descripcion: "Retención IIBB Corteva septiembre", fecha: "2026-09-30" }], "2026-09"), false, "una retención no es el pago");
+const conIibb = (hoy: string, meses: { mes: string; ventas: number }[], c = cargados) =>
+  proyeccionCF({ hoy, hasta: "2027-01-24", dolar: 1000, vencimientos: [], cheques: [], fijos: [], pagosFijos: [], iibb: { pct: 6, meses, cargados: c } }).items;
+const ii = conIibb(HOY, [{ mes: "2026-09", ventas: 50_000_000 }, { mes: "2026-10", ventas: 100_000_000 }, { mes: "2026-11", ventas: 0 }]);
+assert.deepEqual(ii.map((i) => [i.fecha, i.monto, i.fila, i.origen]), [["2026-11-23", -6_000_000, "impuestos", "iibb"]],
+  "septiembre ya venció (22/10): no se cuenta; noviembre sin ventas: no suma");
+assert.match(ii[0].detalle, /IIBB y tasas octubre — 6 % de las ventas \(\$ 100\.000\.000, lo facturado hasta hoy\) \(estimado\)/);
+assert.deepEqual(conIibb("2026-11-05", [{ mes: "2026-10", ventas: 100_000_000 }]).map((i) => i.detalle.includes("hasta hoy")), [false], "octubre cerrado");
+assert.equal(conIibb("2026-11-05", [{ mes: "2026-10", ventas: 100_000_000 }], [{ descripcion: "IIBB Convenio Multilateral octubre 2026", fecha: "2026-11-18" }]).length, 0, "ya cargado en Gastos");
 assert.deepEqual(proyeccionCF({ hoy: HOY, hasta: "2026-11-30", dolar: null, vencimientos: [{ lado: "venta", vence: "2026-11-20", saldo: 5, moneda: "USD", comprobante: "FA 1", nombre: "X" }], cheques: [], fijos: [], pagosFijos: [] }).sinDolar, ["FA 1 — X (US$ 5)"]);
 
 // ── Semanas ──
@@ -133,11 +155,14 @@ const sinSaldo = armarCashflow({ hoy: HOY, lineas: [...lineas, { ...linea("2026-
 assert.deepEqual(sinSaldo.cuentasSinSaldo, ["Caja de ahorro"]);
 assert.match(sinSaldo.avisos[0], /Caja de ahorro/);
 
-// Control contra el saldo del banco: si faltan líneas, avisa (y no toca las cuentas).
-const control = armarCashflow({ hoy: HOY, lineas, cuentas: { cc: "BBVA CC" }, proyeccion: [], semanasProyectadas: 1, saldosBanco: [{ cuenta_id: "cc", saldo: 1_608.74, fecha: "2026-10-28" }] });
-assert.match(control.avisos[0], /BBVA CC: las líneas cargadas en Bancos dan \$ 58,74 menos que el saldo del banco al 28\/10: falta alguna línea/);
-assert.equal(control.semanas[2].saldoReal!.final, 1550);
-assert.equal(armarCashflow({ hoy: HOY, lineas, cuentas: { cc: "BBVA CC" }, proyeccion: [], semanasProyectadas: 1, saldosBanco: [{ cuenta_id: "cc", saldo: 1_550, fecha: "2026-10-28" }] }).avisos.length, 0, "si cuadra, no avisa");
+// Sin control contra el saldo guardado de la cuenta (daba falsas alarmas): con todo leído, no hay avisos.
+assert.equal(armarCashflow({ hoy: HOY, lineas, cuentas: { cc: "BBVA CC" }, proyeccion: [], semanasProyectadas: 1 }).avisos.length, 0);
+
+// Otras disponibilidades: aparte, US$ al dólar del día (sin dólar no suma).
+const otras = [{ nombre: "FCI", moneda: "ARS" as const, saldo: 22_417_689.23, fecha: "2026-10-25" }, { nombre: "BAVSA", moneda: "USD" as const, saldo: 10, fecha: "2026-10-19" }];
+assert.equal(otrasDisponibilidades(otras, 1500).total, 22_432_689.23);
+assert.equal(otrasDisponibilidades(otras, null).total, 22_417_689.23);
+assert.equal(otrasDisponibilidades(otras, null).cuentas[1].enPesos, null);
 
 // Excel: semana real = 1 columna; proyectada = 2 (Proy. y Real).
 const pl = planillaCF(cf, (d) => d.slice(5));

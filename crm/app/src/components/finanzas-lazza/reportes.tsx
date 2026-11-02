@@ -98,7 +98,7 @@ export function FinanzasLazzaReportes({ sociedadId, periodo }: { sociedadId: str
             Los que cuentan son {formatCurrency(res.partes.deGastos)} de Gastos (cada uno en el mes que dice su detalle)
             {" "}+ {formatCurrency(res.partes.iibb)} de IIBB y tasas{res.iibbPct !== null ? ` (${String(res.iibbPct).replace(".", ",")} % de las ventas)` : ""}
             {res.partes.delBanco ? <> + {formatCurrency(res.partes.delBanco)} de comisiones e intereses del banco</> : null}
-            {res.partes.estimados ? <> + {formatCurrency(res.partes.estimados)} estimados (premios y comisión de José que todavía no se cargaron)</> : null}.
+            {res.partes.estimados ? <> + {formatCurrency(res.partes.estimados)} estimados (sueldos, premios y comisión de José que todavía no se cargaron)</> : null}.
             {" "}No son gasto: IVA, SICORE, anticipos de Ganancias, retiros e impuestos del banco a cuenta.
           </p>
         )}

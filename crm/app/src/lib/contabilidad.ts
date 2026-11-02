@@ -15,9 +15,11 @@
  * Ley 25.413 (100% a cuenta de Ganancias, Nati 29/10), SIRCREB (a cuenta de IIBB) e IVA de las comisiones del banco.
  *
  * Cada gasto cuenta en el mes que dice su detalle ("Premio agosto", "Comisión septiembre 2026"); si no dice, en el de su fecha.
+ * Desde octubre 2026, los premios, la comisión de José y los sueldos fijos que todavía no se cargaron van estimados en su mes.
  * Funciones puras. Prueba: npx tsx scripts/test-contabilidad.ts
  */
 import { grupoDe } from "./gastos-lazza";
+import { clasificarMovimiento } from "./movimientos-banco";
 import { periodoDeFecha, sumarMeses } from "./reportes-comprobantes";
 import type { TcDelDia } from "./finanzas-lazza";
 
@@ -70,7 +72,7 @@ export interface LineaBancoCont {
 }
 /** Lo de cada mes que sale de Reportes (reporteBasico): ventas, costo y transportes, netos. */
 export interface BaseMes { ventas: number; costo: number; transportes: number; avisosCosto: number }
-export interface EstimadoMes { premios: { persona: string; monto: number }[]; comisionJose: number | null }
+export interface EstimadoMes { premios: { persona: string; monto: number }[]; comisionJose: number | null; sueldos?: SueldoFijo[] }
 
 export interface ItemDetalle { fecha: string; detalle: string; monto: number; origen: "gasto" | "banco" | "estimado" | "calculo" }
 export interface FilaER {
@@ -146,16 +148,41 @@ export function clasificarGasto(g: Pick<GastoCont, "grupo" | "categoria" | "desc
   return "administrativos";
 }
 
-/** A qué va una línea del banco. Solo las que no están ya cargadas como gasto (sin vincular a un movimiento). */
+/**
+ * A qué va una línea del banco. Solo las que no están ya cargadas como gasto (sin vincular a un movimiento).
+ * Las devoluciones (crédito, subtipo "devolucion_…") van a la misma línea y restan. Sin clasificar todavía (las del último
+ * extracto): por el código del banco, como el Cashflow ("Ver por tipo").
+ */
 export function clasificarLineaBanco(l: LineaBancoCont): LineaId | FueraId | null {
   const c = l.clasificacion;
-  const s = l.subtipo;
+  const s = String(l.subtipo || "").replace(/^devolucion_/, "");
   if (c === "gasto_bancario") return l.match_movimiento_id ? null : "bancarios";
   if (c === "intereses" && s === "intereses") return "intereses";
   if (c === "impuesto" && s === "ley_25413") return "ley_25413";
   if (c === "impuesto" && s === "sircreb") return "sircreb";
   if (c === "impuesto" && s === "iva") return "iva_banco";
+  if (c || l.match_movimiento_id) return null;
+  const m = clasificarMovimiento({ id: l.id, fecha: l.fecha, descripcion: l.descripcion || "", monto: Math.abs(num(l.monto)), tipo: l.tipo === "credito" ? "credito" : "debito", clasificacion: null, subtipo: null });
+  if (m.tipo !== "impuestos_comisiones") return null;
+  if (m.categoria === "Comisiones") return "bancarios";
+  if (m.categoria === "IVA") return "iva_banco";
+  if (/sircreb/i.test(m.categoria)) return "sircreb";
+  if (/25\.413/.test(m.categoria)) return "ley_25413";
   return null;
+}
+
+/** Gasto fijo de sueldo ("Sueldo Augusto", "Sueldo Mariana Santinelli"…), para estimar el del mes mientras no se carga. */
+export interface SueldoFijo { descripcion: string; monto: number }
+
+/**
+ * Sueldos del mes que todavía no se cargaron (Augusto 29/10: lo que se paga a principio de mes es el sueldo del mes anterior).
+ * Un sueldo está cargado si hay un gasto que empieza con el mismo detalle y es de ese mes ("Sueldo Augusto — septiembre 2026").
+ */
+export function sueldosPorCargar(mes: string, fijos: SueldoFijo[], gastos: Pick<GastoCont, "descripcion" | "fecha">[]): SueldoFijo[] {
+  return fijos.filter((f) => {
+    const d = sinAcentos(f.descripcion).trim();
+    return f.monto > 0 && !gastos.some((g) => sinAcentos(g.descripcion).trim().startsWith(d) && mesDevengado(g.descripcion, g.fecha) === mes);
+  });
 }
 
 /**
@@ -234,6 +261,10 @@ export function estadoDeResultados(input: {
     for (const x of e.premios) {
       sumar(esMariana(sinAcentos(x.persona)) ? "colaborador_m" : "colaboradores_lsj", p, -x.monto,
         { fecha: `${p}-01`, detalle: `Premio de ${x.persona} (estimado: falta cargarlo en Gastos)`, monto: -x.monto, origen: "estimado" });
+    }
+    for (const x of e.sueldos || []) {
+      sumar(esMariana(sinAcentos(x.descripcion)) ? "colaborador_m" : "colaboradores_lsj", p, -x.monto,
+        { fecha: `${p}-01`, detalle: `${x.descripcion} (estimado: falta cargarlo en Gastos)`, monto: -x.monto, origen: "estimado" });
     }
     if (e.comisionJose) {
       sumar("comisiones", p, -e.comisionJose, { fecha: `${p}-01`, detalle: "Comisión de José Alvarez (estimada: falta cargarla en Gastos)", monto: -e.comisionJose, origen: "estimado" });

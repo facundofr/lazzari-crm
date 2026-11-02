@@ -8,12 +8,13 @@
  *   La foto se guarda sola la primera vez que se abre el Cashflow en el mes; si el mes todavía no tiene foto, "Proy." es lo de hoy.
  * - Proyectado: facturas de venta por vencimiento (lo vencido sin cobrar NO se cuenta, se avisa: no se sabe cuándo entra, como en
  *   Caja), cheques en cartera por fecha de pago, facturas de compra por vencimiento y cheques propios por fecha de pago (lo atrasado
- *   se cuenta hoy), gastos fijos del mes sin pagar, y (Lazzari) los premios del mes, que se pagan con el sueldo del mes siguiente.
+ *   se cuenta hoy), gastos fijos del mes sin pagar, (Lazzari) los premios del mes, que se pagan con el sueldo del mes siguiente,
+ *   y el IIBB y tasas de cada mes (el % de las ventas, como en el Estado de resultados) el día 22 del mes siguiente (Augusto 29/10).
  * - Cada línea del banco va a una fila: por el gasto al que está atada (mismo criterio que el Estado de resultados) o por su
  *   clasificación en Bancos. Los pases entre cuentas propias y al FCI van aparte (no es plata que se gasta).
  * Funciones puras. Prueba: npx tsx scripts/test-cashflow.ts
  */
-import { clasificarGasto, type GastoCont } from "./contabilidad";
+import { clasificarGasto, mesDevengado, type GastoCont } from "./contabilidad";
 import { clasificarMovimiento } from "./movimientos-banco";
 import { gastosFijosEnVentana, lunesDe, sumarDias, type GastoFijoCaja } from "./caja-proyectada";
 import { chequePendiente } from "./cheques-plazo";
@@ -27,16 +28,20 @@ export const FILAS_CF: { id: FilaCF; nombre: string; que: string; lado: "entra" 
   { id: "sueldos", nombre: "Sueldos, premios y comisiones", que: "Colaboradores L-S-J y M, premios y comisión de José", lado: "sale" },
   { id: "gastos", nombre: "Gastos de estructura", que: "Local y servicios, profesionales, operativos, débitos automáticos", lado: "sale" },
   { id: "impuestos", nombre: "Impuestos y retenciones", que: "VEP de ARCA, IIBB, SIRCREB, Ley 25.413 e IVA del banco", lado: "sale" },
-  { id: "bancos", nombre: "Bancos, préstamos y tarjetas", que: "Comisiones, intereses y pagos del resumen de las tarjetas", lado: "sale" },
+  { id: "bancos", nombre: "Bancos, préstamos y tarjetas", que: "Comisiones, intereses y pagos del resumen de la Visa de la empresa", lado: "sale" },
   { id: "otros_pagos", nombre: "Otros pagos", que: "Transferencias y extracciones que no están clasificadas en Bancos", lado: "sale" },
-  { id: "retiros", nombre: "Retiros de accionistas", que: "Gastos personales de Augusto que paga la empresa (y su plan de ARBA)", lado: "aparte" },
+  { id: "retiros", nombre: "Retiros de accionistas", que: "Gastos personales de Augusto que paga la empresa (su plan de ARBA y su Mastercard)", lado: "aparte" },
   { id: "pases", nombre: "Pases a FCI y entre cuentas", que: "La plata cambia de lugar: no es un gasto", lado: "aparte" },
 ];
 export const SEMANAS_PROYECTADAS = 12;
 /** Los sueldos sin día de vencimiento se pagan el 10 (como en Caja); los premios van con el sueldo del mes siguiente (Augusto 29/10). */
 export const DIA_SUELDOS = 10;
+/** El IIBB de cada mes se paga el 22 del mes siguiente (Augusto 29/10: el de agosto se pagó el 22/09); sábado o domingo, el lunes. */
+export const DIA_IIBB = 22;
+/** Tarjetas personales de Augusto: el pago de su resumen es un retiro, no un gasto de la empresa (Augusto 29/10: Mastercard ·4775). */
+export const TARJETAS_PERSONALES = new Set(["187c971f-c4ab-47d1-b79d-970725de42cd"]);
 
-export type OrigenCF = "banco" | "factura_venta" | "factura_compra" | "cheque_recibido" | "cheque_emitido" | "gasto_fijo" | "premio";
+export type OrigenCF = "banco" | "factura_venta" | "factura_compra" | "cheque_recibido" | "cheque_emitido" | "gasto_fijo" | "premio" | "iibb";
 export interface ItemCF {
   fecha: string;
   detalle: string;
@@ -58,6 +63,8 @@ export interface LineaBancoCF {
   /** Marcada "ignorar" en Bancos (ya estaba cargada en Gastos sin atar): igual es plata que salió; la nota dice qué era. */
   ignorada?: boolean;
   nota?: string | null;
+  /** Cuenta del otro lado del pase (Bancos): en un pago de tarjeta, cuál tarjeta. */
+  contra_cuenta_id?: string | null;
 }
 
 const num = (v: unknown) => Number(v || 0) || 0;
@@ -86,6 +93,7 @@ export function filaDeLineaBanco(l: LineaBancoCF): FilaCF {
     if (/mercaderia|proveedor/.test(n)) return "proveedores";
   }
   const entra = l.tipo === "credito";
+  if (l.clasificacion === "tarjeta" && l.contra_cuenta_id && TARJETAS_PERSONALES.has(l.contra_cuenta_id)) return "retiros";
   switch (l.clasificacion) {
     case "cobro": case "cheque_acreditado": case "cheque_devuelto": return "cobros";
     case "pago": case "cheque_emitido": return "proveedores";
@@ -147,10 +155,28 @@ export interface ChequeCF {
 }
 export interface FijoCF extends GastoFijoCaja { grupo?: string | null; categoria?: string | null }
 export interface PremioCF { persona: string; monto: number; mes: string }
+/** IIBB y tasas: % de las ventas de cada mes (las de Reportes) y los gastos cargados, para no contar el que ya se pagó. */
+export interface IibbCF { pct: number; meses: { mes: string; ventas: number }[]; cargados: { descripcion: string | null; fecha: string }[] }
 
 const sinCeros = (n: string) => String(n || "").trim().replace(/^0+/, "");
 const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 const sumarMes = (m: string) => { const [y, mm] = m.split("-").map(Number); return mm === 12 ? `${y + 1}-01` : `${y}-${String(mm + 1).padStart(2, "0")}`; };
+const sinAcentos = (s: string | null | undefined) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+
+/** Día en que se paga el IIBB de `mes`: el 22 del mes siguiente; si cae sábado o domingo, el lunes. */
+export function vencimientoIibb(mes: string): string {
+  const f = `${sumarMes(mes)}-${String(DIA_IIBB).padStart(2, "0")}`;
+  const dow = new Date(`${f}T12:00:00Z`).getUTCDay();
+  return dow === 6 ? sumarDias(f, 2) : dow === 0 ? sumarDias(f, 1) : f;
+}
+
+/** ¿Ya hay un gasto cargado del IIBB de `mes`? ("IIBB Convenio Multilateral agosto 2026"; no las retenciones ni percepciones). */
+export function iibbCargado(cargados: IibbCF["cargados"], mes: string): boolean {
+  return cargados.some((g) => {
+    const d = sinAcentos(g.descripcion);
+    return /\biibb\b|ingresos brutos|convenio multilateral/.test(d) && !/reten|percep|sircreb/.test(d) && mesDevengado(g.descripcion, g.fecha) === mes;
+  });
+}
 
 /** Lo que se espera cobrar y pagar desde hoy hasta `hasta` (inclusive). Nunca inventa fechas: usa vencimientos, fechas de pago y días de los gastos fijos. */
 export function proyeccionCF(x: {
@@ -163,6 +189,7 @@ export function proyeccionCF(x: {
   pagosFijos: { gasto_fijo_id?: string | null; fecha: string }[];
   facturasCompra?: { proveedor_id: string | null; fecha: string }[];
   premios?: PremioCF[];
+  iibb?: IibbCF | null;
   dolar: number | null;
 }): { items: ItemCF[]; vencidoSinCobrar: { total: number; cantidad: number }; chequesDeTerceros: { total: number; cantidad: number }; sinDolar: string[] } {
   const items: ItemCF[] = [];
@@ -218,8 +245,10 @@ export function proyeccionCF(x: {
     const r = gastosFijosEnVentana({ hoy: x.hoy, dias, fijos: [g], pagos: x.pagosFijos, facturasCompra: x.facturasCompra, dolar: x.dolar });
     sinDolar.push(...r.sinDolar);
     const fila = filaDeGasto({ grupo: g.grupo ?? null, categoria: g.categoria ?? null, descripcion: g.descripcion });
+    // El sueldo que se paga a principio de mes es el del mes anterior (Augusto 29/10): el detalle dice el mes del sueldo.
+    const esSueldo = /^sueldo\b/.test(sinAcentos(g.descripcion));
     for (const s of r.salidas) {
-      const mes = MESES[Number(s.fecha.slice(5, 7)) - 1];
+      const mes = MESES[(Number(s.fecha.slice(5, 7)) + (esSueldo ? 10 : 11)) % 12];
       salida(s.fecha, s.monto, fila, "gasto_fijo", `${s.detalle} — ${mes}${s.usd ? ` (US$ ${s.usd.toLocaleString("es-AR")})` : ""}`);
     }
   }
@@ -227,6 +256,19 @@ export function proyeccionCF(x: {
   for (const p of x.premios || []) {
     const fecha = `${sumarMes(p.mes)}-${String(DIA_SUELDOS).padStart(2, "0")}`;
     salida(fecha, p.monto, "sueldos", "premio", `Premio ${MESES[Number(p.mes.slice(5, 7)) - 1]} — ${p.persona} (estimado, con el sueldo)`);
+  }
+
+  // IIBB y tasas: el vencido no se cuenta (no se sabe si se pagó por otro lado), ni el que ya está cargado en Gastos.
+  // El mes en curso va con lo facturado hasta hoy; los meses sin ventas todavía no suman.
+  if (x.iibb && x.iibb.pct > 0) {
+    for (const m of x.iibb.meses) {
+      const fecha = vencimientoIibb(m.mes);
+      if (fecha < x.hoy || iibbCargado(x.iibb.cargados, m.mes)) continue;
+      const enCurso = m.mes >= x.hoy.slice(0, 7);
+      const ventas = m.ventas.toLocaleString("es-AR", { maximumFractionDigits: 0 });
+      salida(fecha, r2(m.ventas * x.iibb.pct / 100), "impuestos", "iibb",
+        `IIBB y tasas ${MESES[Number(m.mes.slice(5, 7)) - 1]} — ${x.iibb.pct} % de las ventas ($ ${ventas}${enCurso ? ", lo facturado hasta hoy" : ""}) (estimado)`);
+    }
   }
 
   items.sort((a, b) => a.fecha.localeCompare(b.fecha) || a.monto - b.monto);
@@ -285,8 +327,6 @@ export function armarCashflow(x: {
   proyeccion: ItemCF[];
   fotos?: Record<string, FotoCF>;
   semanasProyectadas?: number;
-  /** Saldo que dice el banco (Bancos → cuentas): para avisar si faltan o sobran líneas cargadas. No cambia las cuentas. */
-  saldosBanco?: { cuenta_id: string; saldo: number | null; fecha: string | null }[];
 }): Cashflow {
   const lunesHoy = lunesDe(x.hoy);
   const n = x.semanasProyectadas ?? SEMANAS_PROYECTADAS;
@@ -303,16 +343,8 @@ export function armarCashflow(x: {
     if (s === null) cuentasSinSaldo.push(x.cuentas[id] || id); else saldoInicial = r2(saldoInicial + s);
   }
   if (cuentasSinSaldo.length) avisos.push(`No se pudo leer el saldo del extracto de ${cuentasSinSaldo.join(", ")}: el saldo inicial no lo incluye.`);
-  // Control: saldo al arrancar + todas las líneas hasta la fecha del saldo del banco = ese saldo. Si no da, faltan o sobran líneas en Bancos.
-  for (const b of x.saldosBanco || []) {
-    const ls = porCuenta.get(b.cuenta_id);
-    if (!ls || b.saldo === null || !b.fecha) continue;
-    const arranque = saldoAlArrancar(ls, primero);
-    if (arranque === null) continue;
-    const f = b.fecha.slice(0, 10);
-    const dif = r2(num(b.saldo) - arranque - ls.filter((l) => l.fecha.slice(0, 10) <= f).reduce((s, l) => s + conSigno(l), 0));
-    if (Math.abs(dif) >= 1) avisos.push(`${x.cuentas[b.cuenta_id] || "Una cuenta"}: las líneas cargadas en Bancos dan $ ${Math.abs(dif).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${dif > 0 ? "menos" : "más"} que el saldo del banco al ${f.slice(8, 10)}/${f.slice(5, 7)}: ${dif > 0 ? "falta" : "sobra"} alguna línea del extracto. El Cashflow va con las líneas cargadas.`);
-  }
+  // Sin control contra el saldo guardado de la cuenta (Finanzas 30/10): el saldo de cada línea sale del Excel de ese día y no
+  // encadena entre archivos bajados a media jornada, así que avisaba faltantes que no eran. El control es el día por día de Bancos.
 
   const itemsBanco: ItemCF[] = x.lineas.map((l) => ({ fecha: l.fecha.slice(0, 10), detalle: String(l.descripcion || "").trim() || "(sin texto)", monto: r2(conSigno(l)), fila: filaDeLineaBanco(l), origen: "banco" }));
   const enSemana = (items: ItemCF[], desde: string, hasta: string) => items.filter((i) => i.fecha >= desde && i.fecha <= hasta);
@@ -344,6 +376,18 @@ export function armarCashflow(x: {
     semanas.push(sem);
   }
   return { hoy: x.hoy, semanas, saldoInicial, cuentasSinSaldo, avisos };
+}
+
+/** Cuenta sin extracto (FCI, efectivo, US$) con su último saldo cargado (cuentas_financieras.saldo_banco). */
+export interface DisponibilidadCF { nombre: string; moneda: "ARS" | "USD"; saldo: number; fecha: string | null }
+
+/**
+ * Otras disponibilidades: se muestran aparte y NO suman al saldo de las semanas (que es solo lo de los bancos con extracto),
+ * así un pase al FCI no cuenta dos veces. US$ al dólar del día; sin dólar, no suma al total.
+ */
+export function otrasDisponibilidades(cuentas: DisponibilidadCF[], dolar: number | null): { cuentas: (DisponibilidadCF & { enPesos: number | null })[]; total: number } {
+  const lista = cuentas.map((c) => ({ ...c, enPesos: c.moneda === "USD" ? (dolar ? r2(c.saldo * dolar) : null) : c.saldo }));
+  return { cuentas: lista, total: r2(lista.reduce((s, c) => s + (c.enPesos ?? 0), 0)) };
 }
 
 /** Foto para guardar al abrir el Cashflow por primera vez en el mes: lo proyectado hoy de las semanas que arrancan en este mes. */

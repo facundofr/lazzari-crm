@@ -1,6 +1,6 @@
 // Prueba de lib/contabilidad.ts (Estado de resultados por lo devengado) — npx tsx scripts/test-contabilidad.ts
 import assert from "node:assert/strict";
-import { IIBB_PCT_NATI, TASA_GANANCIAS, clasificarGasto, clasificarLineaBanco, estadoDeResultados, mesDevengado, mesesDelAnio, planillaER, type GastoCont, type LineaBancoCont } from "../src/lib/contabilidad";
+import { IIBB_PCT_NATI, TASA_GANANCIAS, clasificarGasto, clasificarLineaBanco, estadoDeResultados, mesDevengado, mesesDelAnio, planillaER, sueldosPorCargar, type GastoCont, type LineaBancoCont } from "../src/lib/contabilidad";
 
 // ── Mes devengado ──
 assert.equal(mesDevengado("Premio agosto — Mariana Santinelli", "2026-10-07"), "2026-08");
@@ -50,6 +50,31 @@ assert.equal(clasificarLineaBanco(b("impuesto", "iva")), "iva_banco");
 assert.equal(clasificarLineaBanco(b("intereses", "intereses", { tipo: "credito" })), "intereses");
 assert.equal(clasificarLineaBanco(b("intereses", null, { tipo: "credito" })), null, "reintegro de tarjeta: no es interés");
 assert.equal(clasificarLineaBanco(b("cobro", null)), null);
+// Devoluciones (crédito): a la misma línea, restan.
+assert.equal(clasificarLineaBanco(b("impuesto", "devolucion_ley_25413", { tipo: "credito" })), "ley_25413");
+assert.equal(clasificarLineaBanco(b("impuesto", "devolucion_sircreb", { tipo: "credito" })), "sircreb");
+// Sin clasificar todavía: por el código del banco, como el Cashflow.
+const sc = (descripcion: string) => clasificarLineaBanco(b(null as unknown as string, null, { descripcion }));
+assert.equal(sc("LEY NRO 25.4 23/10/26 00002 #609"), "ley_25413");
+assert.equal(sc("REG REC SIRC 22/10/26 00023X · CTE 000000000983 #550"), "sircreb");
+assert.equal(sc("COMISION GES · CTE 000000089920 #392"), "bancarios");
+assert.equal(sc("TRANSFERENCI 202530102618"), null, "una transferencia no es un gasto del banco");
+
+// ── Sueldos estimados: el fijo que todavía no tiene su gasto del mes ──
+const fijosSueldo = [{ descripcion: "Sueldo Augusto", monto: 5_000_000 }, { descripcion: "Sueldo Mariana Santinelli", monto: 1_500_000 }];
+const pagados = [{ descripcion: "Sueldo Augusto — septiembre 2026", fecha: "2026-10-10" }, { descripcion: "Sueldo Mariana Santinelli — septiembre 2026", fecha: "2026-10-10" }];
+assert.deepEqual(sueldosPorCargar("2026-09", fijosSueldo, pagados), [], "septiembre pagado el 10/10");
+assert.deepEqual(sueldosPorCargar("2026-10", fijosSueldo, pagados).map((s) => s.descripcion), ["Sueldo Augusto", "Sueldo Mariana Santinelli"], "octubre todavía no");
+assert.deepEqual(sueldosPorCargar("2026-10", fijosSueldo, [...pagados, { descripcion: "Sueldo Augusto — octubre 2026", fecha: "2026-11-10" }]).map((s) => s.descripcion), ["Sueldo Mariana Santinelli"]);
+const erS = estadoDeResultados({
+  periodos: ["2026-10"], base: { "2026-10": { ventas: 0, costo: 0, transportes: 0, avisosCosto: 0 } }, gastos: [], tcDia: () => null, iibbPct: 0,
+  lineasBanco: [b("impuesto", "sircreb", { fecha: "2026-10-05", monto: 1_000 }), b("impuesto", "devolucion_sircreb", { fecha: "2026-10-21", monto: 400, tipo: "credito" })],
+  estimados: { "2026-10": { premios: [], comisionJose: null, sueldos: sueldosPorCargar("2026-10", fijosSueldo, pagados) } },
+});
+assert.equal(erS.lineas.find((l) => l.id === "colaboradores_lsj")!.valores["2026-10"], -5_000_000);
+assert.equal(erS.lineas.find((l) => l.id === "colaborador_m")!.valores["2026-10"], -1_500_000);
+assert.match(erS.lineas.find((l) => l.id === "colaboradores_lsj")!.detalle["2026-10"][0].detalle, /Sueldo Augusto \(estimado: falta cargarlo en Gastos\)/);
+assert.equal(erS.fuera.find((l) => l.id === "sircreb")!.valores["2026-10"], -600, "la devolución resta");
 
 // ── Estado de resultados ──
 const tcDia = (f: string) => (f.startsWith("2026-10") ? 1500 : null);
