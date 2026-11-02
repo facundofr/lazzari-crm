@@ -71,10 +71,15 @@ export interface LineaBancoCont {
   clasificacion: string | null; subtipo: string | null; match_movimiento_id?: string | null;
 }
 /** Lo de cada mes que sale de Reportes (reporteBasico): ventas, costo y transportes, netos. */
-export interface BaseMes { ventas: number; costo: number; transportes: number; avisosCosto: number }
+export interface BaseMes {
+  ventas: number; costo: number; transportes: number; avisosCosto: number;
+  /** Factura por factura (Reportes), para abrir Ventas y Costo de mercadería (Nati 02/11). Venta y costo netos, con signo (NC en −). */
+  facturas?: FacturaER[];
+}
+export interface FacturaER { fecha: string; comprobante: string; cliente: string; prNumero: string | null; venta: number; costo: number; aviso: string | null }
 export interface EstimadoMes { premios: { persona: string; monto: number }[]; comisionJose: number | null; sueldos?: SueldoFijo[] }
 
-export interface ItemDetalle { fecha: string; detalle: string; monto: number; origen: "gasto" | "banco" | "estimado" | "calculo" }
+export interface ItemDetalle { fecha: string; detalle: string; monto: number; origen: "gasto" | "banco" | "estimado" | "calculo" | "factura"; aviso?: string | null }
 export interface FilaER {
   id: LineaId | FueraId | SubtotalId; nombre: string; que: string;
   /** Con signo: ventas e ingresos en +, costos y gastos en −. */
@@ -223,8 +228,15 @@ export function estadoDeResultados(input: {
     if (!b) continue;
     sumar("ventas", p, b.ventas);
     sumar("costo_mercaderia", p, -b.costo);
+    // Detalle factura por factura: el costo es solo el de compra de los artículos facturados (el de cada PR, sin el flete).
+    for (const f of b.facturas || []) {
+      const quien = `${f.comprobante} — ${f.cliente}${f.prNumero ? ` · ${f.prNumero}` : ""}`;
+      lineas.get("ventas")!.detalle[p].push({ fecha: f.fecha, detalle: quien, monto: f.venta, origen: "factura", aviso: f.aviso });
+      const margen = f.venta ? ` · margen ${Math.round(((f.venta - f.costo) / f.venta) * 100)} %` : "";
+      lineas.get("costo_mercaderia")!.detalle[p].push({ fecha: f.fecha, detalle: `${quien}${margen}`, monto: -f.costo, origen: "factura", aviso: f.aviso });
+    }
     sumar("transportes", p, -b.transportes, b.transportes ? { fecha: `${p}-01`, detalle: "Facturas de transporte del mes (neto)", monto: -b.transportes, origen: "calculo" } : undefined);
-    if (b.avisosCosto > 0) avisos.push(`${MESES[Number(p.slice(5, 7)) - 1]} ${p.slice(0, 4)}: ${b.avisosCosto} factura(s) con el costo para revisar en Reportes.`);
+    if (b.avisosCosto > 0) avisos.push(`${MESES[Number(p.slice(5, 7)) - 1]} ${p.slice(0, 4)}: ${b.avisosCosto} factura(s) con el costo para revisar en Reportes (se ven marcadas al abrir Costo de mercadería).`);
   }
 
   // Gastos cargados, en su mes devengado. Montos con el total (los gastos sin factura entran con el IVA incluido).

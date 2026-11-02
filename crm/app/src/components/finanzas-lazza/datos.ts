@@ -339,7 +339,10 @@ export async function traerDatosContabilidad(sociedadId: string, periodos: strin
   const lineasBanco: LineaBancoCont[] = lineas.filter((l) => l.estado !== "ignorado").map((l) => ({ ...l, fecha: dia(l.fecha) }));
 
   const base: Record<string, BaseMes> = {};
-  for (const { p, r } of reportes) base[p] = { ventas: r.facturado.neto, costo: r.costo.neto, transportes: r.transportes.neto, avisosCosto: r.avisos.length };
+  for (const { p, r } of reportes) base[p] = {
+    ventas: r.facturado.neto, costo: r.costo.neto, transportes: r.transportes.neto, avisosCosto: r.avisos.length,
+    facturas: r.filas.map((f) => ({ fecha: String(f.fecha).slice(0, 10), comprobante: f.comprobante, cliente: f.cliente, prNumero: f.prNumero, venta: f.venta.neto, costo: f.costo.neto, aviso: f.aviso })),
+  };
 
   const estimados: Record<string, EstimadoMes> = {};
   if (conEstimados) {

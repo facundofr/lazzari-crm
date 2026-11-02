@@ -19,7 +19,7 @@ const MESES_CORTOS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "s
 const mesCorto = (p: string) => `${MESES_CORTOS[Number(p.slice(5, 7)) - 1]} ${p.slice(2, 4)}`;
 const pesos = (n: number) => new Intl.NumberFormat("es-AR", { maximumFractionDigits: 0 }).format(Math.round(n));
 const pct = (n: number | null) => (n === null ? "—" : `${n.toLocaleString("es-AR", { maximumFractionDigits: 1 })} %`);
-const ORIGEN: Record<string, string> = { gasto: "Gastos", banco: "Banco", estimado: "Estimado", calculo: "Cálculo" };
+const ORIGEN: Record<string, string> = { gasto: "Gastos", banco: "Banco", estimado: "Estimado", calculo: "Cálculo", factura: "Factura" };
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
 
 const VISTAS = [{ id: "resultados", nombre: "Estado de resultados" }, { id: "cashflow", nombre: "Cashflow semanal" }] as const;
@@ -114,7 +114,7 @@ function EstadoResultadosVista({ sociedadId, periodo }: { sociedadId: string; pe
   const fila = (f: FilaER, tipo: "linea" | "sub" | "fuera" = "linea") => {
     const sub = tipo === "sub";
     const color = sub ? (f.total >= 0 ? "text-emerald-700 dark:text-emerald-400" : "text-red-600") : "";
-    const tocable = !sub && f.id !== "ventas" && f.id !== "costo_mercaderia";
+    const tocable = !sub;
     return (
       <tr key={f.id} className={`border-t border-zinc-100 dark:border-zinc-800 ${sub ? "bg-zinc-50 dark:bg-zinc-800/40" : ""} ${tipo === "fuera" ? "text-zinc-500" : ""} ${abierta === f.id ? "bg-orange-50 dark:bg-orange-950/20" : ""}`}>
         <td className={`sticky left-0 z-10 bg-inherit py-1 pr-3 ${sub ? `font-semibold ${color}` : tipo === "linea" && f.id !== "ventas" ? "pl-3" : ""}`} title={f.que}>
@@ -187,7 +187,7 @@ function EstadoResultadosVista({ sociedadId, periodo }: { sociedadId: string; pe
             {er.fuera.map((f) => fila(f, "fuera"))}
           </tbody>
         </table>
-        <p className="mt-2 text-[11px] text-zinc-400">Tocá una línea para ver de dónde sale. Ventas y costo de mercadería, factura por factura, están en Reportes (mismo cálculo). Ganancias: 25 % del resultado de cada mes (si el mes da pérdida, descuenta). Ley 25.413: 100 % a cuenta de Ganancias, no es gasto.</p>
+        <p className="mt-2 text-[11px] text-zinc-400">Tocá una línea para ver de dónde sale (Ventas y Costo de mercadería, factura por factura: el costo es solo el de compra de los artículos facturados, el de cada PR, sin el flete). Ganancias: 25 % del resultado de cada mes (si el mes da pérdida, descuenta). Ley 25.413: 100 % a cuenta de Ganancias, no es gasto.</p>
       </div>
 
       {filaAbierta && (
@@ -203,8 +203,8 @@ function EstadoResultadosVista({ sociedadId, periodo }: { sociedadId: string; pe
                 {er.periodos.flatMap((p) => filaAbierta.detalle[p].map((d, i) => (
                   <tr key={`${p}-${i}`} className="border-t border-zinc-100 dark:border-zinc-800">
                     <td className="py-1 pr-2 whitespace-nowrap">{mesCorto(p)}</td>
-                    <td className="py-1 pr-2 whitespace-nowrap">{d.origen === "gasto" || d.origen === "banco" ? formatDate(d.fecha) : ""}</td>
-                    <td className="py-1 pr-2">{d.detalle}</td>
+                    <td className="py-1 pr-2 whitespace-nowrap">{d.origen === "gasto" || d.origen === "banco" || d.origen === "factura" ? formatDate(d.fecha) : ""}</td>
+                    <td className="py-1 pr-2">{d.detalle}{d.aviso && <span className="ml-1 text-[11px] text-amber-600">· {d.aviso}</span>}</td>
                     <td className={`py-1 pr-2 whitespace-nowrap ${d.origen === "estimado" ? "text-amber-600" : "text-zinc-500"}`}>{ORIGEN[d.origen]}</td>
                     <td className="py-1 pl-2 text-right font-mono">{formatCurrency(d.monto)}</td>
                   </tr>
@@ -224,7 +224,7 @@ function EstadoResultadosVista({ sociedadId, periodo }: { sociedadId: string; pe
 function Avisos({ avisos }: { avisos: EstadoResultados["avisos"] }) {
   return (
     <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm dark:border-amber-900 dark:bg-amber-950/30">
-      <p className="mb-1 flex items-center gap-1.5 font-semibold text-amber-800 dark:text-amber-300"><AlertTriangle className="h-4 w-4" /> Para revisar (no frena nada)</p>
+      <p className="mb-1 flex items-center gap-1.5 font-semibold text-amber-800 dark:text-amber-300"><AlertTriangle className="h-4 w-4" /> Datos a corregir en el CRM <span className="font-normal">(los arregla Lazzari; no hace falta para revisar los números)</span></p>
       <ul className="space-y-0.5 text-amber-900 dark:text-amber-200">{avisos.map((a) => <li key={a}>{a}</li>)}</ul>
     </div>
   );

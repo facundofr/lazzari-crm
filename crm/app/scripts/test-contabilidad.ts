@@ -76,6 +76,21 @@ assert.equal(erS.lineas.find((l) => l.id === "colaborador_m")!.valores["2026-10"
 assert.match(erS.lineas.find((l) => l.id === "colaboradores_lsj")!.detalle["2026-10"][0].detalle, /Sueldo Augusto \(estimado: falta cargarlo en Gastos\)/);
 assert.equal(erS.fuera.find((l) => l.id === "sircreb")!.valores["2026-10"], -600, "la devolución resta");
 
+// ── Ventas y Costo de mercadería se abren factura por factura (Nati 02/11) ──
+const erF = estadoDeResultados({
+  periodos: ["2026-10"], gastos: [], lineasBanco: [], tcDia: () => null, iibbPct: 0,
+  base: { "2026-10": { ventas: 900, costo: 650, transportes: 0, avisosCosto: 1, facturas: [
+    { fecha: "2026-10-05", comprobante: "FA 0015-00000031", cliente: "Termo Córdoba", prNumero: "PR-2026-1100", venta: 1_000, costo: 700, aviso: null },
+    { fecha: "2026-10-20", comprobante: "NC 0015-00000002", cliente: "Termo Córdoba", prNumero: null, venta: -100, costo: -50, aviso: "Costo raro" },
+  ] } },
+});
+const dv = erF.lineas.find((l) => l.id === "ventas")!.detalle["2026-10"];
+const dc = erF.lineas.find((l) => l.id === "costo_mercaderia")!.detalle["2026-10"];
+assert.deepEqual(dv.map((d) => [d.detalle, d.monto, d.origen]), [["FA 0015-00000031 — Termo Córdoba · PR-2026-1100", 1_000, "factura"], ["NC 0015-00000002 — Termo Córdoba", -100, "factura"]]);
+assert.equal(dv.reduce((s, d) => s + d.monto, 0), erF.lineas.find((l) => l.id === "ventas")!.valores["2026-10"], "el detalle suma lo mismo");
+assert.deepEqual(dc.map((d) => [d.detalle, d.monto, d.aviso]), [["FA 0015-00000031 — Termo Córdoba · PR-2026-1100 · margen 30 %", -700, null], ["NC 0015-00000002 — Termo Córdoba · margen 50 %", 50, "Costo raro"]]);
+assert.ok(erF.avisos.some((a) => a.includes("se ven marcadas al abrir Costo de mercadería")));
+
 // ── Estado de resultados ──
 const tcDia = (f: string) => (f.startsWith("2026-10") ? 1500 : null);
 const gastos: GastoCont[] = [
