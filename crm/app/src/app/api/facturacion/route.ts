@@ -323,44 +323,32 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: validationError instanceof Error ? validationError.message : "Datos de factura inválidos" }, { status: 400 });
       }
 
-      const { data: factura, error: insertError } = await supabase
-        .from("facturas")
-        .insert({
-          tipo,
-          punto_venta: ptoVta,
-          numero: Number(numero_manual),
-          cliente_id: cliente_id === "consumidor_final" ? null : cliente_id,
-          presupuesto_id: presupuesto_id || null,
-          fecha: fechaFactura,
-          cae: null,
-          cae_vencimiento: null,
-          subtotal: totalNeto,
-          iva: totalIva,
-          total: totalFinal,
-          moneda: isUSD ? "USD" : "ARS",
-          tipo_cambio: isUSD ? tc : null,
-          cotizacion_modalidad: isUSD ? inheritedRateModality : null,
-          estado: "emitida",
-          sociedad_id: sociedadId,
-          oc_cliente: oc_cliente || null,
-          oc_cliente_fecha: oc_cliente_fecha || null,
-          solicitado_por: solicitado_por || null,
-          observaciones: observaciones || null,
-          condicion_venta: condicion_venta || null,
-          fecha_vencimiento: fecha_vencimiento || null,
-          nota_interna: nota_interna || null,
-        } as any)
-        .select()
-        .single();
-
-      if (insertError) {
-        console.error("Error guardando factura manual en DB:", insertError);
-        return NextResponse.json({ error: `Error al guardar factura: ${insertError.message}` }, { status: 500 });
-      }
-
-      // Save factura_items
-      const facturaItems = items.map((item: any, idx: number) => ({
-        factura_id: factura.id,
+      const cabecera = {
+        tipo,
+        punto_venta: ptoVta,
+        numero: Number(numero_manual),
+        cliente_id: cliente_id === "consumidor_final" ? null : cliente_id,
+        presupuesto_id: presupuesto_id || null,
+        fecha: fechaFactura,
+        cae: null,
+        cae_vencimiento: null,
+        subtotal: totalNeto,
+        iva: totalIva,
+        total: totalFinal,
+        moneda: isUSD ? "USD" : "ARS",
+        tipo_cambio: isUSD ? tc : null,
+        cotizacion_modalidad: isUSD ? inheritedRateModality : null,
+        estado: "emitida",
+        sociedad_id: sociedadId,
+        oc_cliente: oc_cliente || null,
+        oc_cliente_fecha: oc_cliente_fecha || null,
+        solicitado_por: solicitado_por || null,
+        observaciones: observaciones || null,
+        condicion_venta: condicion_venta || null,
+        fecha_vencimiento: fecha_vencimiento || null,
+        nota_interna: nota_interna || null,
+      };
+      const renglones = items.map((item: any, idx: number) => ({
         descripcion: item.descripcion || "Item",
         cantidad: Number(item.cantidad),
         precio_unitario: Number(item.precio_unitario),
@@ -368,12 +356,24 @@ export async function POST(req: NextRequest) {
         orden: idx,
       }));
 
-      const { error: itemsError } = await supabase
-        .from("factura_items")
-        .insert(facturaItems);
-
-      if (itemsError) {
-        console.error("Error guardando factura_items (manual):", itemsError);
+      // Cabecera y renglones en UNA transacción (auditoría de la plata 30/10/2026): si algo falla no queda una factura sin
+      // renglones. Si la base todavía no tiene la función (migración 20261102120100 sin correr), se guarda como antes.
+      let factura: any = null;
+      const { data: registrada, error: rpcError } = await supabase.rpc("registrar_factura_manual", { p_factura: cabecera, p_items: renglones });
+      if (!rpcError) {
+        factura = registrada;
+      } else if (rpcError.code === "PGRST202") {
+        const { data: insertada, error: insertError } = await supabase.from("facturas").insert(cabecera as any).select().single();
+        if (insertError) {
+          console.error("Error guardando factura manual en DB:", insertError);
+          return NextResponse.json({ error: `Error al guardar factura: ${insertError.message}` }, { status: 500 });
+        }
+        factura = insertada;
+        const { error: itemsError } = await supabase.from("factura_items").insert(renglones.map((r: any) => ({ ...r, factura_id: insertada.id })));
+        if (itemsError) console.error("Error guardando factura_items (manual):", itemsError);
+      } else {
+        console.error("Error guardando factura manual en DB:", rpcError);
+        return NextResponse.json({ error: `Error al guardar factura: ${rpcError.message}` }, { status: 500 });
       }
 
       return NextResponse.json({

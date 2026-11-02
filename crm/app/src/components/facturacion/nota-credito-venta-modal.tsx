@@ -222,7 +222,7 @@ export function NotaCreditoVentaModal({ facturaId, onClose, onEmitida }: {
         ncRequestKeyRef.current = "";
 
         setNcResult(formatComprobante(ncTipo, emisorData.ptoVta, Number(ncNumero)) + " (manual)");
-        setNcSuccessWarning(ncRpc?.warning || (ncExcedeSaldo ? "La NC supera el saldo pendiente; revisá el saldo a favor del cliente en su cuenta corriente." : ""));
+        setNcSuccessWarning(ncRpc?.warning || (ncExcedeSaldo ? "La NC supera el saldo pendiente: la diferencia quedó a favor del cliente y se aplica a otra factura desde Cobrar." : ""));
       }
 
       setNcStep("success");
@@ -473,7 +473,7 @@ export function NotaCreditoVentaModal({ facturaId, onClose, onEmitida }: {
                 {ncExcedeSaldo && (
                   <div className="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
                     <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                    <span>El total de la NC supera el saldo pendiente. Se emitirá igualmente y la diferencia quedará identificada como saldo a favor del cliente.</span>
+                    <span>El total de la NC supera el saldo pendiente. Se emitirá igualmente y la diferencia quedará como saldo a favor del cliente, para aplicar a otra factura en Cobrar.</span>
                   </div>
                 )}
 

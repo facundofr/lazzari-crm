@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {
   puedeDestrabarFactura, modalidadFicha, modalidadFactura, modalidadContraFicha,
-  fechaMinimaFactura, fechaAntesDeOc, sugerenciaFechaFactura, leyendaCotizacion, observacionesConCotizacion,
+  fechaMinimaFactura, fechaAntesDeOc, sugerenciaFechaFactura, leyendaCotizacion, observacionesConCotizacion, avisoDolarBillete,
 } from "../src/lib/factura-moneda";
 
 // Roles que destraban (Augusto y Mariana, por rol)
@@ -53,4 +53,14 @@ assert.equal(observacionesConCotizacion("Entrega en planta", "X."), "Entrega en 
 assert.equal(observacionesConCotizacion("Entrega\nX.", "X."), "Entrega\nX.");
 assert.equal(observacionesConCotizacion("Hola", null), "Hola");
 
+
+// Aviso de dólar billete a un cliente divisa (auditoría 30/10): nunca frena, solo avisa.
+assert.equal(avisoDolarBillete({ fichaMoneda: "USD Divisa", moneda: "USD", modalidad: "divisas", tc: 1511.5, tcDivisa: 1511.5 }), null);
+assert.match(avisoDolarBillete({ fichaMoneda: "USD Divisa", moneda: "USD", modalidad: "billetes", tc: 1535 })!, /dólar billete/);
+// FA 16-8 Corteva Seeds: divisa con TC 1.535 escrito a mano (billete).
+assert.match(avisoDolarBillete({ fichaMoneda: "USD Divisa", moneda: "USD", modalidad: "divisas", tc: 1535, tcDivisa: 1511.5 })!, /más alto que el BNA divisa/);
+assert.equal(avisoDolarBillete({ fichaMoneda: "USD Divisa", moneda: "USD", modalidad: "divisas", tc: 1513, tcDivisa: 1511.5 }), null);
+assert.equal(avisoDolarBillete({ fichaMoneda: "USD Divisa", moneda: "ARS", modalidad: "billetes", tc: 0 }), null);
+assert.equal(avisoDolarBillete({ fichaMoneda: "USD", moneda: "USD", modalidad: "billetes", tc: 1535, tcDivisa: 1511.5 }), null);
+assert.equal(avisoDolarBillete({ fichaMoneda: "USD Divisa", moneda: "USD", modalidad: "divisas", tc: 1535, tcDivisa: null }), null);
 console.log("test-factura-moneda OK");

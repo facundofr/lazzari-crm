@@ -25,8 +25,9 @@ import {
 } from "@/lib/factura-condicion";
 import {
   type Modalidad, puedeDestrabarFactura, modalidadFicha, modalidadFactura, modalidadContraFicha, nombreModalidad,
-  fechaMinimaFactura, fechaAntesDeOc, sugerenciaFechaFactura, leyendaCotizacion, observacionesConCotizacion,
+  fechaMinimaFactura, fechaAntesDeOc, sugerenciaFechaFactura, leyendaCotizacion, observacionesConCotizacion, avisoDolarBillete,
 } from "@/lib/factura-moneda";
+import { excesoFacturaSobrePr, hayExcesoSobrePr, detalleExcesoPr } from "@/lib/factura-vs-pr";
 import {
   AlertTriangle, CheckCircle2, Download, FileCheck, Loader2, Mail, Maximize2, Minimize2, Minus, Plus, Search, ShieldCheck, X, XCircle,
 } from "lucide-react";
@@ -336,6 +337,20 @@ export function EmitirFacturaModal({
     return () => { cotizRequest.current += 1; };
   }, [needsRate, emitData.fecha, rateAMano, modalidad]);
 
+  // BNA divisa del día, para avisar si a un cliente divisa se le escribe a mano un tipo de cambio de billete (lib/factura-moneda).
+  const [tcDivisaRef, setTcDivisaRef] = useState(0);
+  const pideRefDivisa = isUSD && fichaModalidad === "divisas";
+  useEffect(() => {
+    if (!pideRefDivisa) return;
+    let vivo = true;
+    fetch(`/api/cotizacion-bna?${new URLSearchParams({ modalidad: "divisas", fecha_factura: emitData.fecha })}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (vivo) setTcDivisaRef(Number(d?.valor_venta) || 0); })
+      .catch(() => { if (vivo) setTcDivisaRef(0); });
+    return () => { vivo = false; };
+  }, [pideRefDivisa, emitData.fecha]);
+  const avisoBillete = avisoDolarBillete({ fichaMoneda, moneda: emitData.moneda, modalidad, tc, tcDivisa: pideRefDivisa ? tcDivisaRef : 0 });
+
   // ── FCE ────────────────────────────────────────────────────────
   const fceApplies = !emitManual && ["FA", "FB", "FCEA", "FCEB"].includes(emitData.tipo);
   const fceCheck = useFceCheck(fceApplies, sociedadActiva?.id, emitData.cliente_id, emitData.fecha);
@@ -362,6 +377,20 @@ export function EmitirFacturaModal({
 
   const resto = useMemo(() => (pr ? restoSinFacturar(pr.items, emitData.items) : []), [pr, emitData.items]);
   const restoTotales = totalesResto(resto);
+
+  // Aviso "la factura supera al PR" (auditoría de la plata 30/10): precio o cantidad de más, o renglones agregados. No frena.
+  // Se compara en la moneda del PR, con el mismo precio con el que la ventana precarga cada renglón.
+  const tipoPrecio = emitManual ? "FB" : emitData.tipo;
+  const excesoPr = useMemo(() => pr ? excesoFacturaSobrePr(
+    pr.items.map((it) => {
+      const iva = Number(it.iva_porcentaje ?? 21);
+      return { descripcion: it.descripcion, cantidad: Number(it.cantidad), precio: precioUnitarioParaFactura({ tipo: tipoPrecio, sourceIsManual, precioNeto: precioNetoItemPresupuesto(it), ivaPorcentaje: iva }) };
+    }),
+    emitData.items,
+  ) : null, [pr, emitData.items, tipoPrecio, sourceIsManual]);
+  const avisoPr = excesoPr && hayExcesoSobrePr(excesoPr)
+    ? `La factura supera al ${pr!.numero}${excesoPr.diferencia > 0 ? ` en ${formatCurrency(excesoPr.diferencia, monedaOrigen as "ARS" | "USD")}${isFacturaA ? " + IVA" : ""}` : ""}: ${detalleExcesoPr(excesoPr)}. El margen y la comisión salen del PR; si va así, corregí el PR. Podés seguir igual.`
+    : "";
 
   const emitTotals = itemsFactura.reduce((acc, it) => {
     if (emitManual || emitData.tipo === "X") {
@@ -956,10 +985,12 @@ export function EmitirFacturaModal({
           )}
 
           {/* Errores y motivo del botón gris: pegados a los botones, siempre a la vista (antes el error salía arriba, fuera de pantalla) */}
-          {(emitError || motivoGris) && (
+          {(emitError || motivoGris || avisoPr || avisoBillete) && (
             <div className="shrink-0 space-y-1 border-t border-zinc-200 dark:border-zinc-700 px-4 py-1.5">
               {emitError && <div className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-1.5">{emitError}</div>}
               {motivoGris && <p className="text-xs text-amber-700 dark:text-amber-400">⚠️ No se puede {emitManual ? "guardar" : "emitir"} todavía: {motivoGris}</p>}
+              {avisoBillete && <p role="status" className="text-xs text-amber-700 dark:text-amber-400">⚠️ {avisoBillete}</p>}
+              {avisoPr && <p role="status" className="text-xs text-amber-700 dark:text-amber-400">⚠️ {avisoPr}</p>}
             </div>
           )}
           {/* Totales y botones: siempre a la vista */}

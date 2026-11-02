@@ -43,6 +43,26 @@ export function nombreModalidad(m: Modalidad): string {
   return m === "billetes" ? "billete" : "divisa";
 }
 
+/**
+ * Aviso de dólar billete a un cliente divisa (auditoría de la plata 30/10/2026; regla de Augusto: Corteva Seeds, Corteva
+ * Agriscience, Synthon y Aerolíneas se facturan en pesos o en dólar divisa, nunca billete). Avisa, nunca frena:
+ * - si se eligió dólar billete con un cliente "USD Divisa" en la ficha;
+ * - si el tipo de cambio escrito a mano pasa al BNA divisa del día (FA 16-8 de Corteva Seeds: TC 1.535 a mano, billete).
+ * `tcDivisa` = BNA divisa venta para esa factura (0 o null si no se sabe).
+ */
+export function avisoDolarBillete(p: { fichaMoneda?: string | null; moneda: string; modalidad: Modalidad; tc: number; tcDivisa?: number | null }): string | null {
+  if (p.moneda !== "USD" || modalidadFicha(p.fichaMoneda) !== "divisas") return null;
+  const regla = "Este cliente se factura en pesos o en dólar divisa, nunca billete.";
+  if (p.modalidad === "billetes") return `Elegiste dólar billete: se le factura de más. ${regla}`;
+  const ref = Number(p.tcDivisa) || 0;
+  const tc = Number(p.tc) || 0;
+  if (ref > 0 && tc > ref * 1.003) {
+    const f = (n: number) => n.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return `El tipo de cambio ($ ${f(tc)}) es más alto que el BNA divisa ($ ${f(ref)}): ¿es dólar billete? ${regla}`;
+  }
+  return null;
+}
+
 /** Fecha mínima para facturar: la mayor entre la que permite ARCA (o la última factura) y la fecha de la OC. */
 export function fechaMinimaFactura(minFiscal: string, ocFecha?: string | null): string {
   const oc = String(ocFecha || "").slice(0, 10);
