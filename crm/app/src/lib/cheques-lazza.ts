@@ -34,6 +34,38 @@ const vacio = (): Total => ({ cantidad: 0, ARS: 0, USD: 0 });
 const sumar = (t: Total, ch: ChequeParaPlazo) => { t.cantidad += 1; t[ch.moneda === "USD" ? "USD" : "ARS"] += Number(ch.monto) || 0; };
 const redondear = (t: Total) => { t.ARS = Math.round(t.ARS * 100) / 100; t.USD = Math.round(t.USD * 100) / 100; return t; };
 
+// ── Cheques a cubrir: UNA regla para Inicio, Finanzas (tarjeta Bancos), Cheques, el asistente y el Cashflow ──
+// P07 (auditoría 02/11/2026; Augusto: los que cubre Martín F. "Suman en a cubrir"). Siempre "a cubrir", nunca contra el saldo.
+// A cubrir = cheque propio pendiente (sin debitar en el CRM) que el banco tampoco debitó (línea de débito en el extracto o
+// PAGADO en el reporte eCheq), con fecha de pago desde hace 30 días como mucho (pasados los 30 días venció: no se cubre).
+// El que ya está en fecha se cubre hoy. Los de Martín F. suman. Prueba: scripts/test-cheques-a-cubrir.ts
+export interface ChequeACubrir extends ChequeParaPlazo { numero?: string | null; estadoBanco?: string | null }
+
+/** Fecha en que hay que cubrir el cheque (hoy si ya está en fecha), o null si no hay que cubrirlo. `debitados`: N° sin ceros. */
+export function fechaACubrir(ch: ChequeACubrir, hoy: string, debitados?: Set<string>): string | null {
+  if ((ch.direccion ?? "emitido") !== "emitido" || !chequePendiente(ch) || !ch.fecha_pago) return null;
+  if (String(ch.estadoBanco || "").trim().toUpperCase() === "PAGADO" || (debitados && ch.numero && debitados.has(sinCeros(ch.numero)))) return null;
+  const f = String(ch.fecha_pago).slice(0, 10);
+  if (f < masDias(hoy, -30)) return null;
+  return f < hoy ? hoy : f;
+}
+
+/** "Esta semana" para cubrir: de hoy al domingo (un domingo, hasta el domingo que viene). Lo que ya está en fecha entra hoy. */
+export function semanaACubrir(hoy: string): { desde: string; hasta: string } {
+  const dom = domingoDe(hoy);
+  return { desde: hoy, hasta: dom === hoy ? masDias(hoy, 7) : dom };
+}
+
+/** Total a cubrir con fecha (a cubrir) entre `desde` y `hasta`, en pesos y en dólares por separado. */
+export function totalACubrir(cheques: ChequeACubrir[], hoy: string, hasta: string, debitados?: Set<string>, desde = hoy): Total {
+  const t = vacio();
+  for (const ch of cheques) {
+    const f = fechaACubrir(ch, hoy, debitados);
+    if (f && f >= desde && f <= hasta) sumar(t, ch);
+  }
+  return redondear(t);
+}
+
 /** Resumen por estado, en el orden en que se muestra (primero emitidos, después recibidos). */
 export function resumenPorEstado(cheques: ChequeFL[]): Array<{ clave: string; label: string; tono: ReturnType<typeof estadoCheque>["tono"]; direccion: "emitido" | "recibido"; total: Total }> {
   const orden = ["emitido:sin_debitar", "emitido:debitado", "emitido:rechazado", "emitido:anulado", "recibido:en_cartera", "recibido:depositado", "recibido:cobrado", "recibido:endosado", "recibido:rechazado", "recibido:anulado"];
@@ -52,10 +84,11 @@ export function resumenPorEstado(cheques: ChequeFL[]): Array<{ clave: string; la
  * Los recibidos que el banco ya tiene (depositados, presentados o en custodia) no van en "para cobrar", que es lo que
  * hay que depositar: van aparte, en `depositados` (auditoría UX 26/10/2026, arreglo 19).
  */
-export function enFecha(cheques: ChequeFL[], hoy: string): { pagar: Total; cobrar: Total; depositados: Total } {
+export function enFecha(cheques: ChequeFL[], hoy: string, debitados?: Set<string>): { pagar: Total; cobrar: Total; depositados: Total } {
   const r = { pagar: vacio(), cobrar: vacio(), depositados: vacio() };
   for (const ch of cheques) {
     if (situacionPago(ch, hoy) !== "en_fecha") continue;
+    if (ch.direccion === "emitido" && !fechaACubrir(ch, hoy, debitados)) continue; // P07: el que el banco ya debitó no se cubre
     sumar(ch.direccion === "emitido" ? r.pagar : depositadoSegunBanco(ch) ? r.depositados : r.cobrar, ch);
   }
   return { pagar: redondear(r.pagar), cobrar: redondear(r.cobrar), depositados: redondear(r.depositados) };
@@ -95,10 +128,11 @@ export function situacionPago(ch: ChequeFL, hoy: string): "en_fecha" | "vencido"
 export const rangoProximaSemana = (hoy: string): { desde: string; hasta: string } => ({ desde: masDias(hoy, 1), hasta: masDias(hoy, 7) });
 
 /** Próxima semana (26/10/2026, Augusto): los pendientes con fecha de pago de mañana a 7 días. */
-export function proximaSemana(cheques: ChequeFL[], hoy: string): { desde: string; hasta: string; pagar: Total; cobrar: Total } {
+export function proximaSemana(cheques: ChequeFL[], hoy: string, debitados?: Set<string>): { desde: string; hasta: string; pagar: Total; cobrar: Total } {
   const r = { ...rangoProximaSemana(hoy), pagar: vacio(), cobrar: vacio() };
   for (const ch of cheques) {
     if (!chequePendiente(ch) || !ch.fecha_pago) continue;
+    if (ch.direccion === "emitido" && !fechaACubrir(ch, hoy, debitados)) continue;
     const f = String(ch.fecha_pago).slice(0, 10);
     if (f >= r.desde && f <= r.hasta) sumar(ch.direccion === "emitido" ? r.pagar : r.cobrar, ch);
   }
@@ -109,7 +143,7 @@ export function proximaSemana(cheques: ChequeFL[], hoy: string): { desde: string
  * Las próximas 4 semanas (sin lo que ya está en fecha): la 1ª va de mañana al domingo, las otras de lunes a domingo.
  * Pagar = propios sin debitar; cobrar = recibidos en cartera.
  */
-export function proximasSemanas(cheques: ChequeFL[], hoy: string, cuantas = 4): Array<{ desde: string; hasta: string; pagar: Total; cobrar: Total }> {
+export function proximasSemanas(cheques: ChequeFL[], hoy: string, cuantas = 4, debitados?: Set<string>): Array<{ desde: string; hasta: string; pagar: Total; cobrar: Total }> {
   const semanas: Array<{ desde: string; hasta: string; pagar: Total; cobrar: Total }> = [];
   let desde = masDias(hoy, 1);
   let hasta = domingoDe(hoy);
@@ -121,6 +155,7 @@ export function proximasSemanas(cheques: ChequeFL[], hoy: string, cuantas = 4): 
   }
   for (const ch of cheques) {
     if (!chequePendiente(ch) || !ch.fecha_pago) continue;
+    if (ch.direccion === "emitido" && !fechaACubrir(ch, hoy, debitados)) continue;
     const f = String(ch.fecha_pago).slice(0, 10);
     const s = semanas.find((x) => f >= x.desde && f <= x.hasta);
     if (s) sumar(ch.direccion === "emitido" ? s.pagar : s.cobrar, ch);

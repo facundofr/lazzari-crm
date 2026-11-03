@@ -59,7 +59,7 @@ async function traerFacturasDeOrdenPago(sociedadId: string, clienteId: string, p
   return facturasDeOrdenPago(parsed, filas, await cobradoDe(sociedadId, filas));
 }
 
-export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preseleccion = [], directo = false, onClose, onCobrado }: {
+export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preseleccion = [], directo = false, medioInicial, sugerido, onClose, onCobrado }: {
   sociedadId: string;
   /** Sin cliente: primero se elige (Recibos → "Nuevo cobro"). */
   clienteId?: string | null;
@@ -71,6 +71,10 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
   onClose: () => void;
   /** Después de guardar el cobro (para recargar la lista de atrás). */
   onCobrado: () => void;
+  /** Desde una línea del banco (02/11/2026): la transferencia en pesos viene con el importe y la fecha de la línea. */
+  medioInicial?: { monto: number; fecha: string };
+  /** Cliente con el mismo CUIT que la línea del banco: se muestra para elegirlo con un clic (nunca se elige solo). */
+  sugerido?: { id: string; nombre: string } | null;
 }) {
   const { profile } = useUser();
   const { toast } = useToast();
@@ -168,7 +172,7 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
     return (
       <CobroMasivoLiquidacion facturas={seleccion} clienteId={cliente.id} clienteNombre={cliente.nombre} sociedadId={sociedadId}
         profileId={profile?.id || null} moneda="ARS" onCobrarOrdenCompleta={(orden) => { void iniciarCobroOrdenPago(orden); }}
-        onClose={cerrarLiquidacion} onSuccess={listo} />
+        medioInicial={medioInicial} onClose={cerrarLiquidacion} onSuccess={listo} />
     );
   }
 
@@ -189,14 +193,23 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
 
         {!cliente ? (
           clientes === null ? <p className="flex items-center gap-2 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Cargando clientes…</p> : (
+            <>
+            {sugerido && (
+              <button type="button" onClick={() => { setElegidas(new Set()); setCliente({ id: sugerido.id, nombre: sugerido.nombre }); }}
+                className="flex w-full items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-left text-sm text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+                💡 Parece de <b>{sugerido.nombre}</b> (mismo CUIT que el banco). Tocá para elegirlo.
+              </button>
+            )}
             <Autocompletar opciones={opcionesClientes} placeholder="Buscar cliente por nombre o CUIT"
               onElegir={(id) => { const c = clientes.find((x) => x.id === id); if (c) { setElegidas(new Set()); setCliente({ id: c.id, nombre: c.razon_social }); } }} />
+            </>
           )
         ) : facturas === null ? (
           !error && <p className="flex items-center gap-2 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Buscando facturas con saldo…</p>
         ) : (
           <>
             {!clienteId && <button type="button" onClick={() => { setCliente(null); setFacturas(null); }} className="text-xs text-orange-600 hover:underline">← Otro cliente</button>}
+            {medioInicial && <p className="text-xs text-zinc-500">Entró al banco {formatCurrency(medioInicial.monto)} el {formatDate(medioInicial.fecha)}. 💡 = factura con ese saldo.</p>}
             <div className="overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-700">
               <table className="w-full text-sm">
                 <thead className="bg-zinc-50 text-left text-[11px] uppercase text-zinc-500 dark:bg-zinc-800">
@@ -212,7 +225,7 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
                   {facturas.map((f) => (
                     <tr key={f.id} onClick={() => tildar(f.id, !elegidas.has(f.id))} className={`cursor-pointer border-t border-zinc-100 dark:border-zinc-800 ${elegidas.has(f.id) ? "bg-emerald-50 dark:bg-emerald-900/20" : "hover:bg-zinc-50 dark:hover:bg-zinc-800/50"}`}>
                       <td className="px-3 py-1.5"><input type="checkbox" aria-label={`Tildar ${f.numero}`} className="h-4 w-4 accent-orange-500" checked={elegidas.has(f.id)} onClick={(e) => e.stopPropagation()} onChange={(e) => tildar(f.id, e.target.checked)} /></td>
-                      <td className="px-2 py-1.5 font-mono text-xs">{f.numero}</td>
+                      <td className="px-2 py-1.5 font-mono text-xs">{f.numero}{medioInicial && f.moneda === "ARS" && Math.abs(f.saldo - medioInicial.monto) <= 1 && <span className="ml-1" title="Saldo igual a lo que entró al banco">💡</span>}</td>
                       <td className="px-2 py-1.5">{formatDate(f.fecha)}</td>
                       <td className="px-2 py-1.5 text-right font-mono text-zinc-500">{formatCurrency(f.total, f.moneda)}</td>
                       <td className="px-3 py-1.5 text-right font-mono font-semibold">{formatCurrency(f.saldo, f.moneda)}</td>

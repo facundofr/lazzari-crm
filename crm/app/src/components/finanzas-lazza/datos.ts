@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { armarTcDelDia, armarVencimientos, comprobanteVenta, reporteBasico, saldoFacturaCompra, type FacturaCompraFL, type FacturaVentaFL, type FilaVencimiento, type GastoFL, type GastoVepFL, type ItemCostoFL, type ItemFacturaFL, type TransporteFL, type PagoDirectoFC, type RetencionIvaFL, type TcDelDia } from "@/lib/finanzas-lazza";
 import type { LineaMov } from "@/lib/movimientos-banco";
+import { leerDolarDelDia, soloConfiables } from "@/lib/dolar-presupuesto";
 import { calcularSaldosClientes, cobradoPorFactura, saldoFacturaVenta, traerDatosSaldoClientes, type SaldoCliente } from "@/lib/saldo-clientes";
 import { calcularSaldosProveedores, traerCreditosProveedores, type SaldoProveedor } from "@/lib/saldo-proveedores";
 import { sentidoAjuste } from "@/lib/tipos-movimiento";
@@ -40,9 +41,9 @@ export async function traerTcDelDia(periodo: string, desdeFecha?: string): Promi
   const { desde: inicioMes, hasta } = rangoMes(periodo);
   const desde = desdeFecha && desdeFecha < inicioMes ? desdeFecha : inicioMes;
   const antes = new Date(Date.parse(`${desde}T12:00:00Z`) - 12 * 86_400_000).toISOString().slice(0, 10);
-  const { data } = await db.from("cotizaciones_dolar").select("fecha, valor_venta")
+  const { data } = await db.from("cotizaciones_dolar").select("fecha, valor_venta, fuente, es_manual")
     .eq("tipo", "oficial_divisas").gte("fecha", antes).lt("fecha", hasta).order("fecha");
-  return armarTcDelDia(data || []);
+  return armarTcDelDia(soloConfiables((data || []) as { fecha: string; valor_venta: number | string | null; fuente?: string | null; es_manual?: boolean | null }[]));
 }
 
 export async function traerVentasDelMes(sociedadId: string, periodo: string): Promise<FacturaVentaFL[]> {
@@ -169,13 +170,9 @@ export async function traerSaldosSacados(sociedadId: string): Promise<Set<string
   return new Set(((data || []) as any[]).map((r) => (r.factura_id ? `venta:${r.factura_id}` : `compra:${r.factura_compra_id}`)));
 }
 
-/** Dólar divisa BNA del día: el último cargado hasta hoy (el mismo que usa Finanzas). */
+/** Dólar divisa BNA del día: el último confiable hasta hoy (lib/dolar-presupuesto → leerDolarDelDia, el mismo en todas las pantallas). */
 export async function traerDolarDelDia(hoy: string): Promise<number | null> {
-  const { data, error } = await db.from("cotizaciones_dolar").select("valor_venta").eq("tipo", "oficial_divisas")
-    .lte("fecha", hoy).order("fecha", { ascending: false }).limit(1);
-  if (error) return null;
-  const v = Number((data || [])[0]?.valor_venta);
-  return v > 0 ? v : null;
+  return leerDolarDelDia(db, hoy).then((d) => d?.valor ?? null, () => null);
 }
 
 /**
@@ -386,7 +383,7 @@ export async function traerDatosCashflow(sociedadId: string, hoy: string, conPre
       .eq("sociedad_id", sociedadId).not("gasto_fijo_id", "is", null).gte("fecha", `${mes}-01`).order("id")),
     traerTodo<{ proveedor_id: string | null; fecha: string }>(() => db.from("facturas_compra").select("id, proveedor_id, fecha")
       .eq("sociedad_id", sociedadId).gte("fecha", `${mes}-01`).order("id")),
-    db.from("cotizaciones_dolar").select("valor_venta").eq("tipo", "oficial_divisas").lte("fecha", hoy).order("fecha", { ascending: false }).limit(1).maybeSingle(),
+    leerDolarDelDia(db, hoy).catch(() => null),
     db.from("configuracion").select("key, value").eq("sociedad_id", sociedadId).like("key", "cashflow_foto_%"),
   ]);
   if (cuentasR.error) throw cuentasR.error;
@@ -467,7 +464,7 @@ export async function traerDatosCashflow(sociedadId: string, hoy: string, conPre
     cuentas, otras, lineas, debitados, vencimientos, cheques, fijos, premios, iibb, fotos,
     pagosFijos: pagosFijos.map((g) => ({ gasto_fijo_id: g.gasto_fijo_id, fecha: dia(g.fecha) })),
     facturasCompra: comprasMes.map((f) => ({ proveedor_id: f.proveedor_id, fecha: dia(f.fecha) })),
-    dolar: dolarR.data?.valor_venta ? Number(dolarR.data.valor_venta) : null,
+    dolar: dolarR?.valor ?? null,
   };
 }
 

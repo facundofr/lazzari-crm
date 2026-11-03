@@ -65,6 +65,8 @@ interface Props {
   ordenPagoAvisos?: string[];
   /** Si la OP paga otras facturas, ofrece cobrarlas todas juntas. */
   onCobrarOrdenCompleta?: (ordenPago: OpParsed) => void;
+  /** Desde una línea del banco (02/11/2026): la transferencia viene con el importe y la fecha de la línea; se pueden cambiar. */
+  medioInicial?: { monto: number; fecha: string };
 }
 
 // ── Helpers ──────────────────────────────────────────────
@@ -124,11 +126,11 @@ function buildDesc(prefix: string, ref: string, obs: string, opRef: string): str
 
 // ── Component ────────────────────────────────────────────
 export default function CobroMasivoLiquidacion({
-  facturas, clienteId, clienteNombre, sociedadId, moneda, onClose, onSuccess, ordenPago, ordenPagoAvisos, onCobrarOrdenCompleta,
+  facturas, clienteId, clienteNombre, sociedadId, moneda, onClose, onSuccess, ordenPago, ordenPagoAvisos, onCobrarOrdenCompleta, medioInicial,
 }: Props) {
   const { toast } = useToast();
   const [opReferencia, setOpReferencia] = useState("");
-  const [medios, setMedios] = useState<MedioPago[]>([newMedio()]);
+  const [medios, setMedios] = useState<MedioPago[]>(() => [medioInicial ? { ...newMedio(), monto: toDecimalInput(medioInicial.monto), fecha: medioInicial.fecha } : newMedio()]);
   const [retenciones, setRetenciones] = useState<RetencionLinea[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");

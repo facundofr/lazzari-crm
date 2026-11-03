@@ -12,12 +12,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { AlertTriangle, ArrowDown, ArrowUp, ChevronsUpDown, Loader2, Paperclip, Pencil, Plus, Search, Sparkles, Trash2, Undo2, X } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
+import { sinCodigoBanco } from "@/lib/bbva-codigos";
 import { traerTodo } from "@/lib/paginar";
 import { useToast } from "@/components/ui/toast";
 import { Select } from "@/components/ui/input";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import {
-  GRUPOS, GRUPOS_EDITABLES, MEDIOS, nombreGrupo, armarFilasGastos, filasDeTransportes, etiquetaMedio, filtrarGastos, fijosCubiertos, fijosSinCargar, gastoParecido, grupoDe, mesDelDetalleFijo, numeroVep, totalesPorGrupo,
+  GRUPOS, GRUPOS_EDITABLES, MEDIOS, nombreGrupo, armarFilasGastos, filasDeTransportes, etiquetaMedio, filtrarGastos, fijosCubiertos, fijosSinCargar, gastoParecido, grupoDe, mesDelDetalleFijo, numeroVep, totalesPorGrupo, yaEstaEnBancoOVisa,
   type FacturaTransporteRow, type FijoRow, type FilaGasto, type GastoRow, type Grupo,
 } from "@/lib/gastos-lazza";
 import { montoSicore, sugerirGastoFijo } from "@/lib/gasto-fijo-factura";
@@ -173,6 +174,24 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
     } catch { return null; }
   }
 
+  /** Aviso de "ya está" (02/11/2026): una línea del banco ya resuelta o un consumo de la tarjeta por el mismo importe. Si falla, no avisa. */
+  async function buscarEnBancoOVisa(b: Borrador, monto: number): Promise<string | null> {
+    try {
+      const dia = (n: number) => { const d = new Date(`${b.fecha}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+      const { data: cs } = await db.from("cuentas_financieras").select("id").eq("sociedad_id", sociedadId);
+      const ids = (cs || []).map((c: { id: string }) => c.id);
+      const [{ data: ls }, { data: cons }] = await Promise.all([
+        ids.length ? db.from("extracto_movimientos").select("fecha, descripcion, monto").in("cuenta_id", ids).eq("tipo", "debito").neq("estado", "pendiente")
+          .gte("monto", monto - 1).lte("monto", monto + 1).gte("fecha", dia(-7)).lte("fecha", dia(7)).limit(5) : Promise.resolve({ data: [] }),
+        db.from("tarjeta_consumos").select("fecha, comercio, importe, moneda").eq("sociedad_id", sociedadId).eq("tipo", "consumo")
+          .gte("importe", monto - 1).lte("importe", monto + 1).gte("fecha", dia(-35)).lte("fecha", dia(35)).limit(5),
+      ]);
+      return yaEstaEnBancoOVisa({ fecha: b.fecha, monto, moneda: b.moneda, medio: b.medio },
+        ((ls || []) as { fecha: string; descripcion: string | null; monto: number }[]).map((l) => ({ fecha: String(l.fecha).slice(0, 10), descripcion: sinCodigoBanco(l.descripcion), monto: Number(l.monto) })),
+        ((cons || []) as { fecha: string; comercio: string; importe: number; moneda: string }[]).map((c) => ({ ...c, fecha: String(c.fecha).slice(0, 10), importe: Number(c.importe) })));
+    } catch { return null; }
+  }
+
   async function guardar(b: Borrador) {
     if (enCurso.current) return;
     const monto = Math.round(Number(String(b.monto).replace(",", ".")) * 100) / 100;
@@ -193,6 +212,9 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
       if (!b.id) {
         const p = await buscarParecido(b, monto);
         if (p && !confirm(`Ya hay un gasto parecido:\n${formatDate(String(p.fecha).slice(0, 10))} · ${p.descripcion || ""} · ${formatCurrency(Number(p.monto), String(p.moneda).toUpperCase() === "USD" ? "USD" : "ARS")}\n\n¿Es otro gasto? Aceptar lo guarda igual.`)) return;
+        // 02/11/2026: para no cargar dos veces lo que ya está en el banco o en la Visa. Solo avisa.
+        const ya = p ? null : await buscarEnBancoOVisa(b, monto);
+        if (ya && !confirm(`${ya}\n\n¿Es otro gasto? Aceptar lo guarda igual.`)) return;
       }
       const datos: Record<string, unknown> = {
         fecha: b.fecha, descripcion: b.detalle.trim(), grupo: b.grupo, monto, moneda: b.moneda, medio_pago: b.medio || "transferencia",

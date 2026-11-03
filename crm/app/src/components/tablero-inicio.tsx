@@ -3,7 +3,7 @@
 // Inicio de Augusto (02/11/2026, boceto D elegido con Augusto: "simple pero estético y funcional"). La primera pantalla del CRM
 // para el super_admin: la plata de un vistazo y todo en pesos. Solo lectura, salvo «Subir archivos del banco», que abre la misma
 // ventana de Bancos → Movimientos (banco simple): al guardar se cruza solo y al cerrarla estos números se recalculan.
-// - Arriba: la línea del banco (última subida, saldo de las cuentas según el banco, líneas sin cruzar) y el aviso de lo que falta subir.
+// - Arriba: la línea del banco (última subida, saldo de las cuentas según el banco, líneas para revisar) y el aviso de lo que falta subir.
 // - 3 frases armadas con los números (sin IA), los 4 números (facturado, a cobrar, a pagar, cheques a cubrir esta semana),
 //   las próximas 4 semanas (lo que vence para cobrar contra lo que vence para pagar y los cheques) y la agenda de esta semana.
 // Mismos datos que Finanzas: traerDeudas (saldo por factura), cheques propios (lib/cheques-lazza), facturadoMesNeto y el objetivo
@@ -25,6 +25,9 @@ import {
 import { traerDeudas } from "@/components/finanzas-lazza/datos";
 import { CargaDiaria } from "@/components/finanzas-lazza/carga-diaria";
 import { BancoSimple } from "@/components/finanzas-lazza/banco-simple";
+import { marcasRevision } from "@/lib/banco-revision";
+import { leerDolarDelDia } from "@/lib/dolar-presupuesto";
+import { leerChequesDebitados } from "@/lib/cobertura-cheques";
 import { Modal } from "@/components/ui/modal";
 
 const db = supabase as any;
@@ -53,14 +56,19 @@ async function traerDatos(sociedadId: string, hoy: string): Promise<Datos> {
   const [filas, cheques, dolar, facturado, objetivo, cuentas, ultimaSubida] = await Promise.all([
     // Sin los saldos chicos sacados de pendientes (Cobrar y Pagar, 02/11/2026).
     parte(async () => { const d = await traerDeudas(sociedadId, hoy); return separarSacados(d.vencimientos, d.sacados).pendientes; }, "a cobrar y a pagar"),
-    parte(() => traerTodo<ChequeTablero>(() => db.from("echeqs").select("id, numero, monto, moneda, fecha_pago, estado, direccion, destino_nombre")
-      .eq("sociedad_id", sociedadId).eq("direccion", "emitido").in("estado", ["pendiente", "entregado"]).order("id")), "cheques"),
+    // P07: a cubrir con la regla de todo el CRM; los que el banco ya debitó (extracto o PAGADO) no se cubren.
     parte(async () => {
-      const { data, error } = await db.from("cotizaciones_dolar").select("fecha, valor_venta").eq("tipo", "oficial_divisas")
-        .lte("fecha", hoy).order("fecha", { ascending: false }).limit(1);
-      if (error) throw error;
-      const r = (data || [])[0];
-      return r && Number(r.valor_venta) > 0 ? { valor: Number(r.valor_venta), fecha: String(r.fecha).slice(0, 10) } : null;
+      const [chs, debitados] = await Promise.all([
+        traerTodo<any>(() => db.from("echeqs").select("id, numero, monto, moneda, fecha_pago, estado, direccion, destino_nombre, estado_banco")
+          .eq("sociedad_id", sociedadId).eq("direccion", "emitido").in("estado", ["pendiente", "entregado"]).order("id")),
+        leerChequesDebitados(db, sociedadId, hoy),
+      ]);
+      return chs.filter((c) => !debitados.has(String(c.numero || "").trim().replace(/^0+/, ""))).map((c): ChequeTablero => ({ ...c, estadoBanco: c.estado_banco }));
+    }, "cheques"),
+    parte(async () => {
+      // P23: el mismo dólar del día que Finanzas (último confiable hasta hoy).
+      const d = await leerDolarDelDia(db, hoy);
+      return d ? { valor: d.valor, fecha: d.fecha } : null;
     }, "dólar del día"),
     parte(async () => {
       const [rows, anuladas] = await Promise.all([
@@ -87,10 +95,14 @@ async function traerDatos(sociedadId: string, hoy: string): Promise<Datos> {
       const { data, error } = await db.from("cuentas_financieras").select("id, nombre, tipo, moneda, activa, saldo_banco, saldo_banco_fecha").eq("sociedad_id", sociedadId);
       if (error) throw error;
       const todas = (data || []) as any[];
-      const { count, error: e2 } = todas.length
-        ? await db.from("extracto_movimientos").select("id", { count: "exact", head: true }).in("cuenta_id", todas.map((c) => c.id)).eq("estado", "pendiente")
-        : { count: 0, error: null };
+      // Para revisar (02/11/2026): las pendientes menos las que Augusto tildó «Revisada» (esas no quedan pendientes en ningún lado).
+      const { data: pend, error: e2 } = todas.length
+        ? await db.from("extracto_movimientos").select("id").in("cuenta_id", todas.map((c) => c.id)).eq("estado", "pendiente").limit(1000)
+        : { data: [], error: null };
       if (e2) throw e2;
+      const { data: marcas } = await db.from("finanzas_registro").select("linea_id, accion, propuesta, created_at").eq("sociedad_id", sociedadId).in("accion", ["revisada", "no_revisada"]).order("created_at").limit(5000);
+      const { revisadas } = marcasRevision(marcas || []);
+      const count = (pend || []).filter((l: { id: string }) => !revisadas.has(l.id)).length;
       const bancos: CuentaBanco[] = todas
         .filter((c) => c.activa !== false && ["cuenta_corriente", "caja_ahorro"].includes(c.tipo) && c.saldo_banco !== null)
         .map((c) => ({ nombre: c.nombre, moneda: c.moneda || "ARS", saldo: Number(c.saldo_banco) || 0, fecha: c.saldo_banco_fecha ? String(c.saldo_banco_fecha).slice(0, 10) : null }));
@@ -256,7 +268,7 @@ export function TableroInicio({ sociedadId, nombre }: { sociedadId: string; nomb
         <p className="text-xs text-zinc-500 dark:text-zinc-400">{fechaLarga}</p>
       </div>
 
-      {/* La línea del banco: cuándo se subió, cuánto hay según el banco y lo que quedó sin cruzar. El botón abre Movimientos del banco. */}
+      {/* La línea del banco: cuándo se subió, cuánto hay según el banco y lo que queda para revisar. El botón abre Movimientos del banco. */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-dashed border-zinc-300 bg-white px-3 py-1.5 text-xs text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
         <Landmark className="h-4 w-4 shrink-0 text-zinc-400" />
         <span>Banco · última subida <b className="font-medium text-zinc-800 dark:text-zinc-100">{datos?.ultimaSubida ? cuandoSubio(datos.ultimaSubida, hoy) : cargando ? "…" : "—"}</b></span>
@@ -266,8 +278,8 @@ export function TableroInicio({ sociedadId, nombre }: { sociedadId: string; nomb
           </span>
         ) : null}
         {datos?.sinCruzar ? (
-          <button type="button" onClick={() => setBancoAbierto(true)} className="text-amber-700 hover:underline dark:text-amber-400">
-            · {datos.sinCruzar} línea{datos.sinCruzar > 1 ? "s" : ""} sin cruzar
+          <button type="button" onClick={() => setBancoAbierto(true)} className="text-zinc-700 hover:underline dark:text-zinc-200">
+            · {datos.sinCruzar} para revisar
           </button>
         ) : null}
         <span className="flex-1" />

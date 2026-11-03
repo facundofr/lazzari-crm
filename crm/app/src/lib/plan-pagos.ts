@@ -9,7 +9,9 @@
  * Como el plan junta todas las facturas del proveedor, el mínimo y la escala se aplican una sola vez.
  */
 import { isResponsableInscripto } from "@/lib/fiscal-condition";
-import { pctRetencion, reglaPorConcepto, retencionEscala } from "@/lib/retencion-conceptos";
+import { importeRetencionOP, minimoDelConcepto, propuestaRetencionOP, proveedorExcluido, type ProveedorFiscal } from "@/lib/retencion-conceptos";
+
+export { proveedorExcluido, type ProveedorFiscal };
 
 export const r2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -27,14 +29,6 @@ export const RETENCION_DEFAULT: RetencionConfig = {
   minimo_retencion_ganancias: 240,
 };
 
-export interface ProveedorFiscal {
-  condicion_iva?: string | null;
-  alicuota_ganancias?: number | null;
-  concepto_retencion_ganancias?: string | null;
-  exclusion_retencion?: boolean | null;
-  exclusion_retencion_desde?: string | null;
-  exclusion_retencion_hasta?: string | null;
-}
 
 /** ¿El comprobante no discrimina IVA? (factura C, o proveedor monotributista / exento). */
 export function sinIVA(tipoComprobante: string, condicionIva?: string | null): boolean {
@@ -48,11 +42,6 @@ export function baseSinIVADe(monto: number, f: { subtotal: number; total: number
   return r2(monto * ratio);
 }
 
-export function proveedorExcluido(p: ProveedorFiscal, fecha: string): boolean {
-  return Boolean(p.exclusion_retencion)
-    && (!p.exclusion_retencion_desde || p.exclusion_retencion_desde <= fecha)
-    && (!p.exclusion_retencion_hasta || p.exclusion_retencion_hasta >= fecha);
-}
 
 export interface ResultadoRetencion {
   aplica: boolean;
@@ -62,6 +51,7 @@ export interface ResultadoRetencion {
   motivo: string;        // explicación corta para mostrar
 }
 
+/** La misma cuenta que la Orden de pago (lib/retencion-conceptos: propuestaRetencionOP + importeRetencionOP), con el motivo. */
 export function calcularRetencionGanancias(opts: {
   proveedor: ProveedorFiscal;
   config: RetencionConfig;
@@ -75,16 +65,14 @@ export function calcularRetencionGanancias(opts: {
   if (!config.aplica_ganancias) return { aplica: false, pct: 0, base, retencion: 0, motivo: "La sociedad no retiene Ganancias" };
   if (proveedorExcluido(proveedor, fecha)) return { aplica: false, pct: 0, base, retencion: 0, motivo: "Proveedor con certificado de exclusión vigente" };
   if (!isResponsableInscripto(proveedor.condicion_iva)) return { aplica: false, pct: 0, base, retencion: 0, motivo: "No es Responsable Inscripto" };
-  const acumulado = r2(baseMesPrevia + base);
-  const regla = reglaPorConcepto(proveedor.concepto_retencion_ganancias, config.minimo_ganancias);
-  const minimo = regla ? regla.minimo : config.minimo_ganancias;
-  if (acumulado < minimo) return { aplica: false, pct: 0, base, retencion: 0, motivo: "No supera el mínimo no imponible del mes" };
-  const excedente = acumulado - minimo;
-  const escala = regla !== null && regla.pct === null; // honorarios: escala
-  const pct = pctRetencion(regla, excedente, proveedor.alicuota_ganancias, config.tasa_ganancias_ri);
-  const bruta = Math.max(0, (escala ? retencionEscala(excedente) : excedente * (pct / 100)) - retenidoMes);
-  if (bruta < config.minimo_retencion_ganancias) return { aplica: true, pct, base, retencion: 0, motivo: "La retención no llega al importe mínimo (art. 29)" };
-  return { aplica: true, pct, base, retencion: r2(bruta), motivo: escala ? "Escala de honorarios sobre el acumulado del mes menos lo ya retenido" : `${pct} % sobre el acumulado del mes menos lo ya retenido` };
+  const p = propuestaRetencionOP({ proveedor, condicionIva: proveedor.condicion_iva, aplicaSociedad: true, minimoBienes: config.minimo_ganancias,
+    tasaGlobal: config.tasa_ganancias_ri, fecha, basePrevia: baseMesPrevia, baseEstaOP: base });
+  if (!p.aplica) return { aplica: false, pct: 0, base, retencion: 0, motivo: "No supera el mínimo no imponible del mes" };
+  const r = importeRetencionOP({ aplica: true, pct: p.pct, minimo: minimoDelConcepto(proveedor.concepto_retencion_ganancias, config.minimo_ganancias),
+    basePrevia: baseMesPrevia, baseEstaOP: base, retenidoMes, minimoRetencion: config.minimo_retencion_ganancias });
+  if (!r.retencion) return { aplica: true, pct: p.pct, base, retencion: 0, motivo: "La retención no llega al importe mínimo (art. 29)" };
+  const escala = (proveedor.concepto_retencion_ganancias || "").trim() === "honorarios";
+  return { aplica: true, pct: p.pct, base, retencion: r.retencion, motivo: escala ? "Escala de honorarios sobre el acumulado del mes menos lo ya retenido" : `${p.pct} % sobre el acumulado del mes menos lo ya retenido` };
 }
 
 /** Reparte las NC entre las facturas, en orden. Devuelve [{nc_id, factura_compra_id, monto}]. */

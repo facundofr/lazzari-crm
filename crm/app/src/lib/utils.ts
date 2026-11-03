@@ -47,8 +47,8 @@ export function formatDateTime(date: Date | string) {
 }
 
 /** Returns today's date as YYYY-MM-DD in Argentina timezone */
-export function todayAR() {
-  const d = new Date();
+/** Hoy en Argentina (AAAA-MM-DD). `d` solo para las pruebas. */
+export function todayAR(d: Date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     year: "numeric", month: "2-digit", day: "2-digit",
     timeZone: "America/Argentina/Buenos_Aires",

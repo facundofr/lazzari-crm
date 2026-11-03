@@ -1,5 +1,6 @@
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
+import { cobradoParaCobrar } from "@/lib/saldo-clientes";
 
 /**
  * Lo cobrado de cada factura de venta (cobros directos + aplicaciones vigentes), por id. Se usa en Facturación y en la nota de crédito.
@@ -23,24 +24,6 @@ export async function fetchCobradoMap(sociedadActiva: { id?: string } | null | u
         direct.data.push(...d); applications.data.push(...a);
       }
     }catch{throw new Error("No se pudieron verificar los cobros previos; no se habilitó el cobro. Reintentá la consulta.");}
-    const totals:Record<string,number>={};
-    // Un cobro con aplicaciones ya se cuenta por ellas: no se suma también como directo (igual que Finanzas y lib/saldo-clientes).
-    const movimientosAplicados=new Set<string>((applications.data||[]).map((a:any)=>a.movimiento_id).filter(Boolean));
-    for(const m of direct.data||[]){
-      if(m.anulado||movimientosAplicados.has(m.id))continue;
-      const doc=documents.find(f=>f.id===m.factura_id);
-      if(!doc || (m.moneda||"ARS")!==doc.moneda)throw new Error("Hay un cobro previo en otra moneda sin aplicación conciliada. Revisalo antes de continuar.");
-      if(!Number.isFinite(Number(m.monto)))throw new Error("Un cobro previo tiene un importe inválido.");
-      totals[m.factura_id]=(totals[m.factura_id]||0)+Number(m.monto);
-    }
-    for(const a of applications.data||[]){
-      const movement=Array.isArray(a.movimientos)?a.movimientos[0]:a.movimientos;
-      if(!movement)throw new Error("Una aplicación no tiene un movimiento verificable.");
-      if(movement.anulado)continue;
-      if(!Number.isFinite(Number(a.monto)))throw new Error("Una aplicación de cobro tiene un importe inválido.");
-      // Application amount is ALWAYS in the invoice's currency; FX cash is ARS
-      // with factura_id null, so it must not also be counted as a direct payment.
-      totals[a.factura_id]=(totals[a.factura_id]||0)+Number(a.monto);
-    }
-    return totals;
+    // La cuenta (y lo que frena) está en lib/saldo-clientes → cobradoParaCobrar, probada junto a cobradoPorFactura (P24).
+    return cobradoParaCobrar(documents, direct.data, applications.data);
 }

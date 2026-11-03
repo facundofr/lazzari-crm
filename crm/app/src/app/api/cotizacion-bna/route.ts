@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { parseBnaHistorical, isTrustedBnaCache, BNA_VERIFIED_SOURCE } from "@/lib/bna-historical";
 import { getInvoiceExchangeRate } from "@/lib/invoice-exchange-rate";
+import { diaHabilAnterior } from "@/lib/dias-habiles";
 
 /**
  * GET /api/cotizacion-bna?modalidad=divisas|billetes&fecha=YYYY-MM-DD
@@ -18,12 +19,9 @@ const todayAR = () =>
 
 // Cuando el usuario no indica una fecha, la cotización aplicable a una
 // factura es la del día hábil anterior (el formulario permite editarla).
-const previousBusinessDay = (iso: string) => {
-  const d = new Date(`${iso}T12:00:00-03:00`);
-  d.setDate(d.getDate() - 1);
-  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
-  return d.toISOString().slice(0, 10);
-};
+// P23 (02/11/2026): el mismo "día hábil anterior" de todo el CRM (lib/dias-habiles, con feriados). Antes salteaba solo
+// sábados y domingos; el valor no cambia (el BNA no publica en feriados), pero ahora pide directo el día que existe.
+const previousBusinessDay = diaHabilAnterior;
 
 const toddmmyyyy = (isoDate: string) => {
   const [y, m, d] = isoDate.split("-");

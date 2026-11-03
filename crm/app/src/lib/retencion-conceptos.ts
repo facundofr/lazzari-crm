@@ -4,6 +4,8 @@
  * Los demás conceptos (alquileres, intereses, comisiones, etc.) no tienen regla propia todavía:
  * siguen con el mínimo y la alícuota que ya usaban (config de la sociedad y alícuota del proveedor).
  */
+import { isResponsableInscripto } from "@/lib/fiscal-condition";
+import { roundPaymentMoney } from "@/lib/payment-money";
 
 export const MINIMO_SERVICIOS = 67170;
 export const RETENCION_BIENES_PCT = 2;
@@ -81,4 +83,78 @@ export function reglaPorConcepto(concepto: string | null | undefined, minimoBien
     case "honorarios": return { minimo: MINIMO_SERVICIOS, pct: null };
     default: return null;
   }
+}
+
+// ── La cuenta de la Orden de pago (P08, auditoría 02/11/2026) ──
+// Antes estaba escrita dentro de components/orden-pago-nueva.tsx y sin prueba; ahora la OP usa estas dos funciones (misma cuenta,
+// mismo redondeo) y lib/plan-pagos → calcularRetencionGanancias también. Prueba: scripts/test-retencion-conceptos.ts.
+
+export interface ProveedorFiscal {
+  condicion_iva?: string | null;
+  alicuota_ganancias?: number | null;
+  concepto_retencion_ganancias?: string | null;
+  exclusion_retencion?: boolean | null;
+  exclusion_retencion_desde?: string | null;
+  exclusion_retencion_hasta?: string | null;
+}
+
+/** Certificado de exclusión vigente en esa fecha (la de la OP, no la de hoy). */
+export function proveedorExcluido(p: ProveedorFiscal | null | undefined, fecha: string): boolean {
+  return Boolean(p?.exclusion_retencion)
+    && (!p!.exclusion_retencion_desde || p!.exclusion_retencion_desde <= fecha)
+    && (!p!.exclusion_retencion_hasta || p!.exclusion_retencion_hasta >= fecha);
+}
+
+/** Mínimo no imponible del mes según el concepto del proveedor (sin regla propia: el de la sociedad). */
+export function minimoDelConcepto(concepto: string | null | undefined, minimoBienes: number): number {
+  return reglaPorConcepto(concepto, minimoBienes)?.minimo ?? minimoBienes;
+}
+
+/**
+ * Paso 1 (al elegir el proveedor o cambiar la fecha o las facturas): ¿se retiene y a qué alícuota? La persona lo puede cambiar.
+ * Excluido en la fecha de la OP → no. No inscripto o sociedad que no retiene → no. Si el acumulado del mes (bases sin IVA de
+ * pagos anteriores + esta) llega al mínimo del concepto → sí, con la alícuota del proveedor, la del concepto o la global
+ * (honorarios: la que resulta de la escala).
+ */
+export function propuestaRetencionOP(o: {
+  proveedor: ProveedorFiscal | null | undefined;
+  /** Condición frente al IVA con la que trabaja la OP (la del proveedor o la consultada). */
+  condicionIva: string | null | undefined;
+  aplicaSociedad: boolean;
+  minimoBienes: number;
+  tasaGlobal: number;
+  fecha: string;
+  basePrevia: number;
+  baseEstaOP: number;
+}): { aplica: boolean; pct: number; excluido: boolean } {
+  if (proveedorExcluido(o.proveedor, o.fecha)) return { aplica: false, pct: 0, excluido: true };
+  if (!isResponsableInscripto(o.condicionIva) || !o.aplicaSociedad) return { aplica: false, pct: 0, excluido: false };
+  const acumulado = o.basePrevia + o.baseEstaOP;
+  const regla = reglaPorConcepto(o.proveedor?.concepto_retencion_ganancias, o.minimoBienes);
+  const minimo = regla ? regla.minimo : o.minimoBienes;
+  if (acumulado < minimo) return { aplica: false, pct: 0, excluido: false };
+  return { aplica: true, pct: pctRetencion(regla, acumulado - minimo, o.proveedor?.alicuota_ganancias, o.tasaGlobal), excluido: false };
+}
+
+/**
+ * Paso 2: el importe (Art. 26 y 29 RG 830). Retención sobre lo que el acumulado del mes supera el mínimo, a la alícuota elegida,
+ * menos lo ya retenido en el mes; si no llega al importe mínimo de retención, 0. Un importe escrito a mano manda.
+ * `baseGanancias` es la parte de esta OP sujeta a retención (toda la base si el mes ya había superado el mínimo; si no, el excedente).
+ */
+export function importeRetencionOP(o: {
+  aplica: boolean;
+  pct: number;
+  minimo: number;
+  basePrevia: number;
+  baseEstaOP: number;
+  retenidoMes: number;
+  minimoRetencion: number;
+  manual?: number | null;
+}): { baseGanancias: number; bruta: number; retencion: number } {
+  const baseGanancias = !o.aplica ? 0 : o.basePrevia >= o.minimo ? o.baseEstaOP : (o.basePrevia + o.baseEstaOP) - o.minimo;
+  const bruta = !o.aplica || baseGanancias <= 0 ? 0
+    : Math.max(0, Math.max(0, (o.basePrevia + o.baseEstaOP) - o.minimo) * (o.pct / 100) - o.retenidoMes);
+  const retencion = o.manual !== null && o.manual !== undefined ? roundPaymentMoney(o.manual)
+    : bruta < o.minimoRetencion ? 0 : roundPaymentMoney(bruta);
+  return { baseGanancias, bruta, retencion };
 }

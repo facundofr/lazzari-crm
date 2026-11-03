@@ -143,4 +143,14 @@ assert.deepEqual(rangoProximaSemana("2026-10-27"), { desde: "2026-10-28", hasta:
   assert.equal(p.hasta, rangoProximaSemana("2026-10-27").hasta);
 }
 
+// P07: un propio que el banco ya pagó (PAGADO en el reporte eCheq) no está "en fecha para pagar" ni en la próxima semana.
+{
+  const base = { direccion: "emitido" as const, estado: "entregado", moneda: "ARS", monto: 100 };
+  const xs = [{ ...base, id: "a", numero: "1", fecha_pago: "2026-10-27" }, { ...base, id: "b", numero: "2", fecha_pago: "2026-10-27", estadoBanco: "PAGADO" },
+    { ...base, id: "c", numero: "3", fecha_pago: "2026-10-29", estadoBanco: "PAGADO" }] as ChequeFL[];
+  assert.equal(enFecha(xs, "2026-10-27").pagar.cantidad, 1);
+  assert.equal(proximaSemana(xs, "2026-10-27").pagar.cantidad, 0);
+  assert.equal(enFecha(xs, "2026-10-27", new Set(["1"])).pagar.cantidad, 0, "y el que el extracto ya debitó tampoco");
+}
+
 console.log("test-cheques-lazza OK");

@@ -54,6 +54,8 @@ assert.deepEqual(ch.semanas, [100_000 + 3_500_000 + 3_900_000, 5_100_000, 0, 0])
 assert.equal(ch.despues, 2_000_000);
 assert.equal(ch.vencido, 0, "los cheques no tienen vencido: en fecha se cubren esta semana");
 assert.equal(ch.cantidad, 5);
+// P07: el que el banco ya pagó según el reporte eCheq no se cubre (misma regla que Cheques y Finanzas).
+assert.equal(plazosCheques([...cheques, { ...C("pagadoBanco", "2026-11-04", 444_444), estadoBanco: "PAGADO" }], HOY, DOLAR, sem).cantidad, 5);
 const dias = chequesPorDia(cheques, HOY, DOLAR, sem[0]);
 assert.equal(dias.length, 7);
 assert.deepEqual(dias.filter((d) => d.cantidad).map((d) => [d.fecha, d.pesos]), [["2026-11-02", 100_000], ["2026-11-04", 3_500_000], ["2026-11-06", 3_900_000]], "el que está en fecha, hoy");

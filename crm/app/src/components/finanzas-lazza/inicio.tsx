@@ -11,7 +11,8 @@ import {
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
-import { rangoProximaSemana } from "@/lib/cheques-lazza";
+import { semanaACubrir, totalACubrir } from "@/lib/cheques-lazza";
+import { leerChequesDebitados } from "@/lib/cobertura-cheques";
 import { armarRetenciones, ivaDelMes } from "@/lib/finanzas-lazza";
 import { useUser } from "@/lib/auth-context";
 import { esCobroDeCliente } from "@/lib/tipos-movimiento";
@@ -156,15 +157,18 @@ function loaders(sociedadId: string, periodo: string, hoy: string, esLazzari: bo
     },
     // Bancos. 26/10/2026 (Augusto): el saldo del banco no se muestra por ahora; la tarjeta queda con los cheques propios de la semana.
     async () => {
-      // Cheques propios a debitar la próxima semana (23/10: la tarjeta Cheques se fue a Bancos y este dato viene con ella).
-      // 27/10 (arreglo 10): la misma «próxima semana» que Cheques (de mañana a 7 días), no «hoy a 7 días».
-      const sem = rangoProximaSemana(hoy);
+      // P07 (02/11/2026): los cheques propios A CUBRIR esta semana, con la regla de todo el CRM (lib/cheques-lazza): de hoy al
+      // domingo, con los que ya están en fecha (hasta 30 días), los de Martín F. y sin los que el banco ya debitó. Nunca contra el saldo.
+      const sem = semanaACubrir(hoy);
       const corto = (f: string) => formatDate(f).slice(0, 5);
-      const ch = await db.from("echeqs").select("id, monto").eq("sociedad_id", sociedadId).eq("direccion", "emitido")
-        .in("estado", ["pendiente", "entregado"]).gte("fecha_pago", sem.desde).lte("fecha_pago", sem.hasta);
-      const filas: any[] = ch.error ? [] : ch.data || [];
-      const aDebitar = filas.reduce((s: number, c: any) => s + Number(c.monto || 0), 0);
-      return { bancos: { valor: filas.length ? millones(aDebitar) : "—", sub: filas.length ? `${filas.length} cheques propios a debitar la próxima semana (${corto(sem.desde)} al ${corto(sem.hasta)})` : "sin cheques propios la próxima semana", tono: filas.length ? "naranja" : undefined } };
+      const [ch, debitados] = await Promise.all([
+        db.from("echeqs").select("numero, monto, moneda, fecha_pago, estado, direccion, estado_banco").eq("sociedad_id", sociedadId).eq("direccion", "emitido")
+          .in("estado", ["pendiente", "entregado"]).lte("fecha_pago", sem.hasta),
+        leerChequesDebitados(db, sociedadId, hoy),
+      ]);
+      const t = totalACubrir(((ch.error ? [] : ch.data) || []).map((c: any) => ({ ...c, estadoBanco: c.estado_banco })), hoy, sem.hasta, debitados);
+      const valor = [t.ARS > 0 ? millones(t.ARS) : "", t.USD > 0 ? `US$ ${Math.round(t.USD).toLocaleString("es-AR")}` : ""].filter(Boolean).join(" + ");
+      return { bancos: { valor: t.cantidad ? valor : "—", sub: t.cantidad ? `${t.cantidad} cheques propios a cubrir esta semana (hasta el ${corto(sem.hasta)}, con los ya en fecha)` : "sin cheques propios a cubrir esta semana", tono: t.cantidad ? "naranja" : undefined } };
     },
     // Facturar (arreglo 8): cuántos PR aprobados y restos esperan factura (la misma lista de la pestaña Facturar).
     async () => {

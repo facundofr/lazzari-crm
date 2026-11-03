@@ -5,18 +5,18 @@
 // NC del proveedor, facturas en US$ pagadas en pesos (BNA divisa), comprobantes leídos con IA, cheques de cartera,
 // pago parcial, pago parcial directo y "Guardar y enviar". Se monta al abrir y carga sola lo que necesita.
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { Badge } from "@/components/ui/badge";
 import { CopiarBtn } from "@/components/copiar-btn";
 import { FxSettlementDialog } from "@/components/fx-settlement-dialog";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { traerTodo } from "@/lib/paginar";
-import { proponerCheques, textoCondicionPago, type FechasChequeMes } from "@/lib/condicion-pago";
+import { pagoDeFactura, proponerCheques, textoCondicionPago, type FechasChequeMes, type PagoDeFactura } from "@/lib/condicion-pago";
 import { parsedPaymentForSingleInvoice, paymentDocumentFields } from "@/lib/payment-document-parser";
 import { chequeDelComprobante, numeroSinCeros, type ChequeCandidato } from "@/lib/cheque-comprobante-op";
 import { canonicalCondicionIva, isKnownCondicionIva, isResponsableInscripto } from "@/lib/fiscal-condition";
-import { pctRetencion, reglaPorConcepto } from "@/lib/retencion-conceptos";
+import { importeRetencionOP, minimoDelConcepto, propuestaRetencionOP, proveedorExcluido } from "@/lib/retencion-conceptos";
 import { columnasRetencionCongelada } from "@/lib/certificado-retencion";
 import { roundPaymentMoney, sumPaymentMoney } from "@/lib/payment-money";
 import { calcularPagoParcial } from "@/lib/op-parcial";
@@ -147,7 +147,7 @@ const SELECT_PROVEEDORES_OP = "id, razon_social, email, cuit, condicion_iva, for
 
 export interface OrdenPagoCreada { opId?: string; enviar: boolean }
 
-export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null, facturaIds, onClose, onCreada }: {
+export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null, facturaIds, pagoInicial, proveedorSugerido, onClose, onCreada }: {
   sociedadId: string;
   /** Proveedor ya elegido (Pagar desde la CC, Vencimientos o facturas de compra). */
   proveedorId?: string;
@@ -155,6 +155,10 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
   pagoParcialFCId?: string | null;
   /** Facturas que vienen tildadas (Finanzas Lazza → Vencimientos). */
   facturaIds?: string[];
+  /** Desde una línea del banco (02/11/2026): fecha de la OP y transferencia con el importe y la fecha de la línea; se pueden cambiar. */
+  pagoInicial?: { monto: number; fecha: string };
+  /** Proveedor con el mismo CUIT que la línea del banco: se muestra para elegirlo con un clic (nunca se elige solo). */
+  proveedorSugerido?: { id: string; nombre: string } | null;
   onClose: () => void;
   /** Se llama al registrar: la pantalla cierra la ventana y refresca lo suyo (con enviar, abre el mail de la OP). */
   onCreada: (r: OrdenPagoCreada) => void | Promise<void>;
@@ -164,7 +168,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
   const pagoParcialDirecto = !!pagoParcialFCId;
   // Aviso amarillo de la OP (pago parcial): informa, nunca frena.
   const [opAviso, setOpAviso] = useState("");
-  const [opForm, setOpForm] = useState(() => proveedorId ? { ...emptyOPForm, proveedor_id: proveedorId } : emptyOPForm);
+  const [opForm, setOpForm] = useState(() => ({ ...emptyOPForm, ...(proveedorId ? { proveedor_id: proveedorId } : {}), ...(pagoInicial ? { fecha: pagoInicial.fecha } : {}) }));
   const [opSaving, setOpSaving] = useState(false);
   const opRequestKeyRef = useRef("");
   const [opError, setOpError] = useState("");
@@ -176,14 +180,21 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
   const [opManualGanancias, setOpManualGanancias] = useState(false); // user manually toggled retención
   const [opMontoRetencionManual, setOpMontoRetencionManual] = useState<number | null>(null); // manual override of retention amount
   // FC pendientes del proveedor para vincular a la OP
-  interface OpFCPendiente { id: string; numero: string; tipo_comprobante: string; fecha: string; total: number; subtotal: number; iva: number; percepciones: number; saldo_pendiente: number; moneda: string; selected: boolean; monto_a_pagar: number }
+  interface OpFCPendiente { id: string; numero: string; tipo_comprobante: string; fecha: string; total: number; subtotal: number; iva: number; percepciones: number; saldo_pendiente: number; moneda: string; selected: boolean; monto_a_pagar: number; pago: PagoDeFactura; nc_no_contada: number }
   const [opFCPendientes, setOpFCPendientes] = useState<OpFCPendiente[]>([]);
+  // P04: forma de pago de las facturas tildadas (si todas dicen lo mismo, o la única que lo dice).
+  const opSugerenciaPago = useMemo(() => {
+    const textos = [...new Set(opFCPendientes.filter(f => f.selected && f.pago.texto).map(f => f.pago.texto))];
+    if (textos.length !== 1) return textos.length > 1 ? { texto: "formas de pago distintas: " + textos.map(t => t.replace(/^Pago:\s*/, "")).join(" / "), medio: null } : null;
+    const f = opFCPendientes.find(x => x.selected && x.pago.texto)!;
+    return { texto: f.pago.texto, medio: f.pago.medio };
+  }, [opFCPendientes]);
   // Fechas fijas de cheque de cada mes (Configuración → Fechas de cheque): la OP propone los cheques ahí.
   const [opChequeFechas, setOpChequeFechas] = useState<FechasChequeMes[]>([]);
   // Notas de crédito del proveedor con crédito disponible (se usan en la OP restando del pago)
   interface OpNCDisponible { id: string; numero: string; tipo_comprobante: string; fecha: string; total: number; subtotal: number; disponible: number; moneda: string; selected: boolean; monto_a_aplicar: number }
   const [opNCDisponibles, setOpNCDisponibles] = useState<OpNCDisponible[]>([]);
-  const [opMedios, setOpMedios] = useState<OpMedioPago[]>([makeOpMedio()]);
+  const [opMedios, setOpMedios] = useState<OpMedioPago[]>(() => [pagoInicial ? { ...makeOpMedio(), monto: pagoInicial.monto, fecha: pagoInicial.fecha, banco: "BBVA" } : makeOpMedio()]);
   const [opMonthlyBase, setOpMonthlyBase] = useState(0); // Acumulado mensual de bases sin IVA (de OPs previas)
   // Facturas en US$ se pagan en pesos: cotización BNA divisa vendedor del día hábil anterior al pago (editable).
   const [opCotizacion, setOpCotizacion] = useState("");
@@ -285,7 +296,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
     (async () => {
       try {
         // FC pendientes (incluir subtotal/iva/percepciones para base sin IVA — Art. 23 RG 830)
-        let q = (supabase as any).from("facturas_compra").select("id, numero_factura, tipo_comprobante, fecha, subtotal, iva, percepciones, total, moneda")
+        let q = (supabase as any).from("facturas_compra").select("id, numero_factura, tipo_comprobante, fecha, subtotal, iva, percepciones, total, total_acreditado, moneda, condicion_pago, dias_pago, notas")
           .eq("proveedor_id", opForm.proveedor_id).in("estado", ["pendiente", "recibida"])
           .not("tipo_comprobante", "ilike", "NC%");
         if (sociedadId) q = q.eq("sociedad_id", sociedadId);
@@ -295,6 +306,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
         // Pagos parciales previos: sumar montos ya pagados por FC via op_facturas_compra (excluir OPs anuladas)
         const fcIds = (data || []).map((fc: any) => fc.id);
         let pagadoPorFC: Record<string, number> = {};
+        const ncMovPorFC: Record<string, number> = {};
         if (fcIds.length > 0) {
           const { data: opfcData, error: linkedLoadError } = await (supabase as any).from("op_facturas_compra").select("factura_compra_id, monto, ordenes_pago(id, estado, sociedad_id)").in("factura_compra_id", fcIds);
           if (linkedLoadError) throw linkedLoadError;
@@ -303,13 +315,14 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
             if (r.ordenes_pago?.estado === "anulada") return; // Skip anulada OPs
             pagadoPorFC[r.factura_compra_id] = (pagadoPorFC[r.factura_compra_id] || 0) + Number(r.monto);
           });
-          let qDirect = (supabase as any).from("movimientos").select("factura_compra_id, monto, retencion_ganancias_monto, anulado")
+          let qDirect = (supabase as any).from("movimientos").select("factura_compra_id, monto, retencion_ganancias_monto, anulado, nota_credito_compra_id")
             .in("factura_compra_id", fcIds).eq("tipo", "pago");
           if (sociedadId) qDirect = qDirect.eq("sociedad_id", sociedadId);
           const { data: directData, error: directLoadError } = await qDirect;
           if (directLoadError) throw directLoadError;
           (directData || []).forEach((r: any) => {
             if (!r.anulado) pagadoPorFC[r.factura_compra_id] = (pagadoPorFC[r.factura_compra_id] || 0) + Number(r.monto || 0) + Number(r.retencion_ganancias_monto || 0);
+            if (!r.anulado && r.nota_credito_compra_id) ncMovPorFC[r.factura_compra_id] = (ncMovPorFC[r.factura_compra_id] || 0) + Number(r.monto || 0);
           });
         }
 
@@ -320,7 +333,10 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
           const esDirecta = pagoParcialDirecto && pagoParcialFCId === fc.id;
           // Desde Finanzas Lazza (Vencimientos) la factura elegida viene tildada; se pueden sumar otras.
           const tildada = esDirecta || (!pagoParcialDirecto && !!facturaIds?.includes(fc.id));
-          return { id: fc.id, numero: fc.numero_factura || "S/N", tipo_comprobante: fc.tipo_comprobante || "FC", fecha: fc.fecha, total: Number(fc.total), subtotal: Number(fc.subtotal || 0), iva: Number(fc.iva || 0), percepciones: Number(fc.percepciones || 0), saldo_pendiente: saldo, moneda: fc.moneda || "ARS", selected: tildada, monto_a_pagar: tildada ? saldo : 0 };
+          // P10 (02/11/2026): una NC que figura solo en total_acreditado (sin su movimiento) no la resta el saldo de la OP ni el
+          // control de la base: se avisa si con lo que se paga la factura queda pagada de más. Nunca frena.
+          const ncNoContada = roundPaymentMoney(Math.max(0, Number(fc.total_acreditado || 0) - (ncMovPorFC[fc.id] || 0)));
+          return { nc_no_contada: ncNoContada, id: fc.id, numero: fc.numero_factura || "S/N", tipo_comprobante: fc.tipo_comprobante || "FC", fecha: fc.fecha, total: Number(fc.total), subtotal: Number(fc.subtotal || 0), iva: Number(fc.iva || 0), percepciones: Number(fc.percepciones || 0), saldo_pendiente: saldo, moneda: fc.moneda || "ARS", selected: tildada, monto_a_pagar: tildada ? saldo : 0, pago: pagoDeFactura(fc) };
         }).filter((fc: any) => fc.saldo_pendiente > 0);
         // Cambiar la fecha vuelve a traer el acumulado del mes, pero no borra lo tildado ni lo escrito en «A pagar»
         // (auditoría UX 26/10/2026, arreglo 3). Otro proveedor no tiene facturas en común: arranca de cero.
@@ -329,7 +345,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
           return antes ? { ...p, selected: antes.selected, monto_a_pagar: Math.min(antes.monto_a_pagar, p.saldo_pendiente) } : p;
         }));
         // Sin facturas pendientes: abre directo como pago a cuenta (Augusto 19/10). Se puede apagar.
-        if (!pendientes.length && !pagoParcialDirecto) setOpForm(prev => prev.usar_monto_manual ? prev : { ...prev, usar_monto_manual: true, monto_manual: 0 });
+        if (!pendientes.length && !pagoParcialDirecto) setOpForm(prev => prev.usar_monto_manual ? prev : { ...prev, usar_monto_manual: true, monto_manual: pagoInicial?.monto ?? 0 });
 
         // NC del proveedor con crédito disponible (total − aplicaciones vigentes)
         try {
@@ -357,7 +373,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
         // Acumulado mensual de PAGOS (OPs) a este proveedor — Art. 26 RG 830
         // Se acumulan las bases sin IVA de OPs previas + retenciones ya practicadas
         // El acumulado de RG 830 corresponde al mes de la fecha de la OP.
-        const mesActual = (opForm.fecha || new Date().toISOString().slice(0, 10)).slice(0, 7); // YYYY-MM
+        const mesActual = (opForm.fecha || todayAR()).slice(0, 7); // YYYY-MM
         const [year, month] = mesActual.split("-").map(Number);
         const mesSiguiente = new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10);
         let qMensualOP = (supabase as any).from("ordenes_pago").select("base_retencion_ganancias, retencion_ganancias_monto, moneda")
@@ -509,34 +525,13 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
   useEffect(() => {
     if (opManualGanancias) return; // respect manual override
     if (opProvCondicion === null || opBaseSinIVA <= 0) return;
-    let aplica_ganancias = false;
-    let retencion_ganancias_pct = 0;
     const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
-    // Check exclusion certificate validity
-    // La vigencia se evalúa contra la fecha real del pago, no contra hoy.
-    const hoy = opForm.fecha || new Date().toISOString().slice(0, 10);
-    const excluido = prov?.exclusion_retencion
-      && (!prov.exclusion_retencion_desde || prov.exclusion_retencion_desde <= hoy)
-      && (!prov.exclusion_retencion_hasta || prov.exclusion_retencion_hasta >= hoy);
-    if (excluido) {
-      setOpForm(prev => ({ ...prev, aplica_ganancias: false, retencion_ganancias_pct: 0 }));
-      return;
-    }
-    // AFIP puede devolver "RI" o la descripción completa. Normalizamos para
-    // no dejar pasar una retención por diferencias de formato; Monotributo,
-    // Exento y Consumidor Final no son sujetos en este circuito.
-    const esResponsableInscripto = isResponsableInscripto(opProvCondicion);
-    if (esResponsableInscripto && retencionConfig.aplica_ganancias) {
-      // Art. 26: acumular bases sin IVA del mes + esta OP
-      const acumuladoMensual = opMonthlyBase + opBaseSinIVA;
-      // Mínimo y alícuota según el concepto del proveedor (sin concepto = bienes)
-      const regla = reglaPorConcepto(prov?.concepto_retencion_ganancias, retencionConfig.minimo_ganancias);
-      const minimoConcepto = regla ? regla.minimo : retencionConfig.minimo_ganancias;
-      if (acumuladoMensual >= minimoConcepto) {
-        aplica_ganancias = true;
-        retencion_ganancias_pct = pctRetencion(regla, acumuladoMensual - minimoConcepto, prov?.alicuota_ganancias, retencionConfig.tasa_ganancias_ri);
-      }
-    }
+    // P08 (02/11/2026): la regla está en lib/retencion-conceptos (con prueba). La vigencia de la exclusión se evalúa contra la
+    // fecha de la OP, no contra hoy. AFIP puede devolver "RI" o la descripción completa: isResponsableInscripto normaliza.
+    const { aplica: aplica_ganancias, pct: retencion_ganancias_pct } = propuestaRetencionOP({
+      proveedor: prov, condicionIva: opProvCondicion, aplicaSociedad: retencionConfig.aplica_ganancias, minimoBienes: retencionConfig.minimo_ganancias,
+      tasaGlobal: retencionConfig.tasa_ganancias_ri, fecha: opForm.fecha || todayAR(), basePrevia: opMonthlyBase, baseEstaOP: opBaseSinIVA,
+    });
     setOpForm(prev => ({ ...prev, aplica_ganancias, retencion_ganancias_pct }));
   }, [opProvCondicion, opBaseSinIVA, retencionConfig, opMonthlyBase, opForm.proveedor_id, opForm.fecha, opManualGanancias]);
 
@@ -549,7 +544,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
   // 5. Verificar monto mínimo de retención (Art. 29)
   const opMinimoGanancias = (() => {
     const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
-    return reglaPorConcepto(prov?.concepto_retencion_ganancias, retencionConfig.minimo_ganancias)?.minimo ?? retencionConfig.minimo_ganancias;
+    return minimoDelConcepto(prov?.concepto_retencion_ganancias, retencionConfig.minimo_ganancias);
   })();
   // Mejora H (auditoría de Impuestos, 27/10/2026): con qué se calculó la retención, para anotarlo en la OP o el pago directo.
   const opRetencionAnotada = () => columnasRetencionCongelada({
@@ -558,31 +553,11 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
   });
   const avisoSinAnotar = (registrado: string, motivo: string) =>
     alert(`${registrado}. No se pudo anotar con qué régimen se calculó la retención (${motivo}): el certificado y el TXT SICORE la toman del concepto de hoy del proveedor.`);
-  const opBaseGanancias = (() => {
-    if (!opForm.aplica_ganancias) return 0;
-    const minimo = opMinimoGanancias;
-    if (opMonthlyBase >= minimo) return opBaseSinIVA; // ya superó antes → retener sobre toda la base sin IVA de esta OP
-    return (opMonthlyBase + opBaseSinIVA) - minimo; // esta OP cruza → solo excedente
-  })();
-
-  // Retención bruta sobre acumulado, menos retenciones ya practicadas (Art. 26)
-  const opRetencionGananciaBruta = (() => {
-    if (!opForm.aplica_ganancias || opBaseGanancias <= 0) return 0;
-    const minimo = opMinimoGanancias;
-    // Calcular retención sobre el acumulado total del mes
-    const baseAcumulada = Math.max(0, (opMonthlyBase + opBaseSinIVA) - minimo);
-    const retencionAcumulada = baseAcumulada * (opForm.retencion_ganancias_pct / 100);
-    // Restar lo ya retenido en OPs previas del mes
-    return Math.max(0, retencionAcumulada - opMonthlyRetenido);
-  })();
-
-  // Art. 29: si la retención es menor al mínimo, no retener
-  // Allow manual override of the final amount
-  const opRetencionGanancias = opMontoRetencionManual !== null
-    ? roundPaymentMoney(opMontoRetencionManual)
-    : opRetencionGananciaBruta < retencionConfig.minimo_retencion_ganancias
-      ? 0
-      : roundPaymentMoney(opRetencionGananciaBruta);
+  // Retención sobre el acumulado del mes, menos lo ya retenido (Art. 26); menor al mínimo → 0 (Art. 29); el importe a mano manda.
+  const { baseGanancias: opBaseGanancias, bruta: opRetencionGananciaBruta, retencion: opRetencionGanancias } = importeRetencionOP({
+    aplica: opForm.aplica_ganancias, pct: opForm.retencion_ganancias_pct, minimo: opMinimoGanancias, basePrevia: opMonthlyBase,
+    baseEstaOP: opBaseSinIVA, retenidoMes: opMonthlyRetenido, minimoRetencion: retencionConfig.minimo_retencion_ganancias, manual: opMontoRetencionManual,
+  });
   const opNetoAPagar = roundPaymentMoney(opMontoBruto - opRetencionGanancias);
   const opTotalMedios = sumPaymentMoney(opMedios.map(m => m.monto));
   const opDiferencia = roundPaymentMoney(opNetoAPagar - opTotalMedios);
@@ -1088,6 +1063,12 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
                     )}
                   </div>
                 )}
+                {!opForm.proveedor_id && !proveedorSearch.trim() && proveedorSugerido && (
+                  <button type="button" onClick={() => { setOpForm({ ...opForm, proveedor_id: proveedorSugerido.id }); setProveedorSearch(proveedorSugerido.nombre); }}
+                    className="mt-1 w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-left text-sm text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+                    💡 Parece de <b>{proveedorSugerido.nombre}</b> (mismo CUIT que el banco). Tocá para elegirlo.
+                  </button>
+                )}
                 {!opForm.proveedor_id && proveedorSearch.trim() && filteredProveedoresOP.length > 0 && (
                   <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
                     {filteredProveedoresOP.slice(0, 10).map(p => (
@@ -1144,7 +1125,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
                               }}
                               className="rounded border-zinc-300 text-orange-500 focus:ring-orange-500" />
                           </td>
-                          <td className="px-2 py-1 font-mono text-xs dark:text-white">{fc.numero || "S/N"}</td>
+                          <td className="px-2 py-1 font-mono text-xs dark:text-white">{fc.numero || "S/N"}{fc.pago.texto && <span className="block font-sans text-[11px] text-blue-700 dark:text-blue-300" title="Lo que se cargó con la factura en Compras">{fc.pago.texto}</span>}</td>
                           <td className="px-2 py-1 text-xs text-zinc-500">{formatDate(fc.fecha)}</td>
                           <td className="px-2 py-1 text-right font-mono text-xs text-zinc-500">{formatCurrency(fc.total, fc.moneda as "ARS"|"USD")}</td>
                           <td className="px-2 py-1 text-right font-mono text-xs font-medium dark:text-white">{formatCurrency(fc.saldo_pendiente, fc.moneda as "ARS"|"USD")}</td>
@@ -1164,6 +1145,24 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
                       ))}
                     </tbody>
                   </table>
+                </div>
+              )}
+              {/* P10 (auditoría 02/11/2026): aviso, nunca freno. El control de la base (pagar más que el total) sigue igual. */}
+              {opFCPendientes.filter(f => f.selected && f.nc_no_contada > 0.005 && f.monto_a_pagar > f.saldo_pendiente - f.nc_no_contada + 0.005).map(f => (
+                <p key={`nc-${f.id}`} className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+                  ⚠️ {f.numero}: tiene una nota de crédito de {formatCurrency(f.nc_no_contada, f.moneda as "ARS" | "USD")} que este saldo no resta. Pagando {formatCurrency(f.monto_a_pagar, f.moneda as "ARS" | "USD")} queda pagada de más por {formatCurrency(roundPaymentMoney(f.monto_a_pagar - (f.saldo_pendiente - f.nc_no_contada)), f.moneda as "ARS" | "USD")}.
+                </p>
+              ))}
+              {/* P04 (auditoría 02/11/2026): la forma de pago cargada con la factura en Compras se sugiere; nunca se elige sola. */}
+              {opSugerenciaPago && (
+                <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1.5 text-xs text-blue-800 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-200">
+                  <span>💡 Las facturas tildadas dicen: <b>{opSugerenciaPago.texto}</b></span>
+                  {opSugerenciaPago.medio && opMedios.length === 1 && opMedios[0].tipo !== opSugerenciaPago.medio && !opMedios[0].echeq_id && (
+                    <button type="button" onClick={() => setOpMedios(prev => prev.length === 1 ? [{ ...prev[0], tipo: opSugerenciaPago.medio! }] : prev)}
+                      className="rounded-md border border-blue-300 bg-white px-2 py-0.5 font-medium hover:bg-blue-100 dark:border-blue-800 dark:bg-zinc-900">
+                      Usar {opSugerenciaPago.medio === "echeq" ? "eCheq" : "transferencia"}
+                    </button>
+                  )}
                 </div>
               )}
               {!opForm.usar_monto_manual && !pagoParcialDirecto && opNCDisponibles.some(n => n.moneda === opMonedaDocs) && (
@@ -1259,8 +1258,8 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
               </div>
               {/* Exclusion badge */}
               {(() => { const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
-                const hoy = new Date().toISOString().slice(0, 10);
-                const excluido = prov?.exclusion_retencion && (!prov.exclusion_retencion_desde || prov.exclusion_retencion_desde <= hoy) && (!prov.exclusion_retencion_hasta || prov.exclusion_retencion_hasta >= hoy);
+                // P08: con la fecha de la OP (antes, la de hoy en UTC: una exclusión vencida entre esas fechas mostraba otra cosa).
+                const excluido = prov && proveedorExcluido(prov, opForm.fecha || todayAR());
                 return excluido ? (
                   <div className="flex items-center gap-1.5 rounded bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 px-2 py-0.5">
                     <ShieldCheck className="h-3 w-3 text-emerald-500" />

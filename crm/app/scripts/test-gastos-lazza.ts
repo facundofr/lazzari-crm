@@ -1,6 +1,6 @@
 // npx tsx scripts/test-gastos-lazza.ts
 import assert from "node:assert/strict";
-import { filasDeTransportes, GRUPOS_EDITABLES, esGastoFijo, fijosCubiertos, gastoParecido, numeroVep, nombreGrupo, armarFilasGastos, filtrarGastos, fijosSinCargar, grupoDe, grupoDeCategoria, mesDelDetalleFijo, totalesPorGrupo, venceEnMes, type FijoRow, type GastoRow } from "../src/lib/gastos-lazza";
+import { filasDeTransportes, GRUPOS_EDITABLES, esGastoFijo, fijosCubiertos, gastoParecido, numeroVep, nombreGrupo, armarFilasGastos, filtrarGastos, fijosSinCargar, grupoDe, grupoDeCategoria, mesDelDetalleFijo, totalesPorGrupo, venceEnMes, yaEstaEnBancoOVisa, type FijoRow, type GastoRow } from "../src/lib/gastos-lazza";
 
 assert.equal(grupoDeCategoria("Sueldos"), "Personal");
 assert.equal(grupoDeCategoria("Premios"), "Premios"); // 28/10: grupo nuevo, seguido a Sueldos
@@ -110,6 +110,20 @@ assert.equal(numeroVep("Luz octubre"), null);
   const cub = fijosCubiertos(fijosProv, [{ proveedor_id: "p-musso", numero_factura: "00001-00000556" }, { proveedor_id: "otro", numero_factura: "9" }]);
   assert.equal(cub.get("musso")?.numero_factura, "00001-00000556");
   assert.equal(cub.has("alq"), false, "sin proveedor no se cubre");
+}
+
+// Aviso "ya está en el banco o en la Visa" (02/11/2026): solo avisa.
+{
+  const lineas = [{ fecha: "2026-10-14", descripcion: "COMISION MANT CTA", monto: 12500 }];
+  const consumos = [{ fecha: "2026-10-05", comercio: "MERCADOLIBRE", importe: 155850, moneda: "ARS" }, { fecha: "2026-10-07", comercio: "ANTHROPIC", importe: 146.98, moneda: "USD" }];
+  const g = (x: Partial<{ fecha: string; monto: number; moneda: string; medio: string | null }>) => ({ fecha: "2026-10-15", monto: 1, moneda: "ARS", medio: "transferencia", ...x });
+  assert.match(yaEstaEnBancoOVisa(g({ monto: 12500.6 }), lineas, consumos) || "", /^Ya está en el banco: 14\/10 · COMISION MANT CTA/);
+  assert.equal(yaEstaEnBancoOVisa(g({ monto: 12500, fecha: "2026-10-30" }), lineas, consumos), null, "más de 7 días: no es esa");
+  assert.match(yaEstaEnBancoOVisa(g({ monto: 155850 }), lineas, consumos) || "", /^Está en el resumen de la Visa: 05\/10 · MERCADOLIBRE/);
+  assert.equal(yaEstaEnBancoOVisa(g({ monto: 155850, medio: "tarjeta_visa_1582" }), lineas, consumos), null, "cargado con la Visa: está bien");
+  assert.match(yaEstaEnBancoOVisa(g({ monto: 146.98, moneda: "USD" }), lineas, consumos) || "", /ANTHROPIC · US\$ 146,98/);
+  assert.equal(yaEstaEnBancoOVisa(g({ monto: 146.98 }), lineas, consumos), null, "otra moneda: no es ese");
+  assert.equal(yaEstaEnBancoOVisa(g({ monto: 999 }), lineas, consumos), null);
 }
 
 console.log("test-gastos-lazza OK");

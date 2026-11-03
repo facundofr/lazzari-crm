@@ -7,7 +7,8 @@
 // con el cambio de cada factura (facturadoMesNeto.equivalenteARS). Nunca se compara con el saldo del banco (Augusto 28/10).
 // Prueba: scripts/test-tablero-inicio.ts
 import type { FilaVencimiento } from "./finanzas-lazza";
-import { chequePendiente, domingoDe } from "./cheques-plazo";
+import { domingoDe } from "./cheques-plazo";
+import { fechaACubrir as fechaACubrirComun } from "./cheques-lazza";
 import { normalizarMoneda } from "./reportes-comprobantes";
 
 export interface ChequeTablero {
@@ -19,6 +20,8 @@ export interface ChequeTablero {
   estado: string;
   direccion?: string | null;
   destino_nombre?: string | null;
+  /** Estado según el banco (reporte eCheq): PAGADO = ya debitado, no se cubre. */
+  estadoBanco?: string | null;
 }
 
 export interface Semana { desde: string; hasta: string }
@@ -94,11 +97,11 @@ export function plazosFacturas(filas: FilaVencimiento[], lado: "venta" | "compra
   return cerrar(p);
 }
 
-/** Fecha de pago de un cheque propio que todavía hay que cubrir, o null (ya debitado, anulado, recibido o vencido hace más de 30 días). */
+/** Fecha de pago de un cheque propio que todavía hay que cubrir, o null. La regla es la de todo el CRM (lib/cheques-lazza, P07);
+ *  los que el banco ya debitó según el extracto los saca la pantalla antes de llamar (leerChequesDebitados). */
 function fechaACubrir(ch: ChequeTablero, hoy: string): string | null {
-  if ((ch.direccion ?? "emitido") !== "emitido" || !chequePendiente(ch) || !ch.fecha_pago) return null;
-  const f = String(ch.fecha_pago).slice(0, 10);
-  return f < masDias(hoy, -30) ? null : f;
+  // La fecha de pago original (la agenda muestra "en fecha desde …"); el que ya está en fecha cuenta esta semana.
+  return fechaACubrirComun(ch, hoy) ? String(ch.fecha_pago).slice(0, 10) : null;
 }
 
 /** Cheques propios a cubrir por plazo. Los que ya están en fecha cuentan en esta semana: el banco los puede debitar cualquier día. */

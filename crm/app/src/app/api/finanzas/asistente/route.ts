@@ -6,6 +6,9 @@ import { registrarUsoIA } from "@/lib/ia-uso";
 import { buscarEnCorreo, correrAgenteMail } from "@/lib/agente-mail-server";
 import { SUBTIPO_LABEL, CLASIFICACION_LABEL, type ClasificacionLinea } from "@/lib/extracto-bbva";
 import { saldosDeFacturas } from "@/lib/saldo-clientes";
+import { saldoFacturaCompra, type PagoDirectoFC } from "@/lib/finanzas-lazza";
+import { fechaACubrir } from "@/lib/cheques-lazza";
+import { leerChequesDebitados } from "@/lib/cobertura-cheques";
 
 /**
  * Asistente de Finanzas (16/10/2026): chat con IA experta en finanzas que contesta con los datos reales del CRM.
@@ -80,21 +83,31 @@ async function ejecutar(nombre: string, input: any, ctx: { db: any; soc: string;
     case "estado_caja": {
       const dias = Math.min(90, Math.max(1, Number(input?.dias) || 7));
       const hasta = sumarDias(hoy, dias);
-      const [{ data: cuentas }, chs, fcs] = await Promise.all([
+      const [{ data: cuentas }, chs, fcs, pagosFC, debitados] = await Promise.all([
         db.from("cuentas_financieras").select("nombre, tipo, moneda, saldo_banco, saldo_banco_fecha, acuerdo, activa").eq("sociedad_id", soc).eq("activa", true).order("orden"),
-        traer(() => db.from("echeqs").select("numero, monto, direccion, estado, fecha_pago, destino_nombre, origen_nombre, cubre_tercero").eq("sociedad_id", soc).in("estado", ["pendiente", "entregado", "en_cartera", "depositado"]).order("id")),
-        traer(() => db.from("facturas_compra").select("numero_factura, total, total_acreditado, moneda, fecha_vencimiento, estado, proveedores(razon_social)").eq("sociedad_id", soc).neq("estado", "pagada").order("id")),
+        traer(() => db.from("echeqs").select("numero, monto, moneda, direccion, estado, estado_banco, fecha_pago, destino_nombre, origen_nombre, cubre_tercero").eq("sociedad_id", soc).in("estado", ["pendiente", "entregado", "en_cartera", "depositado"]).order("id")),
+        traer(() => db.from("facturas_compra").select("id, fecha, numero_factura, tipo_comprobante, iva, total, total_acreditado, moneda, fecha_vencimiento, estado, proveedores(razon_social), op_facturas_compra(monto, ordenes_pago(estado))")
+          .eq("sociedad_id", soc).not("estado", "in", "(pagada,anulada)").order("id")),
+        // P24 (auditoría 02/11/2026): el saldo es el mismo que Finanzas (OP vigentes, pagos directos con retención y NC una vez);
+        // antes era total − acreditado y mostraba de más las facturas con pago parcial.
+        traer(() => db.from("movimientos").select("id, factura_compra_id, monto, retencion_ganancias_monto, anulado, nota_credito_compra_id")
+          .eq("sociedad_id", soc).eq("tipo", "pago").not("factura_compra_id", "is", null).order("id")),
+        leerChequesDebitados(db, soc, hoy),
       ]);
-      const propios = chs.filter((c) => c.direccion === "emitido" && c.fecha_pago && c.fecha_pago <= hasta);
+      const pagosDe = new Map<string, PagoDirectoFC[]>();
+      for (const p of pagosFC as PagoDirectoFC[]) if (p.factura_compra_id) pagosDe.set(p.factura_compra_id, [...(pagosDe.get(p.factura_compra_id) || []), p]);
+      const saldoFC = (f: any) => saldoFacturaCompra(f, pagosDe.get(f.id) || []);
+      // P07: la regla de "a cubrir" de todo el CRM (sin los vencidos hace más de 30 días ni los que el banco ya debitó; los de Martín F. suman).
+      const propios = chs.filter((c) => { const f = fechaACubrir({ ...c, estadoBanco: c.estado_banco }, hoy, debitados); return f !== null && f <= hasta; });
       const atrasados = propios.filter((c) => c.fecha_pago < hoy);
       const cartera = chs.filter((c) => c.direccion !== "emitido");
-      const fcVencen = fcs.filter((f) => f.fecha_vencimiento && f.fecha_vencimiento <= hasta);
+      const fcVencen = fcs.filter((f) => f.fecha_vencimiento && f.fecha_vencimiento <= hasta && saldoFC(f) > 0);
       return {
         hoy,
         cuentas: (cuentas || []).map((c: any) => ({ cuenta: c.nombre, tipo: c.tipo, moneda: c.moneda, saldo_segun_banco: c.saldo_banco, al: c.saldo_banco_fecha, acuerdo: c.acuerdo, extracto_atrasado_dias: c.saldo_banco_fecha ? diasEntre(c.saldo_banco_fecha, hoy) : null })),
         cheques_propios_a_pagar: { hasta, cantidad: propios.length, total: r2(propios.reduce((s, c) => s + Number(c.monto), 0)), en_fecha_sin_debitar: atrasados.length, detalle: propios.sort((a, b) => a.fecha_pago.localeCompare(b.fecha_pago)).slice(0, 40).map((c) => ({ numero: c.numero, paga: c.fecha_pago, monto: Number(c.monto), a: c.destino_nombre, lo_cubre: c.cubre_tercero })) },
         cheques_de_terceros_en_cartera: { cantidad: cartera.length, total: r2(cartera.reduce((s, c) => s + Number(c.monto), 0)), detalle: cartera.slice(0, 20).map((c) => ({ numero: c.numero, cobra: c.fecha_pago, monto: Number(c.monto), de: c.origen_nombre, estado: c.estado })) },
-        facturas_compra_por_vencer: fcVencen.slice(0, 30).map((f) => ({ proveedor: f.proveedores?.razon_social, numero: f.numero_factura, vence: f.fecha_vencimiento, aprox_saldo: r2(Number(f.total) - Number(f.total_acreditado || 0)), moneda: f.moneda, estado: f.estado })),
+        facturas_compra_por_vencer: fcVencen.slice(0, 30).map((f) => ({ proveedor: f.proveedores?.razon_social, numero: f.numero_factura, vence: f.fecha_vencimiento, saldo: saldoFC(f), moneda: f.moneda, estado: f.estado })),
       };
     }
     case "cobranzas": {

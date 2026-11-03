@@ -104,6 +104,36 @@ export function cobradoPorFactura(
   return out;
 }
 
+/**
+ * Lo cobrado por factura para COBRAR (Facturación y la nota de crédito, lib/cobros-previos-venta → fetchCobradoMap). Misma cuenta
+ * que cobradoPorFactura (un cobro con aplicaciones se cuenta por ellas, los anulados no), pero en vez de ignorar lo dudoso lo frena:
+ * un cobro directo en otra moneda o un importe inválido (no se puede saber cuánto falta). Sin redondear. Prueba: test-casos-de-oro.
+ */
+export function cobradoParaCobrar(
+  documentos: { id: string; moneda: string }[],
+  directos: { id: string; factura_id: string; monto: unknown; moneda?: string | null; anulado?: boolean | null }[],
+  aplicaciones: { movimiento_id?: string | null; factura_id: string; monto: unknown; movimientos?: { anulado?: boolean | null } | { anulado?: boolean | null }[] | null }[],
+): Record<string, number> {
+  const totals: Record<string, number> = {};
+  const movimientosAplicados = new Set<string>(aplicaciones.map((a) => a.movimiento_id).filter(Boolean) as string[]);
+  for (const m of directos) {
+    if (m.anulado || movimientosAplicados.has(m.id)) continue;
+    const doc = documentos.find((f) => f.id === m.factura_id);
+    if (!doc || (m.moneda || "ARS") !== doc.moneda) throw new Error("Hay un cobro previo en otra moneda sin aplicación conciliada. Revisalo antes de continuar.");
+    if (!Number.isFinite(Number(m.monto))) throw new Error("Un cobro previo tiene un importe inválido.");
+    totals[m.factura_id] = (totals[m.factura_id] || 0) + Number(m.monto);
+  }
+  for (const a of aplicaciones) {
+    const movement = Array.isArray(a.movimientos) ? a.movimientos[0] : a.movimientos;
+    if (!movement) throw new Error("Una aplicación no tiene un movimiento verificable.");
+    if (movement.anulado) continue;
+    if (!Number.isFinite(Number(a.monto))) throw new Error("Una aplicación de cobro tiene un importe inválido.");
+    // La aplicación está SIEMPRE en la moneda de la factura (el efectivo en US$ va con factura_id null): no se suma como directo.
+    totals[a.factura_id] = (totals[a.factura_id] || 0) + Number(a.monto);
+  }
+  return totals;
+}
+
 /** Saldo pendiente de una factura (nunca negativo). Anuladas y NC = 0. */
 export function saldoFacturaVenta(f: FacturaCC, cobrado: number): number {
   if (f.estado === "anulada" || esNC(f.tipo)) return 0;

@@ -113,3 +113,42 @@ export function detalleDebitoAutomatico(nota: string | null | undefined): string
     .replace(/\s+/g, " ")
     .trim();
 }
+
+// ── Pestañas de "Movimientos del banco" (Augusto 02/11/2026: pestañas, no filtros; "Ver por tipo" pasa adentro) ──
+// Las transferencias se separan en las que entran y las que salen; lo que no tiene tipo va a "Otros". Toda línea cae en una sola.
+export type PestanaBanco =
+  | "entran" | "salen" | "impuestos_comisiones" | "cheques" | "debitos_automaticos" | "tarjeta" | "propios" | "efectivo" | "otros";
+
+export const PESTANAS_BANCO: Array<{ id: PestanaBanco; nombre: string; ayuda: string }> = [
+  { id: "entran", nombre: "Transferencias que entran", ayuda: "Cobros y otras transferencias que entraron." },
+  { id: "salen", nombre: "Transferencias que salen", ayuda: "Pagos y otras transferencias que salieron." },
+  { id: "impuestos_comisiones", nombre: "Impuestos y comisiones", ayuda: TIPOS_MOV.find((t) => t.id === "impuestos_comisiones")!.ayuda },
+  { id: "cheques", nombre: "Cheques", ayuda: TIPOS_MOV.find((t) => t.id === "cheques")!.ayuda },
+  { id: "debitos_automaticos", nombre: "Débitos automáticos", ayuda: TIPOS_MOV.find((t) => t.id === "debitos_automaticos")!.ayuda },
+  { id: "tarjeta", nombre: "Tarjeta", ayuda: TIPOS_MOV.find((t) => t.id === "tarjeta")!.ayuda },
+  { id: "propios", nombre: "Entre cuentas propias", ayuda: TIPOS_MOV.find((t) => t.id === "propios")!.ayuda },
+  { id: "efectivo", nombre: "Efectivo", ayuda: TIPOS_MOV.find((t) => t.id === "efectivo")!.ayuda },
+  { id: "otros", nombre: "Otros", ayuda: "Intereses, gastos personales, lo marcado como otro y lo que no tiene tipo." },
+];
+
+export function pestanaDeLinea(l: LineaMov): PestanaBanco {
+  const t = clasificarMovimiento(l).tipo;
+  if (t === "transferencias") return l.tipo === "credito" ? "entran" : "salen";
+  if (t === "sin_clasificar") return "otros";
+  return t;
+}
+
+export interface ResumenPestana { id: PestanaBanco | "todas"; cant: number; entradas: number; salidas: number }
+
+/** Cantidad, entradas y salidas de cada pestaña (más "todas"). La suma de las pestañas da siempre el total. */
+export function resumenPestanas(lineas: LineaMov[]): ResumenPestana[] {
+  const vacio = (id: ResumenPestana["id"]): ResumenPestana => ({ id, cant: 0, entradas: 0, salidas: 0 });
+  const m = new Map<ResumenPestana["id"], ResumenPestana>([["todas", vacio("todas")], ...PESTANAS_BANCO.map((p) => [p.id, vacio(p.id)] as const)]);
+  for (const l of lineas) {
+    for (const r of [m.get("todas")!, m.get(pestanaDeLinea(l))!]) {
+      r.cant++;
+      if (l.tipo === "credito") r.entradas += Number(l.monto); else r.salidas += Number(l.monto);
+    }
+  }
+  return [...m.values()].map((r) => ({ ...r, entradas: r2(r.entradas), salidas: r2(r.salidas) }));
+}

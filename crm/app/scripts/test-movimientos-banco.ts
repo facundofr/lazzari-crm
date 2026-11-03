@@ -1,6 +1,6 @@
 // Prueba rápida: npx tsx scripts/test-movimientos-banco.ts
 import assert from "node:assert/strict";
-import { clasificarMovimiento, resumenPorTipo, resumenImpuestos, detalleDebitoAutomatico, TIPOS_MOV, type LineaMov } from "../src/lib/movimientos-banco";
+import { clasificarMovimiento, resumenPorTipo, resumenImpuestos, detalleDebitoAutomatico, pestanaDeLinea, resumenPestanas, TIPOS_MOV, type LineaMov } from "../src/lib/movimientos-banco";
 
 let n = 0;
 const l = (descripcion: string, tipo: "credito" | "debito", monto: number, clasificacion: string | null = null, subtipo: string | null = null): LineaMov =>
@@ -67,5 +67,22 @@ assert.equal(detalleDebitoAutomatico("Débito automático: ARBA plan de pagos we
 assert.equal(detalleDebitoAutomatico("Débito automático: Seguro — Federación Patronal Seguros póliza 0436118496000000140926 — octubre"), "Seguro — Federación Patronal Seguros póliza 0436118496000000140926 — octubre");
 assert.equal(detalleDebitoAutomatico(null), "");
 assert.equal(detalleDebitoAutomatico(""), "");
+
+// Pestañas: las transferencias se separan por sentido; lo que no tiene tipo va a "Otros"; la suma da el total.
+assert.equal(pestanaDeLinea(l("TRANSF.BANEL 603658 #136", "debito", 1)), "salen");
+assert.equal(pestanaDeLinea(l("TRANSFERENCIA RECIBIDA 30712345678 #262", "credito", 1)), "entran");
+assert.equal(pestanaDeLinea(l("ALGO RARO", "credito", 1)), "otros");
+assert.equal(pestanaDeLinea(l("COMISION MANT CTA #037", "debito", 1)), "impuestos_comisiones");
+assert.equal(pestanaDeLinea(l("TRANSFERENCI 400913398713 #263", "credito", 1)), "propios");
+{
+  const ls = [l("TRANSF.BANEL 1 #136", "debito", 100), l("TRANSFERENCIA RECIBIDA #262", "credito", 250.5), l("COMISION #037", "debito", 10), l("IVA #236", "debito", 2.1), l("ALGO", "credito", 5)];
+  const r = resumenPestanas(ls);
+  const todas = r.find((x) => x.id === "todas")!;
+  assert.deepEqual(todas, { id: "todas", cant: 5, entradas: 255.5, salidas: 112.1 });
+  const resto = r.filter((x) => x.id !== "todas");
+  assert.equal(resto.reduce((s, x) => s + x.cant, 0), 5);
+  assert.deepEqual(r.find((x) => x.id === "impuestos_comisiones"), { id: "impuestos_comisiones", cant: 2, entradas: 0, salidas: 12.1 });
+  assert.deepEqual(r.find((x) => x.id === "entran"), { id: "entran", cant: 1, entradas: 250.5, salidas: 0 });
+}
 
 console.log("test-movimientos-banco OK");

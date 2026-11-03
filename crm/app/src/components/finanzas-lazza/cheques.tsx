@@ -15,7 +15,8 @@ import { traerTodo } from "@/lib/paginar";
 import { useUser } from "@/lib/auth-context";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { chequePendiente } from "@/lib/cheques-plazo";
-import { enFecha, estaEnFecha, estadoCheque, opsDeCheques, ordenCheques, proximaSemana, proximasSemanas, resumenPorEstado, situacionPago, type ChequeFL, type OpDelCheque, type Total } from "@/lib/cheques-lazza";
+import { enFecha, estaEnFecha, estadoCheque, opsDeCheques, ordenCheques, proximaSemana, proximasSemanas, resumenPorEstado, semanaACubrir, situacionPago, totalACubrir, type ChequeFL, type OpDelCheque, type Total } from "@/lib/cheques-lazza";
+import { leerChequesDebitados } from "@/lib/cobertura-cheques";
 import { ChequesBanco } from "./cheques-banco";
 import { verOP } from "./orden-pago-doc";
 import { abrirRecibo, traerRecibo } from "./recibo-doc";
@@ -132,12 +133,16 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
     return () => { vivo = false; };
   }, [sociedadId]);
   useEffect(() => { setCheques(null); return cargar(); }, [cargar]);
+  // P07: los que el banco ya debitó según el extracto no se cubren (la misma lectura que el Inicio y Finanzas).
+  const [debitados, setDebitados] = useState<Set<string>>(new Set());
+  useEffect(() => { let vivo = true; void leerChequesDebitados(supabase as any, sociedadId, hoy).then((d) => { if (vivo) setDebitados(d); }); return () => { vivo = false; }; }, [sociedadId, hoy]);
 
   const todos = cheques || [];
-  const fecha = useMemo(() => enFecha(todos, hoy), [todos, hoy]);
-  const semana = useMemo(() => proximaSemana(todos, hoy), [todos, hoy]);
+  const fecha = useMemo(() => enFecha(todos, hoy, debitados), [todos, hoy, debitados]);
+  const semana = useMemo(() => proximaSemana(todos, hoy, debitados), [todos, hoy, debitados]);
   const porEstado = useMemo(() => resumenPorEstado(todos), [todos]);
-  const semanas = useMemo(() => proximasSemanas(todos, hoy), [todos, hoy]);
+  const semanas = useMemo(() => proximasSemanas(todos, hoy, 4, debitados), [todos, hoy, debitados]);
+  const aCubrir = useMemo(() => ({ ...semanaACubrir(hoy), total: totalACubrir(todos, hoy, semanaACubrir(hoy).hasta, debitados) }), [todos, hoy, debitados]);
 
   const q = sinAcentos(texto.trim());
   // Todos los filtros menos el de estado (así "Ver todos" y "Solo pendientes" dicen cuántos van a mostrar).
@@ -235,6 +240,7 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
               <p className="text-[11px] font-semibold uppercase tracking-wide text-red-700 dark:text-red-300">En fecha para pagar</p>
               <p className="font-mono text-lg font-bold text-zinc-900 dark:text-white">{montos(fecha.pagar)}</p>
               <p className="text-xs text-zinc-500">{fecha.pagar.cantidad} cheque{fecha.pagar.cantidad === 1 ? "" : "s"} propio{fecha.pagar.cantidad === 1 ? "" : "s"} que el banco puede debitar hoy (hasta 30 días después de la fecha)</p>
+              <p className="mt-1 text-xs font-medium text-zinc-700 dark:text-zinc-200" title="Con los ya en fecha y los que cubre Martín F.; el mismo número que el Inicio">A cubrir esta semana (hasta el {formatDate(aCubrir.hasta).slice(0, 5)}): {montos(aCubrir.total)}</p>
             </button>
             <button type="button" onClick={() => filtrar({ categoria: "recibido", enFecha: true })} title="Ver estos cheques en la lista"
               className={`rounded-xl border p-3 text-left hover:border-orange-300 ${fecha.cobrar.cantidad ? "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30" : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"}`}>

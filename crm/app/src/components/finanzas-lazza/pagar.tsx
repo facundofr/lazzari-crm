@@ -16,12 +16,16 @@ import { proveedoresAPagar, type ProveedorAPagar } from "@/lib/finanzas-lazza";
 import { traerDeudas } from "./datos";
 
 /** La ventana de OP de Finanzas; con "Guardar y enviar" sigue con el mail de la OP. */
-export function PagarProveedor({ sociedadId, proveedorId, facturaIds, onClose, onPagado }: {
+export function PagarProveedor({ sociedadId, proveedorId, facturaIds, pagoInicial, proveedorSugerido, onClose, onPagado }: {
   sociedadId: string;
   /** Sin proveedor: se elige en la misma ventana (Órdenes de pago → "Nueva OP"). */
   proveedorId?: string | null;
   /** Facturas que vienen tildadas. */
   facturaIds?: string[];
+  /** Desde una línea del banco (02/11/2026): transferencia con el importe y la fecha de la línea. */
+  pagoInicial?: { monto: number; fecha: string };
+  /** Proveedor con el mismo CUIT que la línea del banco (se elige con un clic). */
+  proveedorSugerido?: { id: string; nombre: string } | null;
   onClose: () => void;
   /** Después de registrar el pago (para recargar la lista de atrás). */
   onPagado: () => void;
@@ -31,7 +35,7 @@ export function PagarProveedor({ sociedadId, proveedorId, facturaIds, onClose, o
   const terminar = () => { onPagado(); onClose(); };
   if (enviar) return <EnviarOrdenPago opId={enviar} onClose={terminar} />;
   return (
-    <OrdenPagoNueva sociedadId={sociedadId} proveedorId={proveedorId || undefined} facturaIds={facturaIds} onClose={onClose}
+    <OrdenPagoNueva sociedadId={sociedadId} proveedorId={proveedorId || undefined} facturaIds={facturaIds} pagoInicial={pagoInicial} proveedorSugerido={proveedorSugerido} onClose={onClose}
       onCreada={({ opId, enviar: mandar }) => { if (mandar && opId) setEnviar(opId); else terminar(); }} />
   );
 }

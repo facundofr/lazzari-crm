@@ -161,6 +161,31 @@ export function gastoParecido(
       && Math.abs(num(g.monto) - nuevo.monto) <= 1)) || null;
 }
 
+/** Línea del banco ya resuelta (del banco o asociada) y consumo de la tarjeta, para el aviso de "ya está" en Gastos. */
+export interface LineaBancoGasto { fecha: string; descripcion: string; monto: number }
+export interface ConsumoTarjetaGasto { fecha: string; comercio: string; importe: number; moneda: string }
+
+const diasGasto = (a: string, b: string) => Math.round((Date.parse(`${b.slice(0, 10)}T12:00:00Z`) - Date.parse(`${a.slice(0, 10)}T12:00:00Z`)) / 86_400_000);
+const fechaCorta = (f: string) => `${f.slice(8, 10)}/${f.slice(5, 7)}`;
+const pesosGasto = (v: number, m: string) => `${mon(m) === "USD" ? "US$" : "$"} ${v.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/**
+ * Aviso para no cargar dos veces (Augusto 02/11/2026, solo aviso): el gasto nuevo ya está en el banco (una línea que salió por el
+ * mismo importe ±$ 1, hasta 7 días antes o después, y que ya cuenta: del banco o asociada) o en el resumen de la Visa (mismo
+ * importe y moneda, hasta 35 días), si no se carga con forma de pago tarjeta. Devuelve el texto del aviso o null.
+ */
+export function yaEstaEnBancoOVisa(
+  nuevo: { fecha: string; monto: number; moneda: string; medio: string | null },
+  lineas: LineaBancoGasto[], consumos: ConsumoTarjetaGasto[],
+): string | null {
+  const l = mon(nuevo.moneda) === "ARS" ? lineas.find((x) => Math.abs(num(x.monto) - nuevo.monto) <= 1 && Math.abs(diasGasto(x.fecha, nuevo.fecha)) <= 7) : undefined;
+  if (l) return `Ya está en el banco: ${fechaCorta(l.fecha)} · ${l.descripcion} · ${pesosGasto(num(l.monto), "ARS")} (esa línea ya cuenta).`;
+  if (String(nuevo.medio || "").startsWith("tarjeta")) return null;
+  const c = consumos.find((x) => mon(x.moneda) === mon(nuevo.moneda) && Math.abs(num(x.importe) - nuevo.monto) <= 1 && Math.abs(diasGasto(x.fecha, nuevo.fecha)) <= 35);
+  if (c) return `Está en el resumen de la Visa: ${fechaCorta(c.fecha)} · ${c.comercio} · ${pesosGasto(num(c.importe), c.moneda)}. Si lo pagaste con la Visa, elegí la forma de pago de la tarjeta.`;
+  return null;
+}
+
 /**
  * Fijos con proveedor que ya tienen una factura de ese proveedor en el mes (auditoría, D4): la factura se paga con OP desde Pagar,
  * así que el gasto del fijo se carga sin pago propio (medio "factura_proveedor"). Antes creaba otro pago: dos salidas para una

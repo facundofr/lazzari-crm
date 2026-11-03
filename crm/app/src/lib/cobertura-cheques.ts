@@ -49,6 +49,23 @@ export function numerosDebitados(lineas: Array<{ descripcion: string | null; tip
   return out;
 }
 
+/**
+ * N° de cheques propios que el banco ya debitó según el extracto de las cuentas corrientes (últimos 90 días). La usan todas las
+ * pantallas de "a cubrir" (P07). Si no se puede leer, ninguno (nunca frena: el cheque se sigue mostrando a cubrir).
+ */
+export async function leerChequesDebitados(db: any, sociedadId: string, hoy: string): Promise<Set<string>> {
+  try {
+    const { data: cs } = await db.from("cuentas_financieras").select("id").eq("sociedad_id", sociedadId).eq("tipo", "cuenta_corriente");
+    const ids = ((cs || []) as { id: string }[]).map((c) => c.id);
+    if (!ids.length) return new Set();
+    const desde = masDias(hoy, -90);
+    const { data } = await db.from("extracto_movimientos").select("descripcion, tipo").in("cuenta_id", ids).eq("tipo", "debito").gte("fecha", desde).limit(5000);
+    return numerosDebitados((data || []) as Array<{ descripcion: string | null; tipo: string }>);
+  } catch {
+    return new Set();
+  }
+}
+
 export function coberturaCheques(cheques: ChequeCobertura[], hoy: string, debitados: Set<string> = new Set()): Cobertura {
   const out: Cobertura = { hoy: vacio(), proximos7: vacio(), yaDebitados: { cantidad: 0, total: 0 }, indu: { cheques: [], total: 0 } };
   const limite7 = masDias(hoy, 7);

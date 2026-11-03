@@ -91,6 +91,26 @@ export function leerDolaresGuardados(db: any, fecha: string = fechaDolarPresupue
   return p;
 }
 
+/**
+ * Solo las cotizaciones confiables (BNA verificado o cargada a mano). Una fila del cron de respaldo (DolarAPI, que no distingue
+ * divisa de billete; ej. la del 12/10 con divisa = billete = 1535) no se usa para ninguna cuenta (P23, auditoría 02/11/2026).
+ */
+export function soloConfiables<T extends { fuente?: string | null; es_manual?: boolean | null }>(filas: T[]): T[] {
+  return filas.filter((f) => isTrustedBnaCache({ fuente: f.fuente ?? undefined, es_manual: f.es_manual ?? undefined }));
+}
+
+/**
+ * El dólar del día de Finanzas (Finanzas, Inicio, Cashflow, Cobrar/Pagar): el último confiable hasta `hoy` (divisa, salvo que se
+ * pida billete). Una sola lectura para todas las pantallas; los presupuestos usan otra fecha a propósito (cierre del día hábil
+ * anterior, fechaDolarPresupuesto). null si no hay ninguno.
+ */
+export async function leerDolarDelDia(db: any, hoy: string = hoyAR(), tipo: "divisa" | "billete" = "divisa"): Promise<DolarGuardado | null> {
+  const { data, error } = await db.from("cotizaciones_dolar").select("fecha, tipo, valor_venta, fuente, es_manual")
+    .in("tipo", ["oficial_billetes", "oficial_divisas"]).lte("fecha", hoy).order("fecha", { ascending: false }).limit(30);
+  if (error) throw error;
+  return elegirDolares(data || [], hoy)[tipo];
+}
+
 export function olvidarDolaresGuardados() {
   cache.clear();
 }

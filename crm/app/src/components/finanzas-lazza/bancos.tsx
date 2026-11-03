@@ -19,7 +19,6 @@ import { diasDesde, pesosDeObservaciones, resumenPrestamo, type CuotaPrestamo } 
 import { leerImporte } from "@/lib/extracto-bbva";
 import { FinanzasLazzaCheques } from "./cheques";
 import { CargarEstadoCheques } from "./cheques-reportes";
-import { MovimientosPorTipo } from "./movimientos-por-tipo";
 import { CargaDiaria } from "./carga-diaria";
 import { BancoSimple } from "./banco-simple";
 import { linkArchivo } from "@/lib/archivo-link";
@@ -82,7 +81,6 @@ export function FinanzasLazzaBancos({ sociedadId, pestanaInicial = "cuentas" }: 
   const [pestana, setPestana] = useState<"cuentas" | "prestamos" | "cheques" | "extracto">(pestanaInicial);
   const [marcandoCuota, setMarcandoCuota] = useState<string | null>(null);
   const [versionCheques, setVersionCheques] = useState(0);
-  const [vistaMov, setVistaMov] = useState<"confirmar" | "tipo">("confirmar");
   // 25/10 (Augusto): el FCI no tiene Excel de movimientos con saldo; su saldo se pone a mano con el "Total de inversiones" del home banking.
   const [editSaldo, setEditSaldo] = useState<{ id: string; valor: string } | null>(null);
   const hoy = todayAR();
@@ -181,14 +179,9 @@ export function FinanzasLazzaBancos({ sociedadId, pestanaInicial = "cuentas" }: 
       {/* Extracto (23/10, Augusto): subir el Excel "Movimientos" del BBVA y cerrar las líneas; la bandeja de siempre, en versión simple. */}
       {pestana === "extracto" && (
         <div className="space-y-3">
-          {/* 24/10, Augusto: "Ver por tipo" muestra todas las líneas del banco agrupadas (solo lectura). */}
-          <div className="flex w-fit rounded-lg border border-zinc-200 p-0.5 text-sm dark:border-zinc-700">
-            <button type="button" onClick={() => setVistaMov("confirmar")} className={botonPestana(vistaMov === "confirmar")}>Movimientos del banco</button>
-            <button type="button" onClick={() => setVistaMov("tipo")} className={botonPestana(vistaMov === "tipo")}>Ver por tipo</button>
-          </div>
-          {/* 30/10/2026 (banco simple, Augusto: "sin confirmar nada"): sin la bandeja "Para confirmar" (queda en el código); las
-              líneas se procesan solas al subir y al abrir (components/finanzas-lazza/banco-simple). */}
-          {vistaMov === "confirmar" ? <BancoSimple sociedadId={sociedadId} /> : <MovimientosPorTipo sociedadId={sociedadId} />}
+          {/* 30/10/2026 (banco simple, Augusto: "sin confirmar nada"): sin la bandeja "Para confirmar" (queda en el código).
+              02/11/2026: lista para revisar con pestañas por tipo; "Ver por tipo" (movimientos-por-tipo.tsx, ya sin usar) pasó adentro. */}
+          <BancoSimple sociedadId={sociedadId} />
         </div>
       )}
 

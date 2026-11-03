@@ -5,7 +5,8 @@
 // nota_credito_compra_id): se toma el mayor de los dos, nunca la suma.
 
 const n = (v: unknown) => Number(v || 0) || 0;
-const r2 = (v: number) => Math.round(v * 100) / 100;
+// Mismo redondeo que Finanzas (lib/finanzas-lazza) y saldo-clientes: con EPSILON, 1,005 → 1,01 (P24, casos de oro).
+const r2 = (v: number) => Math.round((v + Number.EPSILON) * 100) / 100;
 
 export interface PagosFacturaCompra {
   /** Total del comprobante. */

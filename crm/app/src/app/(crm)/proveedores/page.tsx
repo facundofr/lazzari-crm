@@ -4,7 +4,7 @@ import { Header } from "@/components/layout/header";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { traerTodo } from "@/lib/paginar";
 import { sentidoAjuste } from "@/lib/tipos-movimiento";
 import {
@@ -632,8 +632,9 @@ export default function ProveedoresPage() {
           nombre: aiResult.nombre_lista || `Lista ${new Date().toLocaleDateString("es-AR")}`,
           proveedor_id: aiProveedorId,
           moneda: aiResult.moneda === "USD" ? "USD" : "ARS",
-          vigencia_desde: aiResult.vigencia_desde || new Date().toISOString().slice(0, 10),
-          vigencia_hasta: aiResult.vigencia_hasta || new Date(new Date().setMonth(new Date().getMonth() + 2)).toISOString().slice(0, 10),
+          // Fechas de Argentina (antes, UTC: después de las 21 h daba el día siguiente).
+          vigencia_desde: aiResult.vigencia_desde || todayAR(),
+          vigencia_hasta: aiResult.vigencia_hasta || (() => { const [y, m, d] = todayAR().split("-").map(Number); return new Date(Date.UTC(y, m + 1, d)).toISOString().slice(0, 10); })(),
           estado: "vigente",
           archivo_origen: aiFile?.name || null,
           notas: aiResult.notas || "",
