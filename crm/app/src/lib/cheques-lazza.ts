@@ -127,7 +127,7 @@ export function situacionPago(ch: ChequeFL, hoy: string): "en_fecha" | "vencido"
 /** «Próxima semana» (26/10/2026, Augusto): de mañana a 7 días; lo de hoy ya está «en fecha». Un solo criterio para el inicio y Cheques (arreglo 10, 27/10/2026). */
 export const rangoProximaSemana = (hoy: string): { desde: string; hasta: string } => ({ desde: masDias(hoy, 1), hasta: masDias(hoy, 7) });
 
-/** Próxima semana (26/10/2026, Augusto): los pendientes con fecha de pago de mañana a 7 días. */
+/** Próximos 7 días (26/10/2026, Augusto; antes «Próxima semana»): los pendientes con fecha de pago de mañana a 7 días. */
 export function proximaSemana(cheques: ChequeFL[], hoy: string, debitados?: Set<string>): { desde: string; hasta: string; pagar: Total; cobrar: Total } {
   const r = { ...rangoProximaSemana(hoy), pagar: vacio(), cobrar: vacio() };
   for (const ch of cheques) {
@@ -139,15 +139,18 @@ export function proximaSemana(cheques: ChequeFL[], hoy: string, debitados?: Set<
   return { ...r, pagar: redondear(r.pagar), cobrar: redondear(r.cobrar) };
 }
 
+/** Desde qué fecha de pago un cheque puede seguir en fecha hoy (30 días atrás): para filtrar la lista de «Esta semana». */
+export const desdeEnFecha = (hoy: string): string => masDias(hoy, -30);
+
 /**
- * Las próximas 4 semanas (sin lo que ya está en fecha): la 1ª va de mañana al domingo, las otras de lunes a domingo.
- * Pagar = propios sin debitar; cobrar = recibidos en cartera.
+ * Las próximas 4 semanas (03/11/2026, Augusto): la 1ª, «Esta semana», es la de «A cubrir esta semana» (semanaACubrir: de hoy al
+ * domingo) y suma lo que ya está en fecha; las otras, de lunes a domingo.
+ * Pagar = propios a cubrir (fechaACubrir: el que ya está en fecha entra hoy). Cobrar = recibidos en cartera; el que ya está en
+ * fecha y hay que depositar (estaEnFecha, hasta 30 días) entra hoy.
  */
 export function proximasSemanas(cheques: ChequeFL[], hoy: string, cuantas = 4, debitados?: Set<string>): Array<{ desde: string; hasta: string; pagar: Total; cobrar: Total }> {
   const semanas: Array<{ desde: string; hasta: string; pagar: Total; cobrar: Total }> = [];
-  let desde = masDias(hoy, 1);
-  let hasta = domingoDe(hoy);
-  if (hasta < desde) hasta = masDias(hoy, 7); // hoy es domingo: la 1ª semana es la que arranca mañana
+  let { desde, hasta } = semanaACubrir(hoy);
   for (let i = 0; i < cuantas; i++) {
     semanas.push({ desde, hasta, pagar: vacio(), cobrar: vacio() });
     desde = masDias(hasta, 1);
@@ -155,8 +158,10 @@ export function proximasSemanas(cheques: ChequeFL[], hoy: string, cuantas = 4, d
   }
   for (const ch of cheques) {
     if (!chequePendiente(ch) || !ch.fecha_pago) continue;
-    if (ch.direccion === "emitido" && !fechaACubrir(ch, hoy, debitados)) continue;
-    const f = String(ch.fecha_pago).slice(0, 10);
+    let f: string | null = String(ch.fecha_pago).slice(0, 10);
+    if (ch.direccion === "emitido") f = fechaACubrir(ch, hoy, debitados);
+    else if (f <= hoy) f = estaEnFecha(ch, hoy) ? hoy : null;
+    if (!f) continue;
     const s = semanas.find((x) => f >= x.desde && f <= x.hasta);
     if (s) sumar(ch.direccion === "emitido" ? s.pagar : s.cobrar, ch);
   }

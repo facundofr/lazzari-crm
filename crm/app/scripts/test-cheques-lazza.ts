@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { coincideNumeroCheque, depositadoSegunBanco, rangoProximaSemana, enFecha, estaEnFecha, estadoCheque, opsDeCheques, ordenCheques, proximaSemana, proximasSemanas, resumenPorEstado, situacionPago, type ChequeFL } from "../src/lib/cheques-lazza";
+import { coincideNumeroCheque, depositadoSegunBanco, desdeEnFecha, rangoProximaSemana, semanaACubrir, totalACubrir, enFecha, estaEnFecha, estadoCheque, opsDeCheques, ordenCheques, proximaSemana, proximasSemanas, resumenPorEstado, situacionPago, type ChequeFL } from "../src/lib/cheques-lazza";
 
 const ch = (x: Partial<ChequeFL> & { id: string }): ChequeFL => ({ numero: x.id, direccion: "emitido", estado: "entregado", fecha_pago: "2026-10-19", monto: 100, moneda: "ARS", ...x });
 const hoy = "2026-10-19"; // lunes
@@ -34,12 +34,32 @@ assert.deepEqual([ps.desde, ps.hasta], ["2026-10-20", "2026-10-26"]);
 assert.deepEqual(ps.pagar, { cantidad: 1, ARS: 100, USD: 0 }, "el del 27/10 ya es la otra semana");
 assert.equal(ps.cobrar.cantidad, 0, "el endosado no cuenta");
 
+// Próximas 4 semanas (03/11/2026): «Esta semana» = la de «A cubrir esta semana» (de hoy al domingo) y suma lo ya en fecha
 const sem = proximasSemanas(cheques, hoy);
-assert.deepEqual(sem.map((s) => [s.desde, s.hasta]), [["2026-10-20", "2026-10-25"], ["2026-10-26", "2026-11-01"], ["2026-11-02", "2026-11-08"], ["2026-11-09", "2026-11-15"]]);
-assert.deepEqual(sem.map((s) => s.pagar.ARS), [100, 50, 0, 0]);
+assert.deepEqual(sem.map((s) => [s.desde, s.hasta]), [["2026-10-19", "2026-10-25"], ["2026-10-26", "2026-11-01"], ["2026-11-02", "2026-11-08"], ["2026-11-09", "2026-11-15"]]);
+assert.deepEqual(sem.map((s) => s.pagar.ARS), [300, 50, 0, 0], "esta semana: el en fecha del 17/10, el de hoy y el del 22/10");
+assert.deepEqual(sem[0].pagar, totalACubrir(cheques, hoy, semanaACubrir(hoy).hasta), "esta semana a pagar = A cubrir esta semana");
+assert.deepEqual(sem[0].cobrar, { cantidad: 1, ARS: 300, USD: 0 }, "el en cartera en fecha del 18/10 se deposita hoy");
 assert.deepEqual(sem[3].cobrar, { cantidad: 1, ARS: 0, USD: 70 });
-// Domingo: la 1ª semana arranca el lunes
-assert.deepEqual(proximasSemanas([], "2026-10-25")[0], { desde: "2026-10-26", hasta: "2026-11-01", pagar: { cantidad: 0, ARS: 0, USD: 0 }, cobrar: { cantidad: 0, ARS: 0, USD: 0 } });
+// Domingo: «Esta semana» va hasta el domingo que viene (igual que semanaACubrir)
+assert.deepEqual(proximasSemanas([], "2026-10-25").map((s) => [s.desde, s.hasta]).slice(0, 2), [["2026-10-25", "2026-11-01"], ["2026-11-02", "2026-11-08"]]);
+{
+  const xs: ChequeFL[] = [
+    ch({ id: "p1", fecha_pago: "2026-09-18" }),                                                         // propio de más de 30 días: no se cubre
+    ch({ id: "p2", fecha_pago: "2026-10-15", estadoBanco: "PAGADO" }),                                  // el banco ya lo pagó
+    ch({ id: "p3", fecha_pago: "2026-10-10", numero: "00012345" }),                                     // debitado según el extracto
+    ch({ id: "p4", fecha_pago: "2026-10-12", cubre_tercero: "Martín F." }),                             // Martín F.: suma
+    ch({ id: "r1", direccion: "recibido", estado: "en_cartera", fecha_pago: "2026-09-10", monto: 5 }),  // cartera de más de 30 días: vencido
+    ch({ id: "r2", direccion: "recibido", estado: "en_cartera", fecha_pago: "2026-10-19", monto: 7, estadoBanco: "CUSTODIA" }), // ya en el banco
+    ch({ id: "r3", direccion: "recibido", estado: "en_cartera", fecha_pago: "2026-10-23", monto: 9, estadoBanco: "CUSTODIA" }), // con fecha futura: cuenta en su día
+  ];
+  const debitados = new Set(["12345"]);
+  const s0 = proximasSemanas(xs, hoy, 4, debitados)[0];
+  assert.deepEqual(s0.pagar, { cantidad: 1, ARS: 100, USD: 0 }, "solo el de Martín F.");
+  assert.deepEqual(s0.pagar, totalACubrir(xs, hoy, semanaACubrir(hoy).hasta, debitados));
+  assert.deepEqual(s0.cobrar, { cantidad: 1, ARS: 9, USD: 0 }, "ni el vencido ni el que el banco ya tiene en fecha");
+  assert.equal(desdeEnFecha(hoy), "2026-09-19");
+}
 
 assert.equal(estadoCheque({ direccion: "emitido", estado: "cobrado" }).label, "Debitado");
 assert.equal(estadoCheque({ direccion: "recibido", estado: "cobrado" }).label, "Cobrado");

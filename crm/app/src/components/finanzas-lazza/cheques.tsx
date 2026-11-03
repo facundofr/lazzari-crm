@@ -15,7 +15,7 @@ import { traerTodo } from "@/lib/paginar";
 import { useUser } from "@/lib/auth-context";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { chequePendiente } from "@/lib/cheques-plazo";
-import { enFecha, estaEnFecha, estadoCheque, opsDeCheques, ordenCheques, proximaSemana, proximasSemanas, resumenPorEstado, semanaACubrir, situacionPago, totalACubrir, type ChequeFL, type OpDelCheque, type Total } from "@/lib/cheques-lazza";
+import { desdeEnFecha, enFecha, estaEnFecha, estadoCheque, opsDeCheques, ordenCheques, proximaSemana, proximasSemanas, resumenPorEstado, semanaACubrir, situacionPago, totalACubrir, type ChequeFL, type OpDelCheque, type Total } from "@/lib/cheques-lazza";
 import { leerChequesDebitados } from "@/lib/cobertura-cheques";
 import { ChequesBanco } from "./cheques-banco";
 import { verOP } from "./orden-pago-doc";
@@ -252,12 +252,12 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
                 <p className="text-xs text-zinc-500">+ {fecha.depositados.cantidad} ya depositado{fecha.depositados.cantidad === 1 ? "" : "s"} según el banco ({montos(fecha.depositados)}), esperando la acreditación</p>
               )}
             </button>
-            {/* Próxima semana (26/10/2026, Augusto): sin comparar con el saldo del banco, solo indica. */}
+            {/* Próximos 7 días (26/10/2026, Augusto; nombre del 03/11 para no confundir con «Esta semana»): sin comparar con el saldo del banco, solo indica. */}
             {(["pagar", "cobrar"] as const).map((lado) => (
               <button key={lado} type="button" disabled={!semana[lado].cantidad} title="Ver estos cheques en la lista"
                 onClick={() => filtrar({ categoria: lado === "pagar" ? "emitido" : "recibido", estado: lado === "pagar" ? "emitido:sin_debitar" : "recibido:en_cartera", desde: semana.desde, hasta: semana.hasta })}
                 className="rounded-xl border border-zinc-200 bg-white p-3 text-left hover:border-orange-300 disabled:cursor-default disabled:hover:border-zinc-200 dark:border-zinc-800 dark:bg-zinc-900">
-                <p className={`text-[11px] font-semibold uppercase tracking-wide ${lado === "pagar" ? "text-orange-600" : "text-emerald-600"}`}>Próxima semana {lado === "pagar" ? "a pagar" : "a cobrar"}</p>
+                <p className={`text-[11px] font-semibold uppercase tracking-wide ${lado === "pagar" ? "text-orange-600" : "text-emerald-600"}`}>Próximos 7 días {lado === "pagar" ? "a pagar" : "a cobrar"}</p>
                 <p className="font-mono text-lg font-bold text-zinc-900 dark:text-white">{montos(semana[lado])}</p>
                 <p className="text-xs text-zinc-500">{semana[lado].cantidad} cheque{semana[lado].cantidad === 1 ? "" : "s"} {lado === "pagar" ? `propio${semana[lado].cantidad === 1 ? "" : "s"}` : "en cartera"} del {formatDate(semana.desde).slice(0, 5)} al {formatDate(semana.hasta).slice(0, 5)}</p>
               </button>
@@ -294,9 +294,10 @@ export function FinanzasLazzaCheques({ sociedadId }: { sociedadId: string }) {
                 {(["pagar", "cobrar"] as const).map((lado) => (
                   <tr key={lado} className="border-t border-zinc-100 dark:border-zinc-800">
                     <td className={`px-3 py-2 text-xs font-semibold ${lado === "pagar" ? "text-orange-600" : "text-emerald-600"}`}>{lado === "pagar" ? "A pagar (propios)" : "A cobrar (cartera)"}</td>
-                    {semanas.map((s) => (
+                    {semanas.map((s, i) => (
                       <td key={s.desde} className="px-3 py-2 text-right">
-                        <button type="button" disabled={!s[lado].cantidad} onClick={() => filtrar({ categoria: lado === "pagar" ? "emitido" : "recibido", estado: lado === "pagar" ? "emitido:sin_debitar" : "recibido:en_cartera", desde: s.desde, hasta: s.hasta })}
+                        {/* «Esta semana» suma los ya en fecha: la lista arranca 30 días atrás para mostrarlos (03/11/2026). */}
+                        <button type="button" disabled={!s[lado].cantidad} onClick={() => filtrar({ categoria: lado === "pagar" ? "emitido" : "recibido", estado: lado === "pagar" ? "emitido:sin_debitar" : "recibido:en_cartera", desde: i === 0 ? desdeEnFecha(hoy) : s.desde, hasta: s.hasta })}
                           className="font-mono hover:text-orange-600 disabled:cursor-default disabled:text-zinc-300">
                           {s[lado].cantidad ? montos(s[lado]) : "—"}
                           {s[lado].cantidad > 0 && <span className="block text-[10px] text-zinc-400">{s[lado].cantidad} ch.</span>}
