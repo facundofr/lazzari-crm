@@ -13,6 +13,7 @@ import { avisoSeguimientoQueToca } from "@/lib/presupuesto-seguimiento";
  *   - 7 dias sin respuesta: alerta urgente
  *   (solo el último paso alcanzado; los aprobados no reciben seguimiento: el cliente ya respondió)
  *   - Al superar fecha de vencimiento: marca estado = "vencido" + alerta "vencimiento_pr"
+ *     (no a los aprobados ni a los que tienen remito vigente: ya se entregaron)
  * Además (Finanzas): avisa 3 días antes del débito de cada cheque propio que cubre un tercero
  * (echeqs.cubre_tercero, ej. Martín Fernández), para avisarle a tiempo.
  *
@@ -126,6 +127,16 @@ export async function GET(req: NextRequest) {
       })
     );
 
+    // PR con remito vigente (no anulado): ya se entregó, no se vence (sigue en Facturar como entregado sin facturar).
+    // Si no se pueden leer los remitos, ese día no se vence ninguno.
+    const { data: remitos, error: remError } = await (supabase as any)
+      .from("remitos")
+      .select("presupuesto_id")
+      .in("presupuesto_id", prIds)
+      .or("anulado.is.null,anulado.eq.false");
+    if (remError) stats.errores.push(`Remitos: ${remError.message} (hoy no se vence ningún PR)`);
+    const conRemito = new Set<string>((remitos ?? []).map((r: any) => String(r.presupuesto_id)));
+
     const alertasAInsertar: any[] = [];
     const prIdsAVencer: string[] = [];
 
@@ -164,8 +175,8 @@ export async function GET(req: NextRequest) {
       }
 
       // B) Vencimiento: cambiar estado y crear alerta
-      if (vencido && pr.estado !== "aprobado") {
-        // Solo vencer si no esta aprobado (un PR aprobado no se vence automaticamente)
+      if (vencido && pr.estado !== "aprobado" && !remError && !conRemito.has(String(pr.id))) {
+        // Solo vencer si no esta aprobado ni tiene remito (esos no se vencen automaticamente)
         prIdsAVencer.push(pr.id);
 
         const dedupKey = `PR vencido|${pr.id}`;
