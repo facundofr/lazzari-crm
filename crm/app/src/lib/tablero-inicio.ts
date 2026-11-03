@@ -6,7 +6,7 @@
 // Lo que falta cobrar o pagar en dólares pasa a pesos con el dólar divisa del BNA del día (el de Finanzas); lo facturado va
 // con el cambio de cada factura (facturadoMesNeto.equivalenteARS). Nunca se compara con el saldo del banco (Augusto 28/10).
 // Prueba: scripts/test-tablero-inicio.ts
-import type { FilaVencimiento } from "./finanzas-lazza";
+import { NIVEL_OBJETIVO_TEXTO, nivelObjetivo, type FilaVencimiento } from "./finanzas-lazza";
 import { domingoDe } from "./cheques-plazo";
 import { fechaACubrir as fechaACubrirComun } from "./cheques-lazza";
 import { normalizarMoneda } from "./reportes-comprobantes";
@@ -192,7 +192,8 @@ export interface DatosFrases {
   facturado: number | null;
   /** El mes anterior hasta el mismo día. */
   facturadoAnterior: number | null;
-  objetivo: number | null;
+  /** La sociedad tiene los objetivos del mes (lib/finanzas-lazza: escalones Mínimo, Bueno y Muy bueno). */
+  conObjetivo: boolean;
   cheques: { cantidad: number; pesos: number; fechas: string[] };
   pagosSemana: number;
   vencidoCobrar: number;
@@ -211,7 +212,12 @@ export function frasesInicio(d: DatosFrases): Parte[][] {
     const f: Parte[] = dia <= 7
       ? [`${nombreMes[0].toUpperCase()}${nombreMes.slice(1)} arrancó con `, { fuerte: `${pesosCorto(d.facturado)} facturados` }]
       : [`En ${nombreMes} llevás `, { fuerte: `${pesosCorto(d.facturado)} facturados` }];
-    if (dia > 7 && d.objetivo && d.objetivo > 0) f.push(`, el ${Math.round((d.facturado / d.objetivo) * 100)} % del objetivo`);
+    if (dia > 7 && d.conObjetivo) {
+      // En qué escalón está y cuánto falta para el próximo (los mismos de Objetivos y Reportes).
+      const o = nivelObjetivo(d.facturado);
+      const falta = o.proximo ? `a ${pesosCorto(o.proximo.falta)} del ${o.proximo.nombre}` : "";
+      f.push(o.nivel === "debajo" ? `, ${falta}` : `, ${NIVEL_OBJETIVO_TEXTO[o.nivel]}${falta ? ` y ${falta}` : ""}`);
+    }
     // Contra el mes anterior hasta el mismo día, recién desde el día 8 (los primeros días dependen de qué día de la semana cayeron).
     if (dia > 7 && d.facturadoAnterior !== null && d.facturadoAnterior > 0) {
       const anterior = MESES[(mes + 11) % 12];

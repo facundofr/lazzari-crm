@@ -7,13 +7,10 @@ import { AlertTriangle, Loader2 } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { useUser } from "@/lib/auth-context";
 import { LineaPremio } from "./premios";
-import { OBJETIVOS_MES, reporteBasico, type NetoIva, type ReporteBasico } from "@/lib/finanzas-lazza";
+import { ESCALONES_OBJETIVO, NIVEL_OBJETIVO_TEXTO, OBJETIVOS_MES, escalonesTexto, reporteBasico, tieneObjetivos, type NetoIva, type ReporteBasico } from "@/lib/finanzas-lazza";
 import { traerDatosReporte } from "./datos";
 import { traerResultadoMes, type ResultadoMes } from "./resultado-mes";
 
-const NIVEL_TEXTO: Record<ReporteBasico["objetivo"]["nivel"], string> = {
-  debajo: "Debajo del mínimo", minimo: "Mínimo cumplido", bueno: "Bueno cumplido", muy_bueno: "Muy bueno cumplido",
-};
 
 export function FinanzasLazzaReportes({ sociedadId, periodo }: { sociedadId: string; periodo: string }) {
   const { sociedadActiva } = useUser();
@@ -53,7 +50,7 @@ export function FinanzasLazzaReportes({ sociedadId, periodo }: { sociedadId: str
   return (
     <div className="space-y-3">
       {/* Objetivos adentro de Reportes (auditoría UX 27/10, arreglo 8): antes era una tarjeta aparte con la misma cuenta. */}
-      <BarraObjetivo o={r.objetivo} periodo={periodo} />
+      {tieneObjetivos(sociedadId) && <BarraObjetivo o={r.objetivo} periodo={periodo} />}
       {(() => {
         // Costo raro (29/10/2026, caso PR-2026-1142): arriba de los números, porque puede dar vuelta el resultado.
         const raros = r.avisos.filter((a) => a.costoRaro);
@@ -178,18 +175,18 @@ export function BarraObjetivo({ o, periodo }: { o: ReporteBasico["objetivo"]; pe
   return (
       <div className="rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
         <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2 text-sm">
-          <span className="font-semibold text-zinc-700 dark:text-zinc-200">Objetivo del mes (neto): {NIVEL_TEXTO[o.nivel]}</span>
+          <span className="font-semibold text-zinc-700 dark:text-zinc-200">Objetivo del mes (neto): {NIVEL_OBJETIVO_TEXTO[o.nivel]}</span>
           <span className="text-xs text-zinc-500">{o.proximo ? <>Faltan <b className="font-mono">{formatCurrency(o.proximo.falta)}</b> para {o.proximo.nombre}</> : "¡Muy bueno superado!"}</span>
         </div>
         <div className="relative h-3 rounded-full bg-zinc-100 dark:bg-zinc-800">
           <div className={`h-3 rounded-full ${o.nivel === "debajo" ? "bg-orange-400" : "bg-emerald-500"}`} style={{ width: pct(o.neto) }} />
-          {[OBJETIVOS_MES.minimo, OBJETIVOS_MES.bueno, OBJETIVOS_MES.muyBueno].map((m) => (
+          {ESCALONES_OBJETIVO.map(({ monto: m }) => (
             <div key={m} className="absolute top-[-3px] h-[18px] w-0.5 bg-zinc-500" style={{ left: pct(m) }} />
           ))}
         </div>
         <div className="relative mt-1 h-4 text-[10px] text-zinc-500">
-          {[["Mínimo", OBJETIVOS_MES.minimo], ["Bueno", OBJETIVOS_MES.bueno], ["Muy bueno", OBJETIVOS_MES.muyBueno]].map(([n, m]) => (
-            <span key={n} className="absolute -translate-x-1/2 whitespace-nowrap" style={{ left: pct(m as number) }}>{n} {Number(m) / 1_000_000}M</span>
+          {ESCALONES_OBJETIVO.map(({ nombre: n, monto: m }) => (
+            <span key={n} className="absolute -translate-x-1/2 whitespace-nowrap" style={{ left: pct(m) }}>{n} {m / 1_000_000}M</span>
           ))}
         </div>
         {periodo && <div className="mt-2"><LineaPremio neto={o.neto} periodo={periodo} /></div>}
@@ -210,12 +207,13 @@ export function FinanzasLazzaObjetivos({ sociedadId, periodo }: { sociedadId: st
     return () => { vivo = false; };
   }, [sociedadId, periodo]);
   const r = useMemo(() => (datos ? reporteBasico({ periodo, ...datos }) : null), [datos, periodo]);
+  if (!tieneObjetivos(sociedadId)) return <p className="py-6 text-sm text-zinc-500">Esta sociedad no tiene objetivos del mes (solo Lazzari).</p>;
   if (error) return <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30">{error}</p>;
   if (!r) return <p className="flex items-center gap-2 py-6 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Calculando…</p>;
   return (
     <div className="space-y-2">
       <BarraObjetivo o={r.objetivo} periodo={periodo} />
-      <p className="text-[11px] text-zinc-500">Neto facturado del mes: <b className="font-mono">{formatCurrency(r.objetivo.neto)}</b> (facturas − NC, US$ al TC de cada factura). Objetivos: Mínimo $64.000.000 · Bueno $80.000.000 · Muy bueno $96.000.000.</p>
+      <p className="text-[11px] text-zinc-500">Neto facturado del mes: <b className="font-mono">{formatCurrency(r.objetivo.neto)}</b> (facturas − NC, US$ al TC de cada factura). Objetivos (sin IVA): {escalonesTexto()}.</p>
     </div>
   );
 }

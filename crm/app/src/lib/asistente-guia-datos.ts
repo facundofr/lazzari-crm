@@ -219,7 +219,7 @@ export const GUIA_SECCIONES: SeccionGuia[] = [
     "titulo": "Reportes",
     "ruta": "/finanzas",
     "modulo": "finanzas",
-    "texto": "Resultado del mes (◀ mes ▶ arriba): **Venta neta** − **Costo de lo vendido** − **Gastos del mes** (fijos y eventuales) = **Resultado del mes**. Solo lee.\nAdentro está la barra de **Objetivos** del mes sobre el neto facturado: **Mínimo**, **Bueno** y **Muy bueno**, con cuánto falta. Abajo, **Para revisar (no frena nada)**."
+    "texto": "Resultado del mes (◀ mes ▶ arriba): **Venta neta** − **Costo de lo vendido** − **Gastos del mes** (fijos y eventuales) = **Resultado del mes**. Solo lee.\nAdentro está la barra de **Objetivos** del mes sobre el neto facturado: **Mínimo** $ 64 M, **Bueno** $ 80 M y **Muy bueno** $ 96 M (sin IVA), con cuánto falta. Son los mismos escalones del Inicio y del recuadro de gastos fijos del Dashboard. Solo Lazzari: Grupo LA no tiene objetivo. Abajo, **Para revisar (no frena nada)**."
   },
   {
     "id": "sistema-configuracion",

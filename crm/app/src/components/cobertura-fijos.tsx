@@ -1,6 +1,7 @@
 "use client";
 
-// Recuadro de Finanzas → Hoy y del Dashboard: ¿estoy cubriendo los gastos fijos? + ventas del mes contra el objetivo.
+// Recuadro de Finanzas → Hoy y del Dashboard: ¿estoy cubriendo los gastos fijos? + ventas del mes contra los escalones del
+// objetivo (lib/finanzas-lazza: Mínimo / Bueno / Muy bueno, solo Lazzari).
 // Solo informativo (nunca bloquea). La cuenta está en lib/cobertura-fijos.ts (con prueba).
 
 import { useEffect, useMemo, useState } from "react";
@@ -8,7 +9,8 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabase/client";
 import { formatCurrency, todayAR } from "@/lib/utils";
 import { calcularCobertura, type PRDelMes, type FijoEntrada } from "@/lib/cobertura-fijos";
-import { Target, TrendingUp } from "lucide-react";
+import { NIVEL_OBJETIVO_TEXTO, escalonesTexto, nivelObjetivo, tieneObjetivos } from "@/lib/finanzas-lazza";
+import { TrendingUp } from "lucide-react";
 
 const CLAVE_DOLAR = "lz-dolar-fijos";
 const ESTADOS_VENDIDOS = ["aprobado", "facturar", "facturado"];
@@ -51,7 +53,6 @@ function Barra({ pct }: { pct: number }) {
 export default function CoberturaFijos({ sociedadId, onMargen, compacto }: { sociedadId: string | null | undefined; onMargen?: (margenSobreVentaPct: number | null) => void; compacto?: boolean }) {
   const [prs, setPrs] = useState<PRDelMes[]>([]);
   const [fijos, setFijos] = useState<(FijoEntrada & { descripcion?: string })[]>([]);
-  const [objetivo, setObjetivo] = useState<number | null>(null);
   const [prsPorFacturar, setPrsPorFacturar] = useState<PRDelMes[]>([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
@@ -73,15 +74,12 @@ export default function CoberturaFijos({ sociedadId, onMargen, compacto }: { soc
       setCargando(true); setError("");
       try {
         const db = supabase as any;
-        const [prRes, fijosRes, objRes, porFacturarRes] = await Promise.all([
+        const [prRes, fijosRes, porFacturarRes] = await Promise.all([
           db.from("presupuestos")
             .select("id, estado, moneda, tipo_cambio, tipo_cambio_divisas, modalidad_emision, costo_envio_interno, presupuesto_items(cantidad, precio_venta, precio_costo, costo_moneda)")
             .eq("sociedad_id", sociedadId).eq("eliminado", false).in("estado", ESTADOS_VENDIDOS)
             .gte("fecha", `${mes}-01`).lt("fecha", mesSiguiente),
           db.from("gastos_fijos").select("*").eq("sociedad_id", sociedadId),
-          db.from("objetivos").select("monto_target, moneda, periodo_inicio, periodo_fin, activo, usuario_id").eq("activo", true)
-            .lte("periodo_inicio", hoy).gte("periodo_fin", hoy)
-            .or(`sociedad_id.is.null,sociedad_id.eq.${sociedadId}`),
           // Falta facturar: todo PR aprobado o en "facturar", de cualquier fecha (no solo del mes).
           db.from("presupuestos")
             .select("id, estado, moneda, tipo_cambio, tipo_cambio_divisas, modalidad_emision, costo_envio_interno, presupuesto_items(cantidad, precio_venta, precio_costo, costo_moneda)")
@@ -112,8 +110,6 @@ export default function CoberturaFijos({ sociedadId, onMargen, compacto }: { soc
           })),
         })));
         setFijos(((fijosRes.data || []) as any[]).map((g) => ({ descripcion: g.descripcion, monto: Number(g.monto) || 0, moneda: g.moneda || "ARS", activo: !!g.activo, dolar: Number(g.dolar_referencia) > 0 ? Number(g.dolar_referencia) : null })));
-        const globales = ((objRes.data || []) as any[]).filter((o) => !o.usuario_id && (o.moneda || "ARS") === "ARS");
-        setObjetivo(globales.length ? Math.max(...globales.map((o) => Number(o.monto_target) || 0)) : null);
       } catch (e: any) {
         if (vivo) setError(e?.message || "No se pudo calcular");
       } finally {
@@ -150,7 +146,10 @@ export default function CoberturaFijos({ sociedadId, onMargen, compacto }: { soc
   const cFalta = calcularCobertura({ prs: prsPorFacturar, fijos: [], dolarFijos: 0, diaDelMes, diasDelMes });
   const faltaFacturar = cFalta.ventaNeta + cFalta.ventaSinCosto;
   const hayFijos = c.fijosARS + c.fijosUSD > 0;
-  const pctObjetivo = objetivo && objetivo > 0 ? Math.round((ventaTotal / objetivo) * 100) : null;
+  // Escalón de lo vendido en el mes y la barra contra el próximo.
+  const objetivo = tieneObjetivos(sociedadId) ? nivelObjetivo(ventaTotal) : null;
+  const pctObjetivo = objetivo ? (objetivo.proximo ? Math.round((ventaTotal / objetivo.proximo.monto) * 100) : 100) : null;
+  const textoObjetivo = objetivo ? `${NIVEL_OBJETIVO_TEXTO[objetivo.nivel]}${objetivo.proximo ? ` · faltan ${formatCurrency(objetivo.proximo.falta)} para ${objetivo.proximo.nombre}` : ""}` : null;
   const mesNombre = new Date(`${mes}-15T12:00:00`).toLocaleDateString("es-AR", { month: "long" });
 
   return (
@@ -170,7 +169,7 @@ export default function CoberturaFijos({ sociedadId, onMargen, compacto }: { soc
         <>
         {compacto && (
           <div className="grid grid-cols-3 gap-2">
-            <Mini titulo="Vendido en el mes" valor={formatCurrency(ventaTotal)} extra={pctObjetivo !== null ? `${pctObjetivo}% del objetivo` : "sin objetivo"} />
+            <Mini titulo="Vendido en el mes" valor={formatCurrency(ventaTotal)} extra={textoObjetivo ?? "sin objetivo"} />
             <Mini titulo="Cubro los fijos" valor={!hayFijos ? "—" : c.coberturaPct === null ? "falta dólar" : `${c.coberturaPct}%`}
               color={c.coberturaPct === null ? undefined : c.coberturaPct >= 100 ? "text-emerald-600" : c.coberturaPct >= 60 ? "text-amber-600" : "text-red-600"}
               extra={c.coberturaPct !== null ? `${formatCurrency(c.ganancia)} de ${formatCurrency(c.fijosTotal || 0)}` : undefined} />
@@ -185,13 +184,12 @@ export default function CoberturaFijos({ sociedadId, onMargen, compacto }: { soc
             <p className="text-xs font-medium text-zinc-500">Vendido en el mes (neto, sin IVA)</p>
             <p className="font-mono text-xl font-bold text-zinc-900 dark:text-white">{formatCurrency(ventaTotal)}</p>
             <p className="text-[11px] text-zinc-500">Falta facturar {formatCurrency(faltaFacturar)} <span className="text-zinc-400">(vendido y aún sin factura, de cualquier mes)</span></p>
-            {pctObjetivo !== null ? (
+            {pctObjetivo !== null && (
               <>
                 <Barra pct={pctObjetivo} />
-                <p className="text-[11px] text-zinc-500">{pctObjetivo}% del objetivo de {formatCurrency(objetivo!)}</p>
+                <p className="text-[11px] text-zinc-500">{textoObjetivo}</p>
+                <p className="text-[10px] text-zinc-400">Objetivos (sin IVA): {escalonesTexto()}</p>
               </>
-            ) : (
-              <Link href="/finanzas?seccion=objetivos" className="inline-flex items-center gap-1 text-[11px] text-orange-600 hover:underline"><Target className="h-3 w-3" /> Cargá tu objetivo del mes</Link>
             )}
             <p className="text-[10px] text-zinc-400">Vendido = presupuestos aprobados, a facturar y facturados con fecha del mes. Lo facturado (facturas menos NC) está en la tarjeta de arriba. Todo sin IVA, US$ al tipo de cambio de cada uno.</p>
           </div>

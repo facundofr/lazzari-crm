@@ -28,8 +28,23 @@ import { costoRaro } from "./presupuesto-moneda-costo";
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const num = (v: unknown) => Number(v || 0) || 0;
 
+/** Objetivos del mes, neto sin IVA (Augusto, hasta fin de 2026). El único lugar de los montos: Inicio, Dashboard, Objetivos,
+ *  Reportes y Premios salen de acá (la tabla `objetivos` queda para los de cada vendedor). */
 export const OBJETIVOS_MES = { minimo: 64_000_000, bueno: 80_000_000, muyBueno: 96_000_000 } as const;
 export type NivelObjetivo = "debajo" | "minimo" | "bueno" | "muy_bueno";
+export const ESCALONES_OBJETIVO = [
+  { nivel: "minimo" as const, nombre: "Mínimo", monto: OBJETIVOS_MES.minimo },
+  { nivel: "bueno" as const, nombre: "Bueno", monto: OBJETIVOS_MES.bueno },
+  { nivel: "muy_bueno" as const, nombre: "Muy bueno", monto: OBJETIVOS_MES.muyBueno },
+];
+export const NIVEL_OBJETIVO_TEXTO: Record<NivelObjetivo, string> = {
+  debajo: "Debajo del mínimo", minimo: "Mínimo cumplido", bueno: "Bueno cumplido", muy_bueno: "Muy bueno cumplido",
+};
+/** Solo Lazzari tiene objetivos del mes (Augusto 03/11/2026); Grupo LA, sin objetivo. */
+const SOCIEDAD_CON_OBJETIVOS = "eee2a3c8-fe6c-494d-bd2f-7a5d8067d021";
+export const tieneObjetivos = (sociedadId: string | null | undefined) => sociedadId === SOCIEDAD_CON_OBJETIVOS;
+/** "Mínimo 64 M · Bueno 80 M · Muy bueno 96 M" */
+export const escalonesTexto = () => ESCALONES_OBJETIVO.map((e) => `${e.nombre} ${e.monto / 1_000_000} M`).join(" · ");
 
 /** Dólar BNA divisa (venta) de un día. `null` = no hay cotización. */
 export type TcDelDia = (fecha: string) => number | null;
@@ -231,11 +246,7 @@ export function costoDeFactura(
 }
 
 export function nivelObjetivo(neto: number): ReporteBasico["objetivo"] {
-  const escalones = [
-    { nivel: "minimo" as const, nombre: "Mínimo", monto: OBJETIVOS_MES.minimo },
-    { nivel: "bueno" as const, nombre: "Bueno", monto: OBJETIVOS_MES.bueno },
-    { nivel: "muy_bueno" as const, nombre: "Muy bueno", monto: OBJETIVOS_MES.muyBueno },
-  ];
+  const escalones = ESCALONES_OBJETIVO;
   let nivel: NivelObjetivo = "debajo";
   for (const e of escalones) if (neto >= e.monto) nivel = e.nivel;
   const sig = escalones.find((e) => neto < e.monto);

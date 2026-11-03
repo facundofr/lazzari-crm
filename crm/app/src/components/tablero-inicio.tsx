@@ -6,8 +6,8 @@
 // - Arriba: la línea del banco (última subida, saldo de las cuentas según el banco, líneas para revisar) y el aviso de lo que falta subir.
 // - 3 frases armadas con los números (sin IA), los 4 números (facturado, a cobrar, a pagar, cheques a cubrir esta semana),
 //   las próximas 4 semanas (lo que vence para cobrar contra lo que vence para pagar y los cheques) y la agenda de esta semana.
-// Mismos datos que Finanzas: traerDeudas (saldo por factura), cheques propios (lib/cheques-lazza), facturadoMesNeto y el objetivo
-// general. Cuentas en lib/tablero-inicio (prueba: scripts/test-tablero-inicio.ts). Cada bloque se calcula aparte: si uno falla, muestra "—".
+// Mismos datos que Finanzas: traerDeudas (saldo por factura), cheques propios (lib/cheques-lazza), facturadoMesNeto y los
+// escalones del objetivo del mes (lib/finanzas-lazza, solo Lazzari). Cuentas en lib/tablero-inicio (prueba: scripts/test-tablero-inicio.ts). Cada bloque se calcula aparte: si uno falla, muestra "—".
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Landmark, Upload } from "lucide-react";
@@ -16,7 +16,7 @@ import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { facturadoMesNeto } from "@/lib/facturado-mes";
 import { periodoDeFecha, sumarMeses } from "@/lib/reportes-comprobantes";
-import type { FilaVencimiento } from "@/lib/finanzas-lazza";
+import { NIVEL_OBJETIVO_TEXTO, escalonesTexto, nivelObjetivo, tieneObjetivos, type FilaVencimiento } from "@/lib/finanzas-lazza";
 import { separarSacados } from "@/lib/saldos-pendientes";
 import {
   MESES, agendaSemana, aPesos, chequesPorDia, frasesInicio, listaDias, mayorVencido, nombreDia, pesosCorto, plazosCheques, plazosFacturas,
@@ -40,7 +40,6 @@ interface Datos {
   cheques: ChequeTablero[] | null;
   dolar: { valor: number; fecha: string } | null;
   facturado: { actual: number; anterior: number } | null;
-  objetivo: number | null;
   cuentas: CuentaBanco[] | null;
   sinCruzar: number | null;
   ultimaSubida: string | null;
@@ -53,7 +52,7 @@ async function traerDatos(sociedadId: string, hoy: string): Promise<Datos> {
   const parte = async <T,>(p: () => Promise<T>, nombre: string): Promise<T | null> => {
     try { return await p(); } catch (e) { console.error(`Inicio · ${nombre}:`, e); return null; }
   };
-  const [filas, cheques, dolar, facturado, objetivo, cuentas, ultimaSubida] = await Promise.all([
+  const [filas, cheques, dolar, facturado, cuentas, ultimaSubida] = await Promise.all([
     // Sin los saldos chicos sacados de pendientes (Cobrar y Pagar, 02/11/2026).
     parte(async () => { const d = await traerDeudas(sociedadId, hoy); return separarSacados(d.vencimientos, d.sacados).pendientes; }, "a cobrar y a pagar"),
     // P07: a cubrir con la regla de todo el CRM; los que el banco ya debitó (extracto o PAGADO) no se cubren.
@@ -83,14 +82,6 @@ async function traerDatos(sociedadId: string, hoy: string): Promise<Datos> {
         anterior: facturadoMesNeto(rows, anterior, { hastaDia: dia, idsAnulados: ids }).equivalenteARS,
       };
     }, "facturado"),
-    // El objetivo general del mes, el mismo que el recuadro de gastos fijos (sin vendedor, en pesos; el más alto si hay varios).
-    parte(async () => {
-      const { data, error } = await db.from("objetivos").select("monto_target, moneda, usuario_id").eq("activo", true)
-        .lte("periodo_inicio", hoy).gte("periodo_fin", hoy).or(`sociedad_id.is.null,sociedad_id.eq.${sociedadId}`);
-      if (error) throw error;
-      const generales = ((data || []) as any[]).filter((o) => !o.usuario_id && (o.moneda || "ARS") === "ARS").map((o) => Number(o.monto_target) || 0);
-      return generales.length ? Math.max(...generales) : null;
-    }, "objetivo"),
     parte(async () => {
       const { data, error } = await db.from("cuentas_financieras").select("id, nombre, tipo, moneda, activa, saldo_banco, saldo_banco_fecha").eq("sociedad_id", sociedadId);
       if (error) throw error;
@@ -116,7 +107,7 @@ async function traerDatos(sociedadId: string, hoy: string): Promise<Datos> {
     }, "última subida"),
   ]);
   return {
-    filas, cheques, dolar, facturado, objetivo,
+    filas, cheques, dolar, facturado,
     cuentas: cuentas?.bancos ?? null, sinCruzar: cuentas?.sinCruzar ?? null, ultimaSubida,
   };
 }
@@ -237,7 +228,7 @@ export function TableroInicio({ sociedadId, nombre }: { sociedadId: string; nomb
       hoy,
       facturado: datos.facturado?.actual ?? null,
       facturadoAnterior: datos.facturado?.anterior ?? null,
-      objetivo: datos.objetivo,
+      conObjetivo: tieneObjetivos(sociedadId),
       cheques: { cantidad: dias ? dias.reduce((s, d) => s + d.cantidad, 0) : 0, pesos: cheques?.semanas[0] ?? 0, fechas: (dias || []).filter((d) => d.cantidad).map((d) => d.fecha) },
       pagosSemana: pagar?.semanas[0] ?? 0,
       vencidoCobrar: cobrar?.vencido ?? 0,
@@ -245,11 +236,13 @@ export function TableroInicio({ sociedadId, nombre }: { sociedadId: string; nomb
     });
     const enBancos = datos.cuentas ? datos.cuentas.reduce((s, c) => s + aPesos(c.saldo, c.moneda, dolar), 0) : null;
     return { cobrar, pagar, cheques, dias, agenda, frases, enBancos };
-  }, [datos, hoy, semanas]);
+  }, [datos, hoy, semanas, sociedadId]);
 
   const mes = MESES[Number(hoy.slice(5, 7)) - 1];
   const fechaLarga = new Date(`${hoy}T12:00:00`).toLocaleDateString("es-AR", { weekday: "long", day: "numeric", month: "long" });
-  const pctObjetivo = datos?.facturado && datos.objetivo ? (datos.facturado.actual / datos.objetivo) * 100 : null;
+  // Objetivo del mes: en qué escalón está (Mínimo / Bueno / Muy bueno) y el anillo contra el próximo.
+  const objetivo = datos?.facturado && tieneObjetivos(sociedadId) ? nivelObjetivo(datos.facturado.actual) : null;
+  const pctObjetivo = objetivo ? (objetivo.proximo ? (objetivo.neto / objetivo.proximo.monto) * 100 : 100) : null;
   const cargando = !datos || !cuentas;
 
   // Las 4 semanas: altura de las barras contra la semana más cargada (lo que entra o lo que sale).
@@ -299,9 +292,14 @@ export function TableroInicio({ sociedadId, nombre }: { sociedadId: string; nomb
           <span className="flex min-w-0 flex-col">
             <span className="text-xs text-zinc-500">Facturado {mes}</span>
             <span className="text-xl font-semibold text-zinc-900 dark:text-white">{datos?.facturado ? pesosCorto(datos.facturado.actual) : cargando ? "…" : "—"}</span>
-            <span className="text-[11px] text-zinc-400">{datos?.objetivo ? `de ${pesosCorto(datos.objetivo)} · sin IVA` : "sin IVA · sin objetivo cargado"}</span>
+            {objetivo ? <>
+              <span className={`text-[11px] font-medium ${objetivo.nivel === "debajo" ? "text-orange-600" : "text-emerald-600"}`}>
+                {NIVEL_OBJETIVO_TEXTO[objetivo.nivel]}{objetivo.proximo ? ` · faltan ${pesosCorto(objetivo.proximo.falta)} para ${objetivo.proximo.nombre}` : ""}
+              </span>
+              <span className="text-[11px] text-zinc-400">{escalonesTexto()} · sin IVA</span>
+            </> : <span className="text-[11px] text-zinc-400">sin IVA</span>}
           </span>
-          <Anillo pct={pctObjetivo} />
+          <span title={objetivo?.proximo ? `Contra el ${objetivo.proximo.nombre}` : undefined}><Anillo pct={pctObjetivo} /></span>
         </Link>
         <Tarjeta href="/finanzas?seccion=cobrar" titulo="A cobrar" valor={cuentas?.cobrar ? pesosCorto(cuentas.cobrar.total) : cargando ? "…" : "—"}>
           {cuentas?.cobrar && <>

@@ -158,7 +158,7 @@ Historial de todos los cobros, pagos, retenciones y ajustes, desde el 1° del me
 
 ### Reportes
 Resultado del mes (◀ mes ▶ arriba): **Venta neta** − **Costo de lo vendido** − **Gastos del mes** (fijos y eventuales) = **Resultado del mes**. Solo lee.
-Adentro está la barra de **Objetivos** del mes sobre el neto facturado: **Mínimo**, **Bueno** y **Muy bueno**, con cuánto falta. Abajo, **Para revisar (no frena nada)**.
+Adentro está la barra de **Objetivos** del mes sobre el neto facturado: **Mínimo** $ 64 M, **Bueno** $ 80 M y **Muy bueno** $ 96 M (sin IVA), con cuánto falta. Son los mismos escalones del Inicio y del recuadro de gastos fijos del Dashboard. Solo Lazzari: Grupo LA no tiene objetivo. Abajo, **Para revisar (no frena nada)**.
 
 ---
 

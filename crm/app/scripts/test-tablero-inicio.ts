@@ -91,7 +91,7 @@ assert.equal(listaDias(["2026-11-02", "2026-11-03", "2026-11-06"], HOY), "hoy, m
 assert.deepEqual(mayorVencido(filas, HOY, DOLAR), { nombre: "Cliente B", pesos: 2_000 * DOLAR }, "en pesos, el de dólares es el más grande");
 
 const fr = frasesInicio({
-  hoy: HOY, facturado: 3_200_000, facturadoAnterior: 2_500_000, objetivo: 120_000_000,
+  hoy: HOY, facturado: 3_200_000, facturadoAnterior: 2_500_000, conObjetivo: true,
   cheques: { cantidad: 3, pesos: 7_500_000, fechas: ["2026-11-02", "2026-11-04", "2026-11-06"] }, pagosSemana: 250_000,
   vencidoCobrar: 4_068_000, mayorVencido: { nombre: "Cliente B", pesos: 3_068_000 },
 }).map(texto);
@@ -101,18 +101,24 @@ assert.deepEqual(fr, [
   "Para cobrar hay $ 4,1 M vencidos: lo más grande es Cliente B ($ 3,1 M).",
 ]);
 const fr2 = frasesInicio({
-  hoy: "2026-11-20", facturado: 60_000_000, facturadoAnterior: 59_000_000, objetivo: 120_000_000,
+  hoy: "2026-11-20", facturado: 60_000_000, facturadoAnterior: 59_000_000, conObjetivo: true,
   cheques: { cantidad: 0, pesos: 0, fechas: [] }, pagosSemana: 0, vencidoCobrar: 0, mayorVencido: null,
 }).map(texto);
 assert.deepEqual(fr2, [
-  "En noviembre llevás $ 60 M facturados, el 50 % del objetivo, parecido a octubre a esta altura.",
+  "En noviembre llevás $ 60 M facturados, a $ 4 M del Mínimo, parecido a octubre a esta altura.",
   "Esta semana no hay cheques para cubrir ni pagos que venzan.",
   "No hay nada vencido para cobrar.",
 ]);
-const sinFacturas = { hoy: HOY, facturado: 0, facturadoAnterior: 12_400_000, objetivo: 120_000_000, cheques: { cantidad: 0, pesos: 0, fechas: [] }, pagosSemana: 0, vencidoCobrar: 0, mayorVencido: null };
+const sinFacturas = { hoy: HOY, facturado: 0, facturadoAnterior: 12_400_000, conObjetivo: true, cheques: { cantidad: 0, pesos: 0, fechas: [] }, pagosSemana: 0, vencidoCobrar: 0, mayorVencido: null };
 assert.equal(texto(frasesInicio(sinFacturas)[0]), "Noviembre todavía no tiene facturas.", "el mes sin facturas no se compara");
 assert.equal(texto(frasesInicio({ ...sinFacturas, hoy: "2026-11-12", facturado: 30_000_000, facturadoAnterior: 40_000_000 })[0]),
-  "En noviembre llevás $ 30 M facturados, el 25 % del objetivo, menos que octubre a esta altura ($ 40 M).", "desde el día 8 se compara");
-assert.equal(frasesInicio({ hoy: HOY, facturado: null, facturadoAnterior: null, objetivo: null, cheques: { cantidad: 1, pesos: 5, fechas: ["2026-11-03"] }, pagosSemana: 0, vencidoCobrar: 0, mayorVencido: null }).length, 2, "sin facturado, no hay frase del mes");
+  "En noviembre llevás $ 30 M facturados, a $ 34 M del Mínimo, menos que octubre a esta altura ($ 40 M).", "desde el día 8 se compara");
+// Los escalones de Objetivos (64 / 80 / 96 M): en cuál está y cuánto falta para el próximo; Grupo LA no tiene objetivo.
+const mes = (facturado: number, conObjetivo = true) => texto(frasesInicio({ ...sinFacturas, hoy: "2026-11-20", facturado, facturadoAnterior: null, conObjetivo })[0]);
+assert.equal(mes(70_000_000), "En noviembre llevás $ 70 M facturados, Mínimo cumplido y a $ 10 M del Bueno.");
+assert.equal(mes(85_000_000), "En noviembre llevás $ 85 M facturados, Bueno cumplido y a $ 11 M del Muy bueno.");
+assert.equal(mes(100_000_000), "En noviembre llevás $ 100 M facturados, Muy bueno cumplido.");
+assert.equal(mes(70_000_000, false), "En noviembre llevás $ 70 M facturados.", "sin objetivo (Grupo LA)");
+assert.equal(frasesInicio({ hoy: HOY, facturado: null, facturadoAnterior: null, conObjetivo: true, cheques: { cantidad: 1, pesos: 5, fechas: ["2026-11-03"] }, pagosSemana: 0, vencidoCobrar: 0, mayorVencido: null }).length, 2, "sin facturado, no hay frase del mes");
 
 console.log("test-tablero-inicio OK");
