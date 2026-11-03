@@ -35,7 +35,8 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { aplicarOrdenMenu, moverEnLista } from "@/lib/orden-menu";
-import { createBrowserClient } from "@supabase/ssr";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { supabase as supabaseCompartido } from "@/lib/supabase/client";
 import type { Role } from "@/lib/types";
 import { ROLE_PERMISSIONS } from "@/lib/types";
 import { useUser } from "@/lib/auth-context";
@@ -95,10 +96,9 @@ export function Sidebar() {
       .catch(() => {});
   }, []);
 
-  const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
+  // Un solo cliente de Supabase en el navegador (lib/supabase/client, con el arreglo de mayúsculas): el primero que se crea
+  // queda para todo el sistema, así que crear otro acá podía dejar el CRM sin ese arreglo hasta apretar F5 (auditoría 02/11/2026, P12).
+  const supabase = supabaseCompartido as unknown as SupabaseClient;
 
   async function handleLogout() {
     setLoggingOut(true);

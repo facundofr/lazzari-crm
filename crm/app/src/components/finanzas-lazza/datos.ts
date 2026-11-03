@@ -312,7 +312,7 @@ export async function traerDatosContabilidad(sociedadId: string, periodos: strin
   const desdeGastos = `${sumarMeses(primero, -1)}-01`;
   const [reportes, gastosRaw, cuentas, tcDia, config, sueldosFijos] = await Promise.all([
     Promise.all(periodos.map(async (p) => ({ p, r: reporteBasico({ periodo: p, ...(await traerDatosReporte(sociedadId, p)) }) }))),
-    traerTodo<any>(() => db.from("gastos_manuales").select("id, fecha, descripcion, categoria, grupo, monto, moneda")
+    traerTodo<any>(() => db.from("gastos_manuales").select("id, fecha, descripcion, categoria, grupo, monto, moneda, medio_pago")
       .eq("sociedad_id", sociedadId).gte("fecha", desdeGastos).lt("fecha", `${sumarMeses(ultimo, 4)}-01`).order("id")),
     db.from("cuentas_financieras").select("id").eq("sociedad_id", sociedadId),
     traerTcDelDia(sumarMeses(ultimo, 3), desdeGastos),

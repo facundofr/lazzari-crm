@@ -1,5 +1,6 @@
 // Agente de correo y cobros: lógica pura (sin red ni base). Todo lo que sale de acá es SUGERENCIA, nunca bloquea.
 // Prueba: scripts/test-agente-mail.ts (npx tsx scripts/test-agente-mail.ts)
+import { costoIAUSD } from "./precios-ia";
 
 export type CategoriaMail = "pago_retencion" | "reclamo_consulta" | "factura_proveedor" | "oc_cliente" | "vencimiento_aviso" | "otro";
 export type PrioridadMail = "alta" | "normal" | "baja";
@@ -24,20 +25,14 @@ export function ordenCategoria(id: string): number {
 }
 
 // ── Costo y tope de gasto ────────────────────────────────────────────────────
-// USD por millón de tokens (entrada / salida).
-const PRECIOS: Record<string, [number, number]> = {
-  "claude-haiku-4-5": [1, 5],
-  "claude-sonnet-4-5": [3, 15],
-};
+// Precios: tabla única de lib/precios-ia.
 export const TOPE_DIARIO_USD = 1.5;
 export const MAX_PDF_VISION_POR_CORRIDA = 10;
 export const MAX_MAILS_POR_CORRIDA = 25;
 export const DESDE_INICIAL = "2026/10/01"; // primera carga: todo octubre 2026, nunca septiembre
 
 export function costoModeloUSD(modelo: string, tokensEntrada: number, tokensSalida: number): number {
-  const clave = Object.keys(PRECIOS).find((k) => modelo.startsWith(k)) || "claude-sonnet-4-5";
-  const [pin, pout] = PRECIOS[clave];
-  return (tokensEntrada * pin + tokensSalida * pout) / 1_000_000;
+  return costoIAUSD(modelo, tokensEntrada, tokensSalida);
 }
 
 export function superaTopeDiario(gastadoHoyUSD: number, tope = TOPE_DIARIO_USD): boolean {

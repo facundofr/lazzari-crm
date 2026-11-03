@@ -1,7 +1,8 @@
 "use client";
 
-import { createContext, useContext, useState, useEffect, useCallback } from "react";
-import { createBrowserClient } from "@supabase/ssr";
+import { createContext, useContext, useState, useEffect, useCallback, useMemo } from "react";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { supabase as supabaseCompartido } from "@/lib/supabase/client";
 import type { Role, Sociedad } from "@/lib/types";
 
 interface Profile {
@@ -60,10 +61,9 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const [sociedades, setSociedades] = useState<Sociedad[]>([]);
   const [sociedadActiva, setSociedadActivaState] = useState<Sociedad | null>(null);
 
-  const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
+  // Un solo cliente de Supabase en el navegador (lib/supabase/client, con el arreglo de mayúsculas): el primero que se crea
+  // queda para todo el sistema, así que crear otro acá podía dejar el CRM sin ese arreglo hasta apretar F5 (auditoría 02/11/2026, P12).
+  const supabase = supabaseCompartido as unknown as SupabaseClient;
 
   const setSociedadActiva = useCallback((s: Sociedad) => {
     setSociedadActivaState(s);
@@ -171,21 +171,22 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
 
   const role = profile?.role ?? "viewer";
 
+  // Mismo objeto mientras no cambie nada: así las pantallas que usan useUser no se vuelven a pintar en cada render.
+  const valor = useMemo(() => ({
+    profile,
+    role,
+    loading,
+    sidebarCollapsed,
+    setSidebarCollapsed,
+    mobileSidebarOpen,
+    setMobileSidebarOpen,
+    sociedades,
+    sociedadActiva,
+    setSociedadActiva,
+  }), [profile, role, loading, sidebarCollapsed, mobileSidebarOpen, sociedades, sociedadActiva, setSociedadActiva]);
+
   return (
-    <UserContext.Provider
-      value={{
-        profile,
-        role,
-        loading,
-        sidebarCollapsed,
-        setSidebarCollapsed,
-        mobileSidebarOpen,
-        setMobileSidebarOpen,
-        sociedades,
-        sociedadActiva,
-        setSociedadActiva,
-      }}
-    >
+    <UserContext.Provider value={valor}>
       {children}
     </UserContext.Provider>
   );

@@ -227,6 +227,7 @@ const gastosI: GastoCont[] = [
   { id: "g3", fecha: "2026-10-12", descripcion: "Seguro del auto — Federación Patronal", categoria: "Personales", grupo: "Personales", monto: 700, moneda: "ARS" },
   { id: "g4", fecha: "2026-11-05", descripcion: "Alquiler — octubre 2026", categoria: "Local y servicios", grupo: "Local y servicios", monto: 2_000, moneda: "ARS" },
   { id: "g5", fecha: "2026-11-10", descripcion: "Sueldo Mariana Santinelli — octubre 2026", categoria: "Sueldos", grupo: "Personal", monto: 1_500, moneda: "ARS" },
+  { id: "g6", fecha: "2026-10-07", descripcion: "Apple.com/bill — suscripción", categoria: "Personales", grupo: "Personales", monto: 50, moneda: "ARS", medio_pago: "tarjeta_mastercard_4775" },
 ];
 const lineasI = [
   b("impuesto", "sircreb", { fecha: "2026-10-05", monto: 300 }),
@@ -245,7 +246,7 @@ const info = bloqueInformativo({
 });
 const A = (id: string) => info.a.find((f) => f.id === id)!.valores["2026-10"];
 const B = (id: string) => info.b.find((f) => f.id === id)!.valores["2026-10"];
-assert.equal(A("a_retiros"), -(700 + 4_000 + 7_000), "seguro del auto + pago de la Mastercard + consumo personal de la Visa que venció el 10/10 (el de octubre vence en noviembre)");
+assert.equal(A("a_retiros"), -(700 + 4_000 + 7_000), "seguro del auto + pago de la Mastercard + consumo personal de la Visa que venció el 10/10 (el de octubre vence en noviembre); Apple pagado con la Mastercard no suma otra vez");
 assert.equal(A("a_impuestos_pago"), -1_500, "el VEP de IVA sí; el IIBB pagado no (punto 2)");
 assert.equal(A("a_sircreb"), -300);
 assert.equal(A("a_retenciones"), -60);

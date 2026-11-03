@@ -30,7 +30,7 @@ const PRUEBAS = [
   "test-movimientos-banco.ts", "test-banco-revision.ts", "test-casos-de-oro.ts", "test-cheques-a-cubrir.ts", "test-movimientos-bbva.ts", "test-nc-sugerencia.ts", "test-nombres-estados.ts", "test-nombres-telefonos.ts", "test-numero-ar.ts",
   "test-observaciones-cliente.ts", "test-oc-diferencia.mjs", "test-oc-lista.ts", "test-oc-reclamos.mjs",
   "test-oc-sin-proveedor.ts", "test-op-parcial.ts", "test-op-usd-pesos.ts", "test-pago-tarjeta.ts", "test-premios-lazza.ts", "test-jose-alvarez.ts",
-  "test-pdf-descuento.ts", "test-pendientes.ts", "test-precio-factura.ts", "test-presupuesto-ayudas.ts",
+  "test-pdf-descuento.ts", "test-pendientes.ts", "test-precio-factura.ts", "test-precios-ia.ts", "test-presupuesto-ayudas.ts",
   "test-presupuesto-ia.ts", "test-presupuesto-margen.ts", "test-presupuesto-seguimiento.ts", "test-email-remitente.ts", "test-presupuesto-envios.ts", "test-correos-enviados.ts", "test-presupuesto-duplicar.ts",
   "test-proveedor-nombre.ts", "test-recibos.ts", "test-reemplazo-oc.ts", "test-remito-entrega.ts",
   "test-remitos-armado.ts", "test-remitos-crear.ts", "test-resto-facturar.ts", "test-resumen-bbva.ts",

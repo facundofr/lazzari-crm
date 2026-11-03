@@ -5,17 +5,17 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
-import { Truck, Loader2, CheckCircle2, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, Trash2, Minus, ShieldCheck, GitBranch, MapPin, Maximize2, Search, Camera, Pencil } from "lucide-react";
+import { Loader2, CheckCircle2, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, Trash2, Minus, ShieldCheck, GitBranch, MapPin, Maximize2, Search, Camera, Pencil } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { RemitoVentana } from "@/components/remito-ventana";
 import { useToast } from "@/components/ui/toast";
 import { abrirRemitoPDF, remitoPDFBase64, htmlRemito } from "@/lib/remito-pdf";
-import { viajesAlAnular, AVISO_LIQUIDADO, filaVigente, entregaGuardada, guardarEntrega, textoTransporte, type Entrega, type ModoEntrega, type FilaTransporte } from "@/lib/remito-entrega";
+import { entregaGuardada, guardarEntrega, textoTransporte, valorTransporte, type Entrega, type ModoEntrega, type RemitoEntrega } from "@/lib/remito-entrega";
 import { Select } from "@/components/ui/input";
 import { numeroCAI, descripcionCorta, numeroRemito, nombrePDFRemito } from "@/lib/remitos-crear";
 import { prepararArchivo } from "@/lib/preparar-foto";
 import { useUser } from "@/lib/auth-context";
-import { formatDate, formatCurrency, todayAR } from "@/lib/utils";
+import { formatDate } from "@/lib/utils";
 import { generateRemitoPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
@@ -37,13 +37,6 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
 }
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
 import { linkArchivo } from "@/lib/archivo-link";
-
-const transporteEstadoConfig: Record<string, { label: string; variant: "success" | "warning" | "info" | "danger" }> = {
-  solicitado: { label: "Solicitado", variant: "warning" },
-  en_transito: { label: "En tránsito", variant: "info" },
-  entregado: { label: "Entregado", variant: "success" },
-  cancelado: { label: "Cancelado", variant: "danger" },
-};
 
 /** Tipo de remito según lo que realmente tiene: muestra, electrónico (ARCA), Remito R con CAI, manual (PR sin ARCA) o interno sin CAI. */
 type TipoRemitoClave = "muestra" | "arca" | "cai" | "manual" | "interno";
@@ -95,6 +88,8 @@ interface RemitoRow {
   transporte_valor?: string;
   direccion_entrega_snapshot?: string | null;
   localidad_entrega_snapshot?: string | null;
+  transportista_id?: string | null;
+  entrega_propia?: boolean | null;
   presupuesto_vendedor?: string | null;
   // Entrega (Remitos nueva): foto del remito firmado y quién recibió
   foto_url?: string | null;
@@ -107,12 +102,10 @@ interface RemitoRow {
   nro_comprobante_cai?: number | null;
 }
 
-/** Texto y valor de la columna Transporte a partir de los viajes del remito. */
-function columnaTransporte(r: { direccion_entrega_snapshot?: string | null }, filas: FilaTransporte[]) {
-  const texto = textoTransporte(r, filas);
-  const v = filaVigente(filas);
-  const valor = v ? (v.tipo === "interno" ? "propio" : v.transportista_id ? `t:${v.transportista_id}` : "nose") : texto ? "retira" : "nose";
-  return { transportistas: texto ? [texto] : [], transporte_valor: valor };
+/** Texto y valor de la columna Transporte con lo que dice el remito (no Transportes). nombreDe = nombre del transportista por id. */
+function columnaTransporte(r: RemitoEntrega, nombreDe: (id: string) => string | null | undefined) {
+  const texto = textoTransporte(r, nombreDe);
+  return { transportistas: texto ? [texto] : [], transporte_valor: valorTransporte(r) };
 }
 
 interface RemitoDetailItem {
@@ -122,16 +115,6 @@ interface RemitoDetailItem {
   unidad: string | null;
   orden: number;
   presupuesto_item_id?: string | null;
-}
-
-interface TransporteLinked {
-  id: string;
-  transportista: string;
-  estado: string;
-  fecha: string;
-  destino: string | null;
-  costo: number | null;
-  moneda: string;
 }
 
 interface CreateItem {
@@ -176,30 +159,11 @@ export default function RemitosPage() {
   // Por renglón del PR: cuánto pide el PR y cuánto se remitó en total (todos los remitos del PR).
   const [detailPRItems, setDetailPRItems] = useState<Record<string, { total: number; remitido: number }>>({});
   const [detailFacturas, setDetailFacturas] = useState<{ id: string; numero: string; tipo: string; total: number; estado: string }[]>([]);
-  const [detailTransportes, setDetailTransportes] = useState<TransporteLinked[]>([]);
   const [detailOC, setDetailOC] = useState<{ id: string; numero: string } | null>(null);
 
   // PDF valor declarado modal
   const [pdfModalOpen, setPdfModalOpen] = useState(false);
   const [pdfValorDeclarado, setPdfValorDeclarado] = useState("0");
-
-  // Create transporte from remito
-  const [createTransporteOpen, setCreateTransporteOpen] = useState(false);
-  const [transporteForm, setTransporteForm] = useState({
-    transportista_id: "",
-    transportista: "",
-    destino: "",
-    origen: "",
-    fecha: todayAR(),
-    costo: "",
-    moneda: "ARS" as "ARS" | "USD",
-    bultos: "",
-    tipo_vehiculo: "",
-    notas: "",
-  });
-  const [creatingTransporte, setCreatingTransporte] = useState(false);
-  const [catalogTransportistas, setCatalogTransportistas] = useState<{ id: string; nombre: string }[]>([]);
-
 
   // AFIP authorization
   const [autorizandoAFIP, setAutorizandoAFIP] = useState(false);
@@ -287,20 +251,20 @@ export default function RemitosPage() {
           } catch { /* sin OC: la columna queda vacía */ }
           // Nombre de la sucursal y transportista de cada remito (para la lista y el buscador).
           const sucNombre = new Map<string, string>();
-          const transPorRemito = new Map<string, any[]>();
+          const transNombre = new Map<string, string>();
           try {
             const sucIds = [...new Set((data as any[]).map(r => r.sucursal_id).filter(Boolean))] as string[];
-            const remIds = (data as any[]).map(r => r.id) as string[];
+            const transIds = [...new Set((data as any[]).map(r => r.transportista_id).filter(Boolean))] as string[];
             for (let i = 0; i < sucIds.length; i += 150) {
               const { data: sucs } = await (supabase as any).from("cliente_sucursales").select("id, nombre").in("id", sucIds.slice(i, i + 150));
               for (const s of sucs || []) sucNombre.set(s.id, s.nombre);
             }
-            for (let i = 0; i < remIds.length; i += 150) {
-              const { data: ts } = await (supabase as any).from("transportes").select("id, remito_id, transportista, transportista_id, tipo, estado, destino, costo, created_at").in("remito_id", remIds.slice(i, i + 150));
-              for (const t of ts || []) transPorRemito.set(t.remito_id, [...(transPorRemito.get(t.remito_id) || []), t]);
+            for (let i = 0; i < transIds.length; i += 150) {
+              const { data: ts } = await (supabase as any).from("transportistas").select("id, nombre").in("id", transIds.slice(i, i + 150));
+              for (const x of ts || []) transNombre.set(x.id, x.nombre);
             }
           } catch { /* sin sucursal ni transporte: quedan vacíos */ }
-          setRemitos((data as any[]).map(r => ({ ...r, clienteNombre: r.clientes?.razon_social || "", presupuesto_numero: r.presupuestos?.numero || null, presupuesto_modalidad: r.presupuestos?.modalidad_emision || null, presupuesto_vendedor: r.presupuestos?.vendedor_id || r.presupuestos?.created_by || null, ocs_numeros: ocsPorPR.get(r.presupuesto_id) || [], sucursal_nombre: r.sucursal_id ? sucNombre.get(r.sucursal_id) : undefined, ...columnaTransporte(r, transPorRemito.get(r.id) || []) })) as RemitoRow[]);
+          setRemitos((data as any[]).map(r => ({ ...r, clienteNombre: r.clientes?.razon_social || "", presupuesto_numero: r.presupuestos?.numero || null, presupuesto_modalidad: r.presupuestos?.modalidad_emision || null, presupuesto_vendedor: r.presupuestos?.vendedor_id || r.presupuestos?.created_by || null, ocs_numeros: ocsPorPR.get(r.presupuesto_id) || [], sucursal_nombre: r.sucursal_id ? sucNombre.get(r.sucursal_id) : undefined, ...columnaTransporte(r, (id) => transNombre.get(id)) })) as RemitoRow[]);
         } else if (error) {
           setRemitos([]);
           toast.error("No se pudieron cargar los remitos. Recargá la página.");
@@ -315,7 +279,7 @@ export default function RemitosPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // Columna Transporte: se cambia con un clic (mismo guardado que la ventana del remito).
+  // Columna Transporte: se cambia con un clic (mismo guardado que la ventana del remito; solo en el remito, no va a Transportes).
   const [listaTransp, setListaTransp] = useState<{ id: string; nombre: string }[]>([]);
   const [editTransp, setEditTransp] = useState<string | null>(null);
   useEffect(() => {
@@ -327,9 +291,7 @@ export default function RemitosPage() {
   async function cambiarTransporte(row: RemitoRow, v: string) {
     setEditTransp(null);
     if (!sociedadActiva?.id || v === row.transporte_valor) return;
-    const { data: filas } = await (supabase as any).from("transportes").select("id, transportista, transportista_id, tipo, estado, destino, costo, created_at").eq("remito_id", row.id).eq("sociedad_id", sociedadActiva.id);
-    const vigente = filaVigente(filas || []);
-    const base = entregaGuardada({ direccion_entrega_snapshot: row.direccion_entrega_snapshot ?? null, localidad_entrega_snapshot: row.localidad_entrega_snapshot ?? null, transportista_id: null }, vigente, { modo: "nose", transportista_id: null, domicilio: "", localidad: "", costo: "" });
+    const base = entregaGuardada(row, { modo: "nose", transportista_id: null, domicilio: "", localidad: "" });
     // Sin domicilio guardado (remito viejo, o venía de "Retira el cliente"): el de la sucursal.
     if (!base.domicilio && !base.localidad && row.sucursal_id) {
       const { data: s } = await (supabase as any).from("cliente_sucursales").select("direccion, localidad").eq("id", row.sucursal_id).maybeSingle();
@@ -337,13 +299,10 @@ export default function RemitosPage() {
     }
     const e: Entrega = v.startsWith("t:") ? { ...base, modo: "transporte", transportista_id: v.slice(2) } : { ...base, modo: v as ModoEntrega, transportista_id: null };
     // "Retira" pisa el domicilio solo en el remito; si después se elige un transporte y no había domicilio, el PDF usa el de la sucursal.
-    const aviso = await guardarEntrega(supabase, e, { sociedad_id: sociedadActiva.id, cliente_id: row.cliente_id, remito_id: row.id, fecha: row.fecha, created_by: profile?.id || null, sucursal_id: row.sucursal_id || null }, (id) => listaTransp.find((t) => t.id === id)?.nombre || null, null);
+    const aviso = await guardarEntrega(supabase, e, { sociedad_id: sociedadActiva.id, cliente_id: row.cliente_id, remito_id: row.id, sucursal_id: row.sucursal_id || null }, null);
     if (aviso) toast.warning(aviso);
-    const [{ data: r2 }, { data: f2 }] = await Promise.all([
-      (supabase as any).from("remitos").select("direccion_entrega_snapshot, localidad_entrega_snapshot").eq("id", row.id).single(),
-      (supabase as any).from("transportes").select("id, transportista, transportista_id, tipo, estado, destino, costo, created_at").eq("remito_id", row.id),
-    ]);
-    setRemitos((prev) => prev.map((x) => (x.id === row.id ? { ...x, ...(r2 || {}), ...columnaTransporte({ ...x, ...(r2 || {}) }, f2 || []) } : x)));
+    const { data: r2 } = await (supabase as any).from("remitos").select("direccion_entrega_snapshot, localidad_entrega_snapshot, transportista_id, entrega_propia").eq("id", row.id).single();
+    setRemitos((prev) => prev.map((x) => (x.id === row.id ? { ...x, ...(r2 || {}), ...columnaTransporte({ ...x, ...(r2 || {}) }, (id) => listaTransp.find((t) => t.id === id)?.nombre) } : x)));
   }
 
   /** PDF del remito desde la lista (el mismo que el del detalle). */
@@ -391,7 +350,7 @@ export default function RemitosPage() {
     const r = remitos.find((x) => x.id === id) || (detailRemito?.id === id ? detailRemito : null);
     if (r?.anulado) return;
     const conCAI = !!(r?.cai_numero || r?.cae);
-    if (!confirm(`¿Anular el remito ${r ? numeroRemito(r) : ""}?\n\nQueda en la lista como anulado (no se borra) y deja de contar como remitido. Si tenía un viaje en Transportes sin liquidar, se cancela.${conCAI ? "\n\nOjo: tiene CAI/CAE, el número de ARCA ya quedó usado." : ""}`)) return;
+    if (!confirm(`¿Anular el remito ${r ? numeroRemito(r) : ""}?\n\nQueda en la lista como anulado (no se borra) y deja de contar como remitido.${conCAI ? "\n\nOjo: tiene CAI/CAE, el número de ARCA ya quedó usado." : ""}`)) return;
     if (!sociedadActiva?.id) { toast.error("Seleccioná una sociedad antes de anular el remito"); return; }
     if (r?.sociedad_id && r.sociedad_id !== sociedadActiva.id) { toast.error("El remito no pertenece a la sociedad activa"); return; }
     try {
@@ -399,18 +358,10 @@ export default function RemitosPage() {
         .update({ anulado: true, anulado_at: new Date().toISOString(), anulado_por: profile?.id || null })
         .eq("id", id).eq("sociedad_id", sociedadActiva.id);
       if (remErr) throw remErr;
-      // Viajes del remito: los no liquidados se cancelan (no se borran); si hay liquidados, aviso.
-      const avisos: string[] = [];
-      const { data: filas } = await (supabase as any).from("transportes").select("id, transportista, transportista_id, tipo, estado, destino, costo, factura_compra_id").eq("remito_id", id).eq("sociedad_id", sociedadActiva.id);
-      const { cancelar, liquidados } = viajesAlAnular(filas || []);
-      if (cancelar.length) {
-        const { error: tErr } = await (supabase as any).from("transportes").update({ estado: "cancelado", updated_at: new Date().toISOString() }).in("id", cancelar).eq("sociedad_id", sociedadActiva.id);
-        if (tErr) avisos.push(`No se pudo cancelar el viaje (${tErr.message}).`);
-      }
-      if (liquidados) avisos.push(AVISO_LIQUIDADO);
+      // Los viajes de Transportes no se tocan: Remitos queda solo en Remitos (Augusto 03/11/2026).
       setDetailRemito(null);
       setPanelFullscreen(false);
-      if (avisos.length) toast.warning(`Remito anulado. ${avisos.join(" ")}`); else toast.success("Remito anulado");
+      toast.success("Remito anulado");
       await fetchData();
     } catch (err) {
       toast.error("No se pudo anular el remito: " + (err instanceof Error ? err.message : (err as any)?.message || "error desconocido"));
@@ -612,9 +563,7 @@ export default function RemitosPage() {
     setDetailPRNumero(null);
     setDetailPRItems({});
     setDetailFacturas([]);
-    setDetailTransportes([]);
     setDetailOC(null);
-    setCreateTransporteOpen(false);
     try {
       const itemsPromise = (supabase as any)
         .from("remito_items")
@@ -628,19 +577,14 @@ export default function RemitosPage() {
       const facturasPromise = row.presupuesto_id
         ? supabase.from("facturas").select("id, numero, tipo, total, estado").eq("presupuesto_id" as any, row.presupuesto_id)
         : null;
-      const transportesPromise = (supabase as any)
-        .from("transportes")
-        .select("id, transportista, estado, fecha, destino, costo, moneda")
-        .eq("remito_id", row.id);
       const ocPromise = row.presupuesto_id
         ? (supabase as any).from("ordenes_compra").select("id, numero").eq("presupuesto_origen_id", row.presupuesto_id).limit(1)
         : null;
 
-      const [itemsRes, prRes, facturasRes, transportesRes, ocRes] = await Promise.all([
+      const [itemsRes, prRes, facturasRes, ocRes] = await Promise.all([
         itemsPromise,
         prPromise,
         facturasPromise,
-        transportesPromise,
         ocPromise,
       ]);
 
@@ -678,7 +622,6 @@ export default function RemitosPage() {
         }
       }
       if (facturasRes?.data) setDetailFacturas((facturasRes.data as any[]) || []);
-      if (transportesRes?.data) setDetailTransportes((transportesRes.data as TransporteLinked[]) || []);
     } catch {
       setDetailItems([]);
     } finally {
@@ -743,47 +686,6 @@ export default function RemitosPage() {
       const { html, filename } = await htmlRemito(detailRemito.id, sociedadActiva, overrideValorDeclarado);
       openPDFWindow(html, filename);
     } catch (err) { toast.error(`No se pudo armar el PDF: ${err instanceof Error ? err.message : "error"}`); }
-  }
-
-  async function handleCreateTransporteFromRemito() {
-    const nombreTransportista = transporteForm.transportista_id && transporteForm.transportista_id !== "__manual"
-      ? (catalogTransportistas.find(t => t.id === transporteForm.transportista_id)?.nombre || transporteForm.transportista)
-      : transporteForm.transportista;
-    if (!detailRemito || !nombreTransportista) return;
-    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de crear el transporte"); return; }
-    setCreatingTransporte(true);
-    try {
-      const { error } = await (supabase as any).from("transportes").insert({
-        sociedad_id: sociedadActiva.id,
-        transportista: nombreTransportista,
-        transportista_id: (transporteForm.transportista_id && transporteForm.transportista_id !== "__manual") ? transporteForm.transportista_id : null,
-        destino: transporteForm.destino || null,
-        origen: transporteForm.origen || null,
-        cliente_id: detailRemito.cliente_id,
-        remito_id: detailRemito.id,
-        fecha: transporteForm.fecha,
-        costo: transporteForm.costo ? Number(transporteForm.costo) : null,
-        moneda: transporteForm.moneda,
-        bultos: transporteForm.bultos ? Number(transporteForm.bultos) : null,
-        tipo_vehiculo: transporteForm.tipo_vehiculo || null,
-        notas: transporteForm.notas || null,
-        estado: "solicitado",
-      });
-      if (error) {
-        alert("Error al crear transporte: " + error.message);
-        return;
-      }
-      setCreateTransporteOpen(false);
-      const { data: tData } = await (supabase as any)
-        .from("transportes")
-        .select("id, transportista, estado, fecha, destino, costo, moneda")
-        .eq("remito_id", detailRemito.id);
-      if (tData) setDetailTransportes(tData as TransporteLinked[]);
-    } catch (err) {
-      console.error("Error creating transporte:", err);
-    } finally {
-      setCreatingTransporte(false);
-    }
   }
 
   if (loading) {
@@ -1113,144 +1015,13 @@ export default function RemitosPage() {
                 </div>
               </div>
 
-              {/* Linked transportes */}
+              {/* Transporte: lo que dice el remito ("¿Quién lo lleva?"). Desde Remitos no se tocan los viajes de Transportes (Augusto 03/11/2026). */}
               <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-zinc-400 font-medium">Transporte</span>
-                  {!createTransporteOpen && (
-                    <button
-                      onClick={async () => {
-                        setTransporteForm({
-                          transportista_id: "", transportista: "", destino: "", origen: "",
-                          fecha: todayAR(),
-                          costo: "", moneda: "ARS", bultos: "", tipo_vehiculo: "", notas: "",
-                        });
-                        setCreateTransporteOpen(true);
-                        try {
-                          const { data } = await (supabase as any).from("transportistas").select("id, nombre").eq("activo", true).order("nombre");
-                          if (data) setCatalogTransportistas(data as { id: string; nombre: string }[]);
-                        } catch { /* ignore */ }
-                      }}
-                      className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-600 font-medium"
-                    >
-                      <Plus className="h-3 w-3" /> Agregar transporte
-                    </button>
-                  )}
-                </div>
-
-                {detailTransportes.length > 0 ? (
-                  <div className="space-y-2">
-                    {detailTransportes.map(t => {
-                      const cfg = transporteEstadoConfig[t.estado] || { label: t.estado, variant: "info" as const };
-                      return (
-                        <div key={t.id} className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-3">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <Truck className="h-4 w-4 text-zinc-400" />
-                              <span className="font-medium text-sm dark:text-white">{t.transportista}</span>
-                              <Badge variant={cfg.variant}>{cfg.label}</Badge>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs text-zinc-400">{formatDate(t.fecha)}</span>
-                              <button
-                                onClick={async () => {
-                                  if (!confirm("¿Eliminar este transporte?")) return;
-                                  const { error } = await (supabase as any).from("transportes").delete().eq("id", t.id).eq("sociedad_id", sociedadActiva?.id || "");
-                                  if (error) { alert("Error al eliminar transporte"); return; }
-                                  setDetailTransportes((prev) => prev.filter((tr) => tr.id !== t.id));
-                                }}
-                                className="p-1 rounded text-zinc-400 hover:bg-red-100 hover:text-red-500 dark:hover:bg-red-900/30 transition-colors"
-                                title="Eliminar transporte"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-4 mt-1.5 text-xs text-zinc-500">
-                            {t.destino && <span>Destino: {t.destino}</span>}
-                            {t.costo != null && (
-                              <span className="font-mono text-emerald-600 dark:text-emerald-400">
-                                {formatCurrency(t.costo, t.moneda as "USD" | "ARS")}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : !createTransporteOpen ? (
-                  <p className="text-sm text-zinc-400 text-center py-3 rounded-lg border border-dashed border-zinc-200 dark:border-zinc-700">
-                    Sin transporte asignado
-                  </p>
-                ) : null}
-
-                {/* Inline create transporte form */}
-                {createTransporteOpen && (
-                  <div className="rounded-lg border border-orange-200 dark:border-orange-800 bg-orange-50/50 dark:bg-orange-950/20 p-3 space-y-2 mt-2">
-                    <p className="text-xs font-medium text-orange-600 dark:text-orange-400 mb-2">Nuevo transporte para este remito</p>
-                    <div>
-                      {catalogTransportistas.length > 0 ? (
-                        <select
-                          value={transporteForm.transportista_id}
-                          onChange={e => {
-                            const id = e.target.value;
-                            const found = catalogTransportistas.find(t => t.id === id);
-                            setTransporteForm({ ...transporteForm, transportista_id: id, transportista: found?.nombre || (id === "__manual" ? transporteForm.transportista : "") });
-                          }}
-                          className="w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
-                        >
-                          <option value="">Seleccionar transportista *</option>
-                          {catalogTransportistas.map(t => <option key={t.id} value={t.id}>{t.nombre}</option>)}
-                          <option value="__manual">Otro (ingresar manualmente)</option>
-                        </select>
-                      ) : (
-                        <input type="text" value={transporteForm.transportista} onChange={e => setTransporteForm({ ...transporteForm, transportista: e.target.value })}
-                          className="w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
-                          placeholder="Transportista *" autoFocus />
-                      )}
-                      {transporteForm.transportista_id === "__manual" && (
-                        <input type="text" value={transporteForm.transportista} onChange={e => setTransporteForm({ ...transporteForm, transportista: e.target.value })}
-                          className="w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white mt-1"
-                          placeholder="Nombre del transportista *" autoFocus />
-                      )}
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <input type="text" value={transporteForm.origen} onChange={e => setTransporteForm({ ...transporteForm, origen: e.target.value })}
-                        className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Origen" />
-                      <input type="text" value={transporteForm.destino} onChange={e => setTransporteForm({ ...transporteForm, destino: e.target.value })}
-                        className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Destino" />
-                    </div>
-                    <div className="grid grid-cols-3 gap-2">
-                      <input type="date" value={transporteForm.fecha} onChange={e => setTransporteForm({ ...transporteForm, fecha: e.target.value })}
-                        className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                      <input type="number" step="0.01" value={transporteForm.costo} onChange={e => setTransporteForm({ ...transporteForm, costo: e.target.value })}
-                        className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Monto (opc.)" />
-                      <select value={transporteForm.moneda} onChange={e => setTransporteForm({ ...transporteForm, moneda: e.target.value as "ARS" | "USD" })}
-                        className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                        <option value="ARS">ARS</option>
-                        <option value="USD">USD</option>
-                      </select>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <input type="number" min="0" value={transporteForm.bultos} onChange={e => setTransporteForm({ ...transporteForm, bultos: e.target.value })}
-                        className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Bultos" />
-                      <input type="text" value={transporteForm.tipo_vehiculo} onChange={e => setTransporteForm({ ...transporteForm, tipo_vehiculo: e.target.value })}
-                        className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Tipo vehículo" />
-                    </div>
-                    <textarea value={transporteForm.notas} onChange={e => setTransporteForm({ ...transporteForm, notas: e.target.value })}
-                      className="w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" rows={1} placeholder="Notas..." />
-                    <div className="flex justify-end gap-2">
-                      <button onClick={() => setCreateTransporteOpen(false)} className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300">
-                        Cancelar
-                      </button>
-                      <button onClick={handleCreateTransporteFromRemito}
-                        disabled={creatingTransporte || (!transporteForm.transportista && !transporteForm.transportista_id) || (transporteForm.transportista_id === "__manual" && !transporteForm.transportista)}
-                        className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-700 disabled:opacity-50 flex items-center gap-1">
-                        {creatingTransporte && <Loader2 className="h-3 w-3 animate-spin" />}
-                        Crear transporte
-                      </button>
-                    </div>
-                  </div>
+                <span className="text-xs text-zinc-400 font-medium block mb-2">Transporte</span>
+                {(detailRemito.transportistas || []).length > 0 ? (
+                  <p className="text-sm text-zinc-700 dark:text-zinc-300">{(detailRemito.transportistas || []).join(", ")}</p>
+                ) : (
+                  <p className="text-sm text-zinc-400 text-center py-3 rounded-lg border border-dashed border-zinc-200 dark:border-zinc-700">Sin transporte asignado</p>
                 )}
               </div>
 

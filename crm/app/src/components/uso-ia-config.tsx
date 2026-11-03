@@ -7,20 +7,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
+import { costoIAUSD as costoUSD } from "@/lib/precios-ia";
 import { Loader2 } from "lucide-react";
 
 const db = supabase as any;
-
-// USD por millón de tokens (entrada / salida). Aproximado: sirve para tener una idea, no para facturar.
-const PRECIOS: Array<{ clave: string; entrada: number; salida: number }> = [
-  { clave: "haiku", entrada: 1, salida: 5 },
-  { clave: "sonnet", entrada: 3, salida: 15 },
-  { clave: "opus", entrada: 15, salida: 75 },
-];
-const costoUSD = (modelo: string | null, ent: number, sal: number) => {
-  const p = PRECIOS.find(x => (modelo || "").toLowerCase().includes(x.clave)) || PRECIOS[0];
-  return (ent * p.entrada + sal * p.salida) / 1_000_000;
-};
 
 const FUNCION_LABEL: Record<string, string> = {
   oc_cliente: "Leer OC de clientes", lista_precios: "Leer listas de precios", factura_compra: "Leer facturas de compra",

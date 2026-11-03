@@ -3,7 +3,7 @@
 import { supabase } from "@/lib/supabase/client";
 import { generateRemitoPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
 import { numeroRemito, nombrePDFRemito } from "@/lib/remitos-crear";
-import { RETIRA_TEXTO, entregaPDF } from "@/lib/remito-entrega";
+import { entregaPDF, transportesPDF } from "@/lib/remito-entrega";
 
 type SociedadPDF = Parameters<typeof getSociedadPDF>[0] & { id: string };
 
@@ -13,10 +13,9 @@ type SociedadPDF = Parameters<typeof getSociedadPDF>[0] & { id: string };
  */
 export async function htmlRemito(remitoId: string, sociedad: SociedadPDF, valorDeclarado?: number | null) {
   const db = supabase as any;
-  const [{ data: r, error }, { data: items }, { data: transportes }] = await Promise.all([
+  const [{ data: r, error }, { data: items }] = await Promise.all([
     db.from("remitos").select("*, clientes(razon_social, cuit, direccion, email), presupuestos(sucursal_id)").eq("id", remitoId).eq("sociedad_id", sociedad.id).single(),
     db.from("remito_items").select("descripcion, cantidad, unidad, orden").eq("remito_id", remitoId).order("orden"),
-    db.from("transportes").select("transportista, destino, costo, moneda, estado").eq("remito_id", remitoId).neq("estado", "cancelado"),
   ]);
   if (error || !r) throw error || new Error("Remito no encontrado");
   let caiVencimiento: string | null = null;
@@ -30,11 +29,15 @@ export async function htmlRemito(remitoId: string, sociedad: SociedadPDF, valorD
     const { data: s } = await db.from("cliente_sucursales").select("nombre, direccion, localidad, provincia").eq("id", sucId).maybeSingle();
     suc = s || null;
   }
-  // Domicilio cargado en el remito ("¿Quién lo lleva?"): manda sobre el de la sucursal.
-  const retira = (r.direccion_entrega_snapshot || "").trim().toLowerCase() === RETIRA_TEXTO.toLowerCase();
+  // Domicilio y transporte cargados en el remito ("¿Quién lo lleva?"): el domicilio manda sobre el de la sucursal.
+  // El transporte sale de lo que dice el remito, no de Transportes (Augusto 03/11/2026).
+  let nombreTransportista: string | null = null;
+  if (r.transportista_id) {
+    const { data: tr } = await db.from("transportistas").select("nombre").eq("id", r.transportista_id).maybeSingle();
+    nombreTransportista = tr?.nombre || null;
+  }
   const entrega = entregaPDF(r, suc);
-  const viajes = (transportes || []).map((t: any) => ({ transportista: t.transportista, destino: t.destino, costo: t.costo, moneda: t.moneda }));
-  if (!viajes.length && retira) viajes.push({ transportista: RETIRA_TEXTO, destino: null, costo: null, moneda: "ARS" });
+  const viajes = transportesPDF(r, () => nombreTransportista);
   const html = generateRemitoPDF({
     numero: r.numero,
     fecha: r.fecha,

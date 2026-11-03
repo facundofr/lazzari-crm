@@ -116,6 +116,7 @@ export async function POST(request: NextRequest) {
       // Augusto 26/10/2026: Opus 5.5 (piensa antes de responder: más lugar para listas largas).
       model: "claude-opus-5-5",
       max_tokens: 64000,
+      output_config: { effort: "high" }, // Augusto 03/11/2026: esfuerzo alto (lee precios)
       system: EXTRACTION_PROMPT,
       messages: [
         {

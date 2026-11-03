@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { createBrowserClient } from "@supabase/ssr";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { supabase as supabaseCompartido } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import { Loader2, Lock } from "lucide-react";
 
@@ -12,10 +13,9 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
-  const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
+  // Un solo cliente de Supabase en el navegador (lib/supabase/client, con el arreglo de mayúsculas): el primero que se crea
+  // queda para todo el sistema, así que crear otro acá podía dejar el CRM sin ese arreglo hasta apretar F5 (auditoría 02/11/2026, P12).
+  const supabase = supabaseCompartido as unknown as SupabaseClient;
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();

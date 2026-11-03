@@ -60,7 +60,9 @@ export async function POST(request: NextRequest) {
       try {
         const response = await client.messages.create({
           model,
-          max_tokens: 8000,
+          // Augusto 03/11/2026: esfuerzo alto (lee montos). Opus 5.5 sin esto trabaja en medio; piensa más, por eso 16000.
+          max_tokens: 16000,
+          output_config: { effort: "high" },
           system: PROMPT,
           messages: [{ role: "user", content: contentBlocks }],
         });

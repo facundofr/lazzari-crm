@@ -20,7 +20,8 @@ import {
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { createBrowserClient } from "@supabase/ssr";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { supabase as supabaseCompartido } from "@/lib/supabase/client";
 import { formatDateTime } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { useUser } from "@/lib/auth-context";
@@ -120,10 +121,9 @@ export function Header({ title, subtitle, action }: HeaderProps) {
   const searchContainerRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
+  // Un solo cliente de Supabase en el navegador (lib/supabase/client, con el arreglo de mayúsculas): el primero que se crea
+  // queda para todo el sistema, así que crear otro acá podía dejar el CRM sin ese arreglo hasta apretar F5 (auditoría 02/11/2026, P12).
+  const supabase = supabaseCompartido as unknown as SupabaseClient;
 
   // ── Cmd+K shortcut ──────────────────────────────────────────────
   useEffect(() => {

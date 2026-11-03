@@ -66,9 +66,14 @@ export const IIBB_PCT_NATI = 6;
 /** Desde este mes se estiman los premios y la comisión de José que todavía no se cargaron en Gastos (mismo mes que sus tarjetas). */
 export const DESDE_ESTIMADOS = "2026-10";
 
+/** Forma de pago de un gasto con la Mastercard personal de Augusto (su pago es retiro). */
+export const MEDIO_MASTERCARD_PERSONAL = "tarjeta_mastercard_4775";
+
 export interface GastoCont {
   id: string; fecha: string; descripcion: string | null; categoria: string | null; grupo?: string | null;
   monto: number | string | null; moneda?: string | null;
+  /** Forma de pago (gastos_manuales.medio_pago): con la Mastercard personal no suma en retiros (cuenta su pago). */
+  medio_pago?: string | null;
 }
 /** Línea del extracto del banco (extracto_movimientos), ya clasificada en Bancos. */
 export interface LineaBancoCont {
@@ -511,6 +516,8 @@ export function bloqueInformativo(x: {
   for (const g of x.gastos) {
     const destino = clasificarGasto(g);
     if (destino !== "retiros" && destino !== "impuestos_pago") continue;
+    // Pagado con la Mastercard personal: el pago de la tarjeta ya cuenta entero como retiro (Augusto 03/11/2026: Apple, $ 18.932 de más).
+    if (destino === "retiros" && g.medio_pago === MEDIO_MASTERCARD_PERSONAL) continue;
     const d = sinAcentos(g.descripcion);
     if (destino === "impuestos_pago" && IIBB_O_TASA.test(d) && !/reten|percep|sircreb/.test(d)) continue; // punto 2: el IIBB ya es el %
     const monto = pesos(num(g.monto), g.moneda, g.fecha);

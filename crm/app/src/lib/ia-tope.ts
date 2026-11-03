@@ -4,9 +4,10 @@
 export const TOPE_MENSUAL_IA_USD = 5;
 export const FUNCION_CHAT_IA = "chat_ia";
 
-// claude-haiku-4-5, USD por millón de tokens. El caché escribe a 1,25× y lee a 0,1× del precio de entrada.
-const ENTRADA = 1;
-const SALIDA = 5;
+import { precioIA } from "./precios-ia";
+
+// La Ayuda usa claude-haiku-4-5 (precio de la tabla única lib/precios-ia). El caché escribe a 1,25× y lee a 0,1× del precio de entrada.
+const { entrada: ENTRADA, salida: SALIDA } = precioIA("claude-haiku-4-5");
 
 type Usage = {
   input_tokens?: number | null;

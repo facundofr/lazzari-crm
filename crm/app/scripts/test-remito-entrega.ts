@@ -1,32 +1,27 @@
 // Prueba rápida de lib/remito-entrega (sin base). Uso (desde crm/app): npx tsx scripts/test-remito-entrega.ts
 import assert from "node:assert/strict";
-import { viajesAlAnular, costoNumero, entregaInicial, entregaGuardada, difiereDeSucursal, datosRemito, planViaje, filaVigente, textoTransporte, entregaPDF, RETIRA_TEXTO, PROPIO_TEXTO, FILA_ACTUAL, AVISO_LIQUIDADO, type FilaTransporte } from "../src/lib/remito-entrega";
+import { entregaInicial, entregaGuardada, difiereDeSucursal, datosRemito, modoDeRemito, textoTransporte, valorTransporte, transportesPDF, entregaPDF, guardarEntrega, RETIRA_TEXTO, PROPIO_TEXTO } from "../src/lib/remito-entrega";
 
-const ctx = { sociedad_id: "soc", cliente_id: "cli", remito_id: "rem", fecha: "2026-10-16", created_by: "yo" };
 const nombre = (id: string) => ({ t1: "Cruz del Sur", t2: "Andreani" } as Record<string, string>)[id] || null;
 const suc = { direccion: "Ruta 8 km 371", localidad: "Venado Tuerto", transportista_id: "t1" };
 
-// Costo: vacío = null (no 0); acepta 12.500,50 y 12500.5
-assert.equal(costoNumero(""), null);
-assert.equal(costoNumero("  "), null);
-assert.equal(costoNumero("0"), 0);
-assert.equal(costoNumero("12.500,50"), 12500.5);
-assert.equal(costoNumero("$ 12500.5"), 12500.5);
-assert.equal(costoNumero("abc"), null);
-
 // Remito nuevo: domicilio de la sucursal; el transporte arranca SIEMPRE en "no sé" (nunca se asigna solo).
-assert.deepEqual(entregaInicial(suc, null, "t2"), { modo: "nose", transportista_id: null, domicilio: "Ruta 8 km 371", localidad: "Venado Tuerto", costo: "" });
-assert.equal(entregaInicial({ ...suc, transportista_id: null }, null, "t2").transportista_id, null);
-assert.deepEqual(entregaInicial(null, { direccion: "Av. Siempre Viva 1", localidad: "Rosario" }, null), { modo: "nose", transportista_id: null, domicilio: "Av. Siempre Viva 1", localidad: "Rosario", costo: "" });
+assert.deepEqual(entregaInicial(suc, null), { modo: "nose", transportista_id: null, domicilio: "Ruta 8 km 371", localidad: "Venado Tuerto" });
+assert.deepEqual(entregaInicial(null, { direccion: "Av. Siempre Viva 1", localidad: "Rosario" }), { modo: "nose", transportista_id: null, domicilio: "Av. Siempre Viva 1", localidad: "Rosario" });
+
+// Cómo lo lleva un remito guardado (solo con lo del remito)
+assert.equal(modoDeRemito({ direccion_entrega_snapshot: "retira el cliente " }), "retira");
+assert.equal(modoDeRemito({ entrega_propia: true, transportista_id: "t1" }), "propio");
+assert.equal(modoDeRemito({ transportista_id: "t1" }), "transporte");
+assert.equal(modoDeRemito({}), "nose");
 
 // Remito guardado
-const def = { ...entregaInicial(suc, null, null), modo: "transporte" as const, transportista_id: "t1" }; // lo que elige una persona: el transportista de la sucursal
-const viaje: FilaTransporte = { id: "v1", transportista: "Cruz del Sur", transportista_id: "t1", tipo: "externo", estado: "solicitado", destino: null, costo: 8000, created_at: "2026-10-16T10:00" };
-assert.deepEqual(entregaGuardada({ direccion_entrega_snapshot: "Otra 123", localidad_entrega_snapshot: "Rufino", transportista_id: "t1" }, viaje, def), { modo: "transporte", transportista_id: "t1", domicilio: "Otra 123", localidad: "Rufino", costo: "8000" });
-assert.equal(entregaGuardada({ direccion_entrega_snapshot: RETIRA_TEXTO, localidad_entrega_snapshot: null, transportista_id: null }, null, def).modo, "retira");
-assert.equal(entregaGuardada({ direccion_entrega_snapshot: null, localidad_entrega_snapshot: null, transportista_id: null }, null, def).domicilio, "Ruta 8 km 371", "remito viejo = lo de la sucursal");
-assert.equal(entregaGuardada({ direccion_entrega_snapshot: null, localidad_entrega_snapshot: null, transportista_id: null }, { ...viaje, tipo: "interno", transportista_id: null }, def).modo, "propio");
-assert.equal(entregaGuardada({ direccion_entrega_snapshot: null, localidad_entrega_snapshot: null, transportista_id: null }, { ...viaje, transportista_id: null }, def).transportista_id, FILA_ACTUAL);
+const def = { ...entregaInicial(suc, null), modo: "transporte" as const, transportista_id: "t1" }; // lo que elige una persona
+assert.deepEqual(entregaGuardada({ direccion_entrega_snapshot: "Otra 123", localidad_entrega_snapshot: "Rufino", transportista_id: "t1" }, def), { modo: "transporte", transportista_id: "t1", domicilio: "Otra 123", localidad: "Rufino" });
+assert.equal(entregaGuardada({ direccion_entrega_snapshot: RETIRA_TEXTO, localidad_entrega_snapshot: null, transportista_id: null }, def).modo, "retira");
+assert.equal(entregaGuardada({ direccion_entrega_snapshot: null, localidad_entrega_snapshot: null, transportista_id: null }, def).domicilio, "Ruta 8 km 371", "remito viejo = lo de la sucursal");
+assert.equal(entregaGuardada({ direccion_entrega_snapshot: null, localidad_entrega_snapshot: null, transportista_id: null }, def).modo, "nose", "sin nada = todavía no sé");
+assert.deepEqual(entregaGuardada({ entrega_propia: true }, def), { modo: "propio", transportista_id: null, domicilio: "Ruta 8 km 371", localidad: "Venado Tuerto" });
 
 // ¿Distinto de la sucursal?
 assert.deepEqual(difiereDeSucursal(def, suc), { domicilio: false, transportista: false });
@@ -35,46 +30,32 @@ assert.deepEqual(difiereDeSucursal({ ...def, modo: "transporte", transportista_i
 assert.deepEqual(difiereDeSucursal({ ...def, localidad: "Rufino" }, suc), { domicilio: true, transportista: false });
 assert.deepEqual(difiereDeSucursal({ ...def, modo: "retira" }, suc), { domicilio: false, transportista: false });
 
-// Fila del remito
-assert.deepEqual(datosRemito({ ...def, modo: "retira" }), { direccion_entrega_snapshot: RETIRA_TEXTO, localidad_entrega_snapshot: null, transportista_id: null });
-assert.deepEqual(datosRemito(def), { direccion_entrega_snapshot: "Ruta 8 km 371", localidad_entrega_snapshot: "Venado Tuerto", transportista_id: "t1" });
-assert.equal(datosRemito({ ...def, modo: "propio", transportista_id: null }).transportista_id, null);
-
-// Viaje: crear con transportista_id y remito_id, costo null si no se sabe
-const p1 = planViaje(def, null, ctx, nombre);
-assert.equal(p1.accion, "crear");
-if (p1.accion === "crear") {
-  assert.equal(p1.datos.transportista_id, "t1"); assert.equal(p1.datos.remito_id, "rem"); assert.equal(p1.datos.transportista, "Cruz del Sur");
-  assert.equal(p1.datos.costo, null); assert.equal(p1.datos.estado, "solicitado"); assert.equal(p1.datos.tipo, "externo"); assert.equal(p1.datos.destino, "Ruta 8 km 371, Venado Tuerto");
+// Fila del remito (lo único que se guarda)
+assert.deepEqual(datosRemito({ ...def, modo: "retira" }), { direccion_entrega_snapshot: RETIRA_TEXTO, localidad_entrega_snapshot: null, transportista_id: null, entrega_propia: false });
+assert.deepEqual(datosRemito(def), { direccion_entrega_snapshot: "Ruta 8 km 371", localidad_entrega_snapshot: "Venado Tuerto", transportista_id: "t1", entrega_propia: false });
+assert.deepEqual(datosRemito({ ...def, modo: "propio", transportista_id: null }), { direccion_entrega_snapshot: "Ruta 8 km 371", localidad_entrega_snapshot: "Venado Tuerto", transportista_id: null, entrega_propia: true });
+assert.equal(datosRemito({ ...def, modo: "nose", transportista_id: null }).transportista_id, null);
+// Ida y vuelta: lo que se guarda se vuelve a leer igual
+for (const e of [def, { ...def, modo: "propio" as const, transportista_id: null }, { ...def, modo: "nose" as const, transportista_id: null }]) {
+  assert.deepEqual(entregaGuardada(datosRemito(e), def), e);
 }
-// Corregir el que ya hay (cambia transportista y costo)
-const p2 = planViaje({ ...def, transportista_id: "t2", costo: "9.000" }, viaje, ctx, nombre);
-assert.deepEqual(p2, { accion: "corregir", id: "v1", datos: { transportista: "Andreani", transportista_id: "t2", tipo: "externo", destino: "Ruta 8 km 371, Venado Tuerto", costo: 9000 } });
-// Lo llevamos nosotros = interno
-const p3 = planViaje({ ...def, modo: "propio", transportista_id: null }, null, ctx, nombre);
-assert.equal(p3.accion === "crear" && p3.datos.tipo, "interno");
-assert.equal(p3.accion === "crear" && p3.datos.transportista, PROPIO_TEXTO);
-// Retira / no sé: cancela si no está liquidado (cualquier estado); liquidado no se toca y avisa; sin viaje, nada
-assert.deepEqual(planViaje({ ...def, modo: "retira" }, viaje, ctx, nombre), { accion: "cancelar", id: "v1" });
-assert.deepEqual(planViaje({ ...def, modo: "nose" }, { ...viaje, estado: "entregado" }, ctx, nombre), { accion: "cancelar", id: "v1" });
-assert.deepEqual(planViaje({ ...def, modo: "nose" }, { ...viaje, estado: "entregado", factura_compra_id: "f1" }, ctx, nombre), { accion: "nada", aviso: AVISO_LIQUIDADO });
-// Cambiar transportista: corrige si no está liquidado (aunque esté entregado); liquidado avisa; sin cambios no avisa
-assert.equal(planViaje({ ...def, transportista_id: "t2" }, { ...viaje, estado: "entregado" }, ctx, nombre).accion, "corregir");
-assert.deepEqual(planViaje({ ...def, transportista_id: "t2" }, { ...viaje, factura_compra_id: "f1" }, ctx, nombre), { accion: "nada", aviso: AVISO_LIQUIDADO });
-const igual = planViaje(def, viaje, ctx, nombre);
-if (igual.accion === "corregir") assert.deepEqual(planViaje(def, { ...viaje, ...igual.datos, factura_compra_id: "f1" } as FilaTransporte, ctx, nombre), { accion: "nada" });
-assert.deepEqual(planViaje({ ...def, modo: "nose" }, null, ctx, nombre), { accion: "nada" });
-// Viaje viejo sin id: mantiene su nombre
-const p4 = planViaje({ ...def, transportista_id: FILA_ACTUAL }, { ...viaje, transportista: "Fletes Juan", transportista_id: null }, ctx, nombre);
-assert.equal(p4.accion === "corregir" && p4.datos.transportista, "Fletes Juan");
 
-// Vigente y texto de la lista
-assert.equal(filaVigente([{ ...viaje, id: "a", estado: "cancelado", created_at: "2026-10-17" }, viaje])?.id, "v1");
-assert.equal(textoTransporte({}, [viaje]), "Cruz del Sur");
-assert.equal(textoTransporte({ direccion_entrega_snapshot: RETIRA_TEXTO }, [{ ...viaje, estado: "cancelado" }]), RETIRA_TEXTO);
-assert.equal(textoTransporte({}, [{ ...viaje, tipo: "interno", transportista: PROPIO_TEXTO }]), "Propio");
-assert.equal(textoTransporte({}, []), "");
-assert.equal(planViaje({ ...def, modo: "propio", domicilio: "", localidad: "" }, null, ctx, nombre).accion === "crear" && (planViaje({ ...def, modo: "propio", domicilio: "", localidad: "" }, null, ctx, nombre) as any).datos.destino, "", "destino nunca null");
+// Columna Transporte (texto y valor del desplegable)
+assert.equal(textoTransporte({ transportista_id: "t1" }, nombre), "Cruz del Sur");
+assert.equal(textoTransporte({ direccion_entrega_snapshot: RETIRA_TEXTO }, nombre), RETIRA_TEXTO);
+assert.equal(textoTransporte({ entrega_propia: true }, nombre), "Propio");
+assert.equal(textoTransporte({ transportista_id: "viejo" }, nombre), "(transportista dado de baja)");
+assert.equal(textoTransporte({}, nombre), "");
+assert.equal(valorTransporte({ transportista_id: "t2" }), "t:t2");
+assert.equal(valorTransporte({ entrega_propia: true }), "propio");
+assert.equal(valorTransporte({ direccion_entrega_snapshot: RETIRA_TEXTO }), "retira");
+assert.equal(valorTransporte({}), "nose");
+
+// PDF: Transportista / Destino con lo del remito
+assert.deepEqual(transportesPDF({ transportista_id: "t1", direccion_entrega_snapshot: "Mitre 50", localidad_entrega_snapshot: "Rufino" }, nombre), [{ transportista: "Cruz del Sur", destino: "Mitre 50, Rufino" }]);
+assert.deepEqual(transportesPDF({ entrega_propia: true, direccion_entrega_snapshot: "Mitre 50" }, nombre), [{ transportista: PROPIO_TEXTO, destino: "Mitre 50" }]);
+assert.deepEqual(transportesPDF({ direccion_entrega_snapshot: RETIRA_TEXTO }, nombre), [{ transportista: RETIRA_TEXTO, destino: null }]);
+assert.deepEqual(transportesPDF({}, nombre), [], "sin transporte: el PDF dice Sin transporte asignado");
 
 // PDF: línea Entrega (nombre — direccion). Lo del remito manda; sin nada, la sucursal sin repetir el nombre.
 const sucPDF = { nombre: "Planta Norte", direccion: "Ruta 8 km 371", localidad: "Venado Tuerto", provincia: "Santa Fe" };
@@ -86,9 +67,14 @@ assert.deepEqual(entregaPDF({ direccion_entrega_snapshot: "retira el cliente " }
 assert.deepEqual(entregaPDF({ direccion_entrega_snapshot: RETIRA_TEXTO }, null), { nombre: RETIRA_TEXTO, direccion: null });
 assert.deepEqual(entregaPDF({}, null), { nombre: null, direccion: null }, "sin nada: el PDF usa el domicilio del cliente");
 
-// Anular el remito: cancela los viajes vivos no liquidados; el liquidado no se toca
-const vv = (id: string, estado: string, fc?: string): FilaTransporte => ({ ...viaje, id, estado, factura_compra_id: fc ?? null });
-assert.deepEqual(viajesAlAnular([vv("a", "solicitado"), vv("b", "entregado"), vv("c", "cancelado"), vv("d", "en_transito", "f1")]), { cancelar: ["a", "b"], liquidados: 1 });
-assert.deepEqual(viajesAlAnular([]), { cancelar: [], liquidados: 0 });
-
-console.log("remito-entrega OK");
+// Guardar: solo toca remitos (y la sucursal si se pidió); NUNCA transportes.
+(async () => {
+  const tablas: string[] = [];
+  const db = { from: (t: string) => { tablas.push(t); const q: any = { update: () => q, eq: () => q, then: (ok: any) => ok({ error: null }) }; return q; } };
+  const ctx = { sociedad_id: "soc", cliente_id: "cli", remito_id: "rem", sucursal_id: "suc" };
+  assert.equal(await guardarEntrega(db, { ...def, modo: "propio", transportista_id: null }, ctx, null), null);
+  assert.equal(await guardarEntrega(db, { ...def, transportista_id: "t2" }, ctx, { domicilio: false, transportista: true }), null);
+  assert.deepEqual(tablas, ["remitos", "remitos", "cliente_sucursales"]);
+  assert.ok(!tablas.includes("transportes"), "el remito no toca Transportes");
+  console.log("remito-entrega OK");
+})();

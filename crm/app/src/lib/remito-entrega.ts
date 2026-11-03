@@ -1,154 +1,81 @@
-// "¿Quién lo lleva?" del remito: domicilio, localidad, transporte y costo del flete.
-// - Se guarda en el remito (direccion_entrega_snapshot, localidad_entrega_snapshot, transportista_id)
-//   y el viaje en `transportes` (transportista_id y remito_id siempre; costo null si no se sabe, nunca 0).
-// - "Lo retira el cliente" = sin viaje; en el remito queda el domicilio "Retira el cliente" (así sale en el PDF).
-// - "Lo llevamos nosotros" = viaje tipo "interno". "Todavía no sé" = sin viaje.
-// - Todo se puede cambiar siempre mientras el viaje no esté liquidado al transportista (factura_compra_id null, sin importar el estado):
-//   si ya había viaje se corrige; si se pasa a "retira"/"no sé", queda "cancelado" (no se borra).
-//   Si ya está liquidado no se toca y se avisa que se corrija en Transportes.
+// "¿Quién lo lleva?" del remito: domicilio, localidad y transporte.
+// - Se guarda SOLO en el remito (direccion_entrega_snapshot, localidad_entrega_snapshot, transportista_id, entrega_propia).
+//   Augusto 03/11/2026: "Si se pone o cambia algo en remito, queda solo en remito, no quiero que nada de remito vaya a transporte".
+//   El remito ya no crea, corrige ni cancela viajes en Transportes (los viajes se cargan en Transportes).
+// - "Lo retira el cliente" = en el remito queda el domicilio "Retira el cliente" (así sale en el PDF).
+// - "Lo llevamos nosotros" = entrega_propia. "Todavía no sé" = sin transporte.
+// - Todo se puede cambiar siempre.
 // Funciones puras + guardarEntrega(db, …), que recibe la base por parámetro (se prueba sin Supabase).
 
 export type ModoEntrega = "transporte" | "propio" | "retira" | "nose";
 
 export interface Entrega {
   modo: ModoEntrega;
-  /** Con modo "transporte": id del transportista, o FILA_ACTUAL para dejar el de un viaje viejo sin id. */
+  /** Con modo "transporte": id del transportista del catálogo. */
   transportista_id: string | null;
   domicilio: string;
   localidad: string;
-  /** Texto del input; vacío = no se sabe (queda null). */
-  costo: string;
 }
 
-export interface FilaTransporte {
-  id: string;
-  transportista: string | null;
-  transportista_id: string | null;
-  tipo: string | null;
-  estado: string | null;
-  destino: string | null;
-  costo: number | null;
-  created_at?: string | null;
-  /** Liquidado al transportista (factura de compra): ya no se toca desde el remito. */
-  factura_compra_id?: string | null;
+/** Lo que el remito guarda de su entrega. */
+export interface RemitoEntrega {
+  direccion_entrega_snapshot?: string | null;
+  localidad_entrega_snapshot?: string | null;
+  transportista_id?: string | null;
+  entrega_propia?: boolean | null;
 }
 
 export interface SucursalEntrega { direccion: string | null; localidad: string | null; transportista_id: string | null }
 
 export const RETIRA_TEXTO = "Retira el cliente";
 export const PROPIO_TEXTO = "Propio (lo llevamos nosotros)";
-export const FILA_ACTUAL = "__fila";
-export const AVISO_LIQUIDADO = "Ese viaje ya se liquidó al transportista; corregilo en Transportes.";
 
 const limpio = (t: string | null | undefined) => (t || "").trim();
 const mismo = (a: string | null | undefined, b: string | null | undefined) => limpio(a).toLowerCase() === limpio(b).toLowerCase();
 
-/** Costo del input → número o null (vacío o inválido = no se sabe). 0 escrito a propósito queda 0. */
-export function costoNumero(t: string): number | null {
-  const s = limpio(t).replace(/\$/g, "").replace(/\s/g, "");
-  if (!s) return null;
-  // "12.500,50" y "9.000" = miles con punto (como se escribe acá); "8000.5" = decimal con punto.
-  const normal = s.includes(",") ? s.replace(/\./g, "").replace(",", ".") : /^\d{1,3}(\.\d{3})+$/.test(s) ? s.replace(/\./g, "") : s;
-  const n = Number(normal);
-  return Number.isFinite(n) && n >= 0 ? n : null;
-}
+/** Destino: "domicilio, localidad" ("" si no hay). */
+export const destinoDe = (e: { domicilio?: string | null; localidad?: string | null }) => [limpio(e.domicilio), limpio(e.localidad)].filter(Boolean).join(", ");
 
-/** Destino del viaje: "domicilio, localidad" ("" si no hay: la columna destino no acepta null). */
-export const destinoDe = (e: Pick<Entrega, "domicilio" | "localidad">) => [limpio(e.domicilio), limpio(e.localidad)].filter(Boolean).join(", ");
-
-/** Viaje vigente del remito (el último que no está cancelado). */
-export function filaVigente(filas: FilaTransporte[]): FilaTransporte | null {
-  const vivas = filas.filter((f) => f.estado !== "cancelado");
-  vivas.sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
-  return vivas[0] || null;
-}
-
-/** Al ANULAR un remito: los viajes vivos que no están liquidados se cancelan (no se borran); los liquidados no se tocan y se avisa. */
-export function viajesAlAnular(filas: FilaTransporte[]): { cancelar: string[]; liquidados: number } {
-  const vivas = filas.filter((f) => f.estado !== "cancelado");
-  return { cancelar: vivas.filter((f) => !f.factura_compra_id).map((f) => f.id), liquidados: vivas.filter((f) => !!f.factura_compra_id).length };
+/** Cómo lo lleva un remito guardado. */
+export function modoDeRemito(r: RemitoEntrega): ModoEntrega {
+  if (mismo(r.direccion_entrega_snapshot, RETIRA_TEXTO)) return "retira";
+  if (r.entrega_propia) return "propio";
+  if (r.transportista_id) return "transporte";
+  return "nose";
 }
 
 /** Entrega para un remito nuevo: domicilio de la sucursal (o del cliente). El transporte arranca SIEMPRE en "Todavía no sé":
- *  nunca se asigna solo, lo elige una persona (los parámetros de transportista se ignoran). */
-export function entregaInicial(suc: SucursalEntrega | null, cliente: { direccion: string | null; localidad: string | null } | null, _ultimoTransportista?: string | null): Entrega {
+ *  nunca se asigna solo, lo elige una persona. */
+export function entregaInicial(suc: SucursalEntrega | null, cliente: { direccion: string | null; localidad: string | null } | null): Entrega {
   const base = suc || { direccion: cliente?.direccion ?? null, localidad: cliente?.localidad ?? null };
-  return { modo: "nose", transportista_id: null, domicilio: limpio(base.direccion), localidad: limpio(base.localidad), costo: "" };
+  return { modo: "nose", transportista_id: null, domicilio: limpio(base.direccion), localidad: limpio(base.localidad) };
 }
 
-/** Entrega de un remito ya hecho (lo guardado manda; si es un remito viejo sin nada, la de la sucursal). */
-export function entregaGuardada(
-  remito: { direccion_entrega_snapshot: string | null; localidad_entrega_snapshot: string | null; transportista_id: string | null },
-  fila: FilaTransporte | null,
-  porDefecto: Entrega,
-): Entrega {
-  const retira = mismo(remito.direccion_entrega_snapshot, RETIRA_TEXTO);
-  const tieneDomicilio = !!limpio(remito.direccion_entrega_snapshot) && !retira;
+/** Entrega de un remito ya hecho (lo guardado manda; si es un remito viejo sin domicilio, el de la sucursal). */
+export function entregaGuardada(remito: RemitoEntrega, porDefecto: Entrega): Entrega {
+  const modo = modoDeRemito(remito);
+  const tieneDomicilio = !!limpio(remito.direccion_entrega_snapshot) && modo !== "retira";
   const domicilio = tieneDomicilio ? limpio(remito.direccion_entrega_snapshot) : porDefecto.domicilio;
   const localidad = tieneDomicilio || limpio(remito.localidad_entrega_snapshot) ? limpio(remito.localidad_entrega_snapshot) : porDefecto.localidad;
-  const costo = fila?.costo != null ? String(fila.costo) : "";
-  if (fila) {
-    if (fila.tipo === "interno") return { modo: "propio", transportista_id: null, domicilio, localidad, costo };
-    return { modo: "transporte", transportista_id: fila.transportista_id || FILA_ACTUAL, domicilio, localidad, costo };
-  }
-  if (retira) return { modo: "retira", transportista_id: null, domicilio, localidad, costo: "" };
-  if (remito.transportista_id) return { modo: "transporte", transportista_id: remito.transportista_id, domicilio, localidad, costo: "" };
-  return { modo: "nose", transportista_id: null, domicilio, localidad, costo: "" };
+  return { modo, transportista_id: modo === "transporte" ? remito.transportista_id || null : null, domicilio, localidad };
 }
 
 /** ¿Lo elegido es distinto de lo de siempre de la sucursal? (para preguntar si se guarda en la sucursal). */
 export function difiereDeSucursal(e: Entrega, suc: SucursalEntrega | null): { domicilio: boolean; transportista: boolean } {
   if (!suc || e.modo === "retira") return { domicilio: false, transportista: false };
   const domicilio = !mismo(e.domicilio, suc.direccion) || !mismo(e.localidad, suc.localidad);
-  const transportista = e.modo === "transporte" && !!e.transportista_id && e.transportista_id !== FILA_ACTUAL && e.transportista_id !== suc.transportista_id;
+  const transportista = e.modo === "transporte" && !!e.transportista_id && e.transportista_id !== suc.transportista_id;
   return { domicilio, transportista };
 }
 
 /** Lo que va en la fila del remito. */
 export function datosRemito(e: Entrega) {
-  if (e.modo === "retira") return { direccion_entrega_snapshot: RETIRA_TEXTO, localidad_entrega_snapshot: null, transportista_id: null };
+  if (e.modo === "retira") return { direccion_entrega_snapshot: RETIRA_TEXTO, localidad_entrega_snapshot: null, transportista_id: null, entrega_propia: false };
   return {
     direccion_entrega_snapshot: limpio(e.domicilio) || null,
     localidad_entrega_snapshot: limpio(e.localidad) || null,
-    transportista_id: e.modo === "transporte" && e.transportista_id && e.transportista_id !== FILA_ACTUAL ? e.transportista_id : null,
-  };
-}
-
-export type AccionViaje =
-  | { accion: "nada"; aviso?: string }
-  | { accion: "crear"; datos: Record<string, unknown> }
-  | { accion: "corregir"; id: string; datos: Record<string, unknown> }
-  | { accion: "cancelar"; id: string };
-
-/** Qué hacer con el viaje en `transportes`. nombreDe = nombre del transportista por id. */
-export function planViaje(
-  e: Entrega,
-  vigente: FilaTransporte | null,
-  ctx: { sociedad_id: string; cliente_id: string; remito_id: string; fecha: string; created_by: string | null },
-  nombreDe: (id: string) => string | null,
-): AccionViaje {
-  const lleva = e.modo === "transporte" || e.modo === "propio";
-  if (!lleva) {
-    if (!vigente) return { accion: "nada" };
-    return vigente.factura_compra_id ? { accion: "nada", aviso: AVISO_LIQUIDADO } : { accion: "cancelar", id: vigente.id };
-  }
-  let transportista: string | null;
-  let transportista_id: string | null;
-  if (e.modo === "propio") { transportista = PROPIO_TEXTO; transportista_id = null; }
-  else if (e.transportista_id === FILA_ACTUAL) { transportista = vigente?.transportista || null; transportista_id = vigente?.transportista_id || null; }
-  else { transportista_id = e.transportista_id; transportista = transportista_id ? nombreDe(transportista_id) : null; }
-  if (e.modo === "transporte" && !transportista) return { accion: "nada" };
-  const comunes = { transportista, transportista_id, tipo: e.modo === "propio" ? "interno" : "externo", destino: destinoDe(e), costo: costoNumero(e.costo) };
-  if (vigente && vigente.factura_compra_id) {
-    // Liquidado: no se toca; se avisa solo si lo elegido es distinto de lo que tiene el viaje.
-    const cambia = comunes.transportista_id !== vigente.transportista_id || !mismo(comunes.transportista, vigente.transportista) || comunes.tipo !== (vigente.tipo || "externo")
-      || !mismo(comunes.destino, vigente.destino) || (comunes.costo != null && comunes.costo !== vigente.costo);
-    return cambia ? { accion: "nada", aviso: AVISO_LIQUIDADO } : { accion: "nada" };
-  }
-  if (vigente) return { accion: "corregir", id: vigente.id, datos: comunes };
-  return {
-    accion: "crear",
-    datos: { ...comunes, sociedad_id: ctx.sociedad_id, cliente_id: ctx.cliente_id, remito_id: ctx.remito_id, fecha: ctx.fecha, moneda: "ARS", estado: "solicitado", created_by: ctx.created_by },
+    transportista_id: e.modo === "transporte" && e.transportista_id ? e.transportista_id : null,
+    entrega_propia: e.modo === "propio",
   };
 }
 
@@ -172,49 +99,56 @@ export function entregaPDF(
   return nombreSuc ? { nombre: nombreSuc, direccion: dirSuc } : { nombre: dirSuc, direccion: null };
 }
 
-/** Texto corto para la columna Transporte de la lista. */
-export function textoTransporte(remito: { direccion_entrega_snapshot?: string | null }, filas: Pick<FilaTransporte, "transportista" | "estado" | "tipo">[]): string {
-  const vivas = filas.filter((f) => f.estado !== "cancelado" && f.transportista);
-  if (vivas.length) return vivas.map((f) => (f.tipo === "interno" && f.transportista === PROPIO_TEXTO ? "Propio" : f.transportista)).join(", ");
-  if (mismo(remito.direccion_entrega_snapshot, RETIRA_TEXTO)) return RETIRA_TEXTO;
+/** Texto corto de la columna Transporte (lista y ficha). nombreDe = nombre del transportista por id. */
+export function textoTransporte(r: RemitoEntrega, nombreDe: (id: string) => string | null | undefined): string {
+  const modo = modoDeRemito(r);
+  if (modo === "retira") return RETIRA_TEXTO;
+  if (modo === "propio") return "Propio";
+  if (modo === "transporte") return nombreDe(r.transportista_id as string) || "(transportista dado de baja)";
   return "";
 }
 
+/** Valor del desplegable de la columna Transporte: "t:<id>", "propio", "retira" o "nose". */
+export function valorTransporte(r: RemitoEntrega): string {
+  const modo = modoDeRemito(r);
+  return modo === "transporte" ? `t:${r.transportista_id}` : modo;
+}
+
+/** Renglones "Transportista / Destino" del PDF, con lo que dice el remito. */
+export function transportesPDF(r: RemitoEntrega, nombreDe: (id: string) => string | null | undefined): { transportista: string; destino: string | null }[] {
+  const modo = modoDeRemito(r);
+  const destino = destinoDe({ domicilio: r.direccion_entrega_snapshot, localidad: r.localidad_entrega_snapshot }) || null;
+  if (modo === "retira") return [{ transportista: RETIRA_TEXTO, destino: null }];
+  if (modo === "propio") return [{ transportista: PROPIO_TEXTO, destino }];
+  if (modo === "transporte") {
+    const nombre = nombreDe(r.transportista_id as string);
+    return nombre ? [{ transportista: nombre, destino }] : [];
+  }
+  return [];
+}
+
 /**
- * Guarda la entrega de un remito: la fila del remito y el viaje. Devuelve un aviso si algo no quedó (nunca tira error).
- * db = cliente de Supabase. Si guardarEnSucursal, el domicilio/transportista quedan como los de siempre de esa sucursal.
+ * Guarda la entrega de un remito: solo la fila del remito (y, si se pidió, la sucursal). Nunca toca Transportes.
+ * Devuelve un aviso si algo no quedó (nunca tira error). db = cliente de Supabase.
+ * Si guardarEnSucursal, el domicilio/transportista quedan como los de siempre de esa sucursal.
  */
 export async function guardarEntrega(
   db: any,
   e: Entrega,
-  ctx: { sociedad_id: string; cliente_id: string; remito_id: string; fecha: string; created_by: string | null; sucursal_id: string | null },
-  nombreDe: (id: string) => string | null,
+  ctx: { sociedad_id: string; cliente_id: string; remito_id: string; sucursal_id: string | null },
   guardarEnSucursal: { domicilio: boolean; transportista: boolean } | null,
 ): Promise<string | null> {
   const avisos: string[] = [];
   const { error: e1 } = await db.from("remitos").update(datosRemito(e)).eq("id", ctx.remito_id).eq("sociedad_id", ctx.sociedad_id);
   if (e1) avisos.push(`domicilio/transporte del remito (${e1.message})`);
-  const { data: filas } = await db.from("transportes").select("id, transportista, transportista_id, tipo, estado, destino, costo, created_at, factura_compra_id").eq("remito_id", ctx.remito_id).eq("sociedad_id", ctx.sociedad_id);
-  const plan = planViaje(e, filaVigente(filas || []), ctx, nombreDe);
-  if (plan.accion === "crear") {
-    const { error } = await db.from("transportes").insert(plan.datos);
-    if (error) avisos.push(`viaje en Transportes (${error.message})`);
-  } else if (plan.accion === "corregir") {
-    const { error } = await db.from("transportes").update({ ...plan.datos, updated_at: new Date().toISOString() }).eq("id", plan.id).eq("sociedad_id", ctx.sociedad_id);
-    if (error) avisos.push(`viaje en Transportes (${error.message})`);
-  } else if (plan.accion === "cancelar") {
-    const { error } = await db.from("transportes").update({ estado: "cancelado", updated_at: new Date().toISOString() }).eq("id", plan.id).eq("sociedad_id", ctx.sociedad_id);
-    if (error) avisos.push(`cancelar el viaje (${error.message})`);
-  }
   if (guardarEnSucursal && ctx.sucursal_id && (guardarEnSucursal.domicilio || guardarEnSucursal.transportista)) {
     const cambios: Record<string, unknown> = {};
     if (guardarEnSucursal.domicilio) { cambios.direccion = limpio(e.domicilio) || null; cambios.localidad = limpio(e.localidad) || null; }
-    if (guardarEnSucursal.transportista && e.modo === "transporte" && e.transportista_id && e.transportista_id !== FILA_ACTUAL) cambios.transportista_id = e.transportista_id;
+    if (guardarEnSucursal.transportista && e.modo === "transporte" && e.transportista_id) cambios.transportista_id = e.transportista_id;
     if (Object.keys(cambios).length) {
       const { error } = await db.from("cliente_sucursales").update(cambios).eq("id", ctx.sucursal_id).eq("cliente_id", ctx.cliente_id);
       if (error) avisos.push(`la sucursal (${error.message})`);
     }
   }
-  const textos = [avisos.length ? `El remito quedó, pero no se pudo guardar: ${avisos.join(" · ")}` : "", plan.accion === "nada" && plan.aviso ? plan.aviso : ""].filter(Boolean);
-  return textos.length ? textos.join(" ") : null;
+  return avisos.length ? `El remito quedó, pero no se pudo guardar: ${avisos.join(" · ")}` : null;
 }

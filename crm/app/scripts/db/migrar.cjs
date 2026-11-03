@@ -4,6 +4,7 @@
 // Probar sin guardar: node scripts/db/migrar.cjs supabase/migrations/X.sql --probar scripts/db/pruebas/X.sql
 //   corre la migración y después el archivo de prueba, muestra los resultados y DESHACE TODO (rollback) siempre.
 // Necesita SUPABASE_DB_URL en .env.local (la pega Augusto; nunca se muestra).
+// Cada archivo corrido queda anotado en lz_migraciones_corridas (P11, 03/11/2026); para controlar: node scripts/db/verificar-migraciones.cjs
 const path = require("path");
 const fs = require("fs");
 const { Client } = require("pg");
@@ -34,8 +35,17 @@ const prueba = probarIdx > 0 ? process.argv[probarIdx + 1] : null;
       console.log("PRUEBA OK (no se guardó nada):", file);
       return;
     }
+    // Queda anotada en lz_migraciones_corridas, en la misma transacción (si la tabla todavía no existe, no se anota).
+    const archivo = file.replace(/\\/g, "/");
+    const { rows: [t] } = await db.query("select to_regclass('public.lz_migraciones_corridas') is not null as hay");
+    if (t.hay) {
+      await db.query(
+        "insert into public.lz_migraciones_corridas (archivo, tipo) values ($1, $2) on conflict (archivo) do update set corrida_at = now(), usuario = current_user",
+        [archivo, archivo.includes("supabase/rollback/") ? "vuelta_atras" : "migracion"],
+      );
+    }
     await db.query("commit");
-    console.log("OK: corrida", file);
+    console.log("OK: corrida", file, t.hay ? "(anotada en lz_migraciones_corridas)" : "(sin anotar: falta la tabla lz_migraciones_corridas)");
   } catch (e) {
     await db.query("rollback").catch(() => {});
     throw e;
