@@ -6,6 +6,8 @@
 // (EmitirFacturaModal); "Esperando OC" es un aviso, se puede facturar igual.
 // Restos (26/10/2026): lo que quedó sin facturar de un PR (renglones sacados o cantidades menores) sale como renglón propio
 // "PR-… · resto" con Facturar y No facturar (tabla presupuesto_restos_facturar, lib/resto-facturar.ts).
+// Entregado sin facturar (auditoría 02/11/2026, P03): también el PR vencido (o en otro estado, no eliminado) con remito vigente
+// y sin factura vigente (vaAFacturar en lib/ventas-etapas.ts); dice "PR vencido · con remito" y tiene No facturar.
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Loader2, Receipt, Search, X } from "lucide-react";
@@ -17,7 +19,7 @@ import { useArcaStatus } from "@/lib/use-arca-status";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { comprobanteVenta } from "@/lib/finanzas-lazza";
 import { esNotaCredito } from "@/lib/ventas-documentos";
-import { detalleDePr, enBandeja, etapaVenta, fechaParaFacturar } from "@/lib/ventas-etapas";
+import { detalleDePr, entregadoSinFacturar, etapaVenta, fechaParaFacturar, vaAFacturar } from "@/lib/ventas-etapas";
 import { detalleResto } from "@/lib/resto-facturar";
 import { saldoClienteEn } from "@/lib/saldo-clientes";
 import { useSaldosClientes } from "./use-saldos-clientes";
@@ -42,6 +44,8 @@ interface FilaFacturar {
   ncAnula: string | null;
   /** Resto pendiente de un PR ya facturado: su id (la fila es el resto, no el PR entero). */
   restoId: string | null;
+  /** Entra solo por el remito (P03): "PR vencido", "PR pendiente"…; null si el PR está aprobado. */
+  sinAprobar: string | null;
   presupuesto: PresupuestoAFacturar;
 }
 
@@ -65,7 +69,7 @@ async function ncDeFacturas(sociedadId: string, ids: string[]): Promise<Map<stri
 }
 
 const CAMPOS_PR = `
-      id, numero, cliente_id, fecha, respondido_at, estado, subtotal, total, moneda, cotizacion_modalidad, modalidad_emision, oc_cliente, oc_cliente_fecha, archivo_url, observaciones,
+      id, numero, cliente_id, fecha, respondido_at, estado, eliminado, subtotal, total, moneda, cotizacion_modalidad, modalidad_emision, oc_cliente, oc_cliente_fecha, archivo_url, observaciones,
       clientes(razon_social, cuit, condicion_iva, forma_pago, dias_cuenta_corriente, limite_credito, email, email_facturacion, pide_oc_para_facturar, moneda_predeterminada),
       sucursal:sucursal_id(nombre),
       presupuesto_items(id, descripcion, cantidad, precio_venta, iva_porcentaje, total, orden)`;
@@ -104,6 +108,7 @@ async function traerRestos(sociedadId: string): Promise<FilaFacturar[]> {
       refacturar: false,
       ncAnula: null,
       restoId: r.id,
+      sinAprobar: null,
       presupuesto: presupuestoAFacturar(p, items, r.id),
     };
   });
@@ -111,8 +116,20 @@ async function traerRestos(sociedadId: string): Promise<FilaFacturar[]> {
 
 export async function traerParaFacturar(sociedadId: string, hoy: string): Promise<FilaFacturar[]> {
   const restos = traerRestos(sociedadId);
-  const prs = await traerTodo<any>(() => db.from("presupuestos").select(CAMPOS_PR)
-    .in("estado", ["aprobado", "facturar", "facturado"]).neq("eliminado", true).eq("sociedad_id", sociedadId).order("id"));
+  const [prs, remitos] = await Promise.all([
+    traerTodo<any>(() => db.from("presupuestos").select(CAMPOS_PR)
+      .in("estado", ["aprobado", "facturar", "facturado"]).neq("eliminado", true).eq("sociedad_id", sociedadId).order("id")),
+    traerTodo<any>(() => db.from("remitos").select("id, presupuesto_id, estado, anulado")
+      .eq("sociedad_id", sociedadId).not("presupuesto_id", "is", null).order("id")),
+  ]);
+  // Entregado sin facturar: los PR con remito vigente que no están entre los aprobados (vencidos, pendientes…).
+  const yaEstan = new Set(prs.map((p) => p.id));
+  const extra = [...new Set(remitos.filter((r) => !r.anulado && !yaEstan.has(r.presupuesto_id)).map((r) => String(r.presupuesto_id)))];
+  for (let i = 0; i < extra.length; i += 200) {
+    const { data, error } = await db.from("presupuestos").select(CAMPOS_PR).eq("sociedad_id", sociedadId).neq("eliminado", true).in("id", extra.slice(i, i + 200));
+    if (error) throw error;
+    prs.push(...(data || []));
+  }
   const ids = prs.map((p) => p.id);
   const facturas: any[] = [];
   for (let i = 0; i < ids.length; i += 200) {
@@ -126,9 +143,10 @@ export async function traerParaFacturar(sociedadId: string, hoy: string): Promis
   for (const p of prs) {
     const e = etapaVenta({
       fechaPr: p.fecha, totalPr: Number(p.total) || 0, monedaPr: p.moneda, ocCliente: p.oc_cliente,
-      clientePideOc: !!p.clientes?.pide_oc_para_facturar, facturas: facturas.filter((f) => f.presupuesto_id === p.id), remitos: [],
+      clientePideOc: !!p.clientes?.pide_oc_para_facturar, facturas: facturas.filter((f) => f.presupuesto_id === p.id),
+      remitos: remitos.filter((r) => r.presupuesto_id === p.id),
     }, null, hoy);
-    if (!enBandeja(e, "facturar") && !enBandeja(e, "esperando_oc")) continue;
+    if (!vaAFacturar(p, e)) continue;
     if (e.refacturar) {
       const ultima = facturas.filter((f) => f.presupuesto_id === p.id && f.estado === "anulada" && !esNotaCredito(f.tipo))
         .sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""))[0];
@@ -150,6 +168,7 @@ export async function traerParaFacturar(sociedadId: string, hoy: string): Promis
       refacturar: e.refacturar,
       ncAnula: null,
       restoId: null,
+      sinAprobar: entregadoSinFacturar(p, e) ? `PR ${p.estado}` : null,
       presupuesto: presupuestoAFacturar(p, items),
     });
   }
@@ -212,7 +231,8 @@ Sale de esta lista; el PR y su factura quedan como están.`)) return;
       setRecarga((n) => n + 1);
       return;
     }
-    if (!confirm(`¿No facturar ${f.numero}? La factura anulada y su NC quedan como están, y el PR pasa a «rechazado» (sale de esta lista).`)) return;
+    const queda = f.refacturar ? "La factura anulada y su NC quedan como están" : "El remito queda como está";
+    if (!confirm(`¿No facturar ${f.numero}? ${queda}, y el PR pasa a «rechazado» (sale de esta lista).`)) return;
     const { error } = await db.from("presupuestos").update({ estado: "rechazado" }).eq("id", f.id).eq("sociedad_id", sociedadId);
     if (error) { alert("No se pudo guardar: " + error.message); return; }
     setRecarga((n) => n + 1);
@@ -235,9 +255,12 @@ Sale de esta lista; el PR y su factura quedan como están.`)) return;
     { key: "estado", label: "Estado", sortable: true, sortValue: (f) => (f.esperandoOc ? 1 : f.refacturar ? 2 : f.restoId ? 3 : 0), render: (f) => f.restoId ? (
       <span className="whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300" title="Lo que quedó sin facturar de este PR">Resto a facturar</span>
     ) : (
+      <>
       <span className={`whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium ${f.esperandoOc ? "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300" : f.refacturar ? "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300" : "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"}`}>
         {f.esperandoOc ? "Esperando OC" : f.refacturar ? (f.ncAnula ? `Anulada por ${f.ncAnula}` : "Anulada") : "Listo"}
       </span>
+      {f.sinAprobar && <span className="mt-0.5 block whitespace-nowrap text-[11px] text-zinc-500" title="Tiene remito y no tiene factura: se entregó sin facturar">{f.sinAprobar} · con remito</span>}
+      </>
     ) },
     { key: "facturar", label: "", render: (f) => (
       <div className="flex items-center gap-1">
@@ -245,8 +268,8 @@ Sale de esta lista; el PR y su factura quedan como están.`)) return;
           className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg bg-orange-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-orange-600">
           <Receipt className="h-3.5 w-3.5" /> {f.refacturar ? "Re-facturar" : "Facturar"}
         </button>
-        {(f.refacturar || f.restoId) && (
-          <button type="button" onClick={(e) => { e.stopPropagation(); noFacturar(f); }} title={f.restoId ? "No facturar lo que quedó y sacarlo de la lista" : "Dejar la factura anulada como está y sacar el PR de la lista"}
+        {(f.refacturar || f.restoId || f.sinAprobar) && (
+          <button type="button" onClick={(e) => { e.stopPropagation(); noFacturar(f); }} title={f.restoId ? "No facturar lo que quedó y sacarlo de la lista" : f.refacturar ? "Dejar la factura anulada como está y sacar el PR de la lista" : "No facturar lo entregado y sacar el PR de la lista"}
             className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-50 hover:text-red-600 dark:hover:bg-zinc-800">
             <X className="h-3.5 w-3.5" /> No facturar
           </button>

@@ -5,6 +5,7 @@
  * - Factura vigente: la última factura (no NC) que no esté anulada. Si una NC anuló la factura, hay que volver a facturar.
  * - Saldo: total − NC aplicadas (total_acreditado) − cobrado (misma regla que lib/saldo-clientes).
  * - Esperando OC: el cliente pide OC para facturar y el PR todavía no la tiene. Es un aviso: se puede facturar igual.
+ * - Entregado: tiene al menos un remito vigente (no anulado).
  *
  * Prueba: npx tsx scripts/test-ventas-etapas.ts
  */
@@ -21,7 +22,7 @@ export interface VentaEtapaInput {
   ocCliente: string | null;
   clientePideOc: boolean;
   facturas: { id: string; tipo: string; estado: string; fecha: string; total: number | string; total_acreditado?: number | string | null; moneda: string | null; fecha_vencimiento?: string | null }[];
-  remitos: { estado: string }[];
+  remitos: { estado: string; anulado?: boolean | null }[];
 }
 
 export interface VentaEtapa {
@@ -61,7 +62,7 @@ export function etapaVenta(v: VentaEtapaInput, cobradoPorFactura: Record<string,
   const facturada = !!vigente;
   const refacturar = !facturada && facturasOrdenadas.length > 0;
   // El remito se hace para entregar: con un remito ya cuenta como entregado (el estado del remito no se usa).
-  const entregado = v.remitos.length > 0;
+  const entregado = v.remitos.some(r => !r.anulado);
   const enEntrega = false;
   const esperandoOc = !facturada && v.clientePideOc && !(v.ocCliente || "").trim();
 
@@ -105,6 +106,27 @@ export function enBandeja(e: VentaEtapa, b: BandejaVenta): boolean {
     case "terminadas": return e.terminada;
     default: return true;
   }
+}
+
+/** Estados del PR que van a Finanzas → Facturar aunque no tengan remito. */
+const ESTADOS_PARA_FACTURAR = ["aprobado", "facturar", "facturado"];
+
+/**
+ * ¿El PR va a Finanzas → Facturar? Los aprobados (no eliminados) que faltan facturar o esperan OC, como siempre; y además
+ * "entregado sin facturar" (auditoría 02/11/2026, P03): un PR en cualquier otro estado (vencido, pendiente…) con remito vigente
+ * y sin factura vigente. Menos «rechazado» (es lo que deja "No facturar") y los eliminados: el PR eliminado se reemplazó por
+ * otro y se facturó desde ese (Augusto 02/11: PR-2026-1030 de Bomberos, facturado y cobrado con la FB 16-1 del PR-2026-1135).
+ */
+export function vaAFacturar(pr: { estado: string; eliminado?: boolean | null }, e: VentaEtapa): boolean {
+  if (!enBandeja(e, "facturar") && !enBandeja(e, "esperando_oc")) return false;
+  if (pr.eliminado) return false;
+  if (ESTADOS_PARA_FACTURAR.includes(pr.estado)) return true;
+  return e.entregado && pr.estado !== "rechazado";
+}
+
+/** Entra a Facturar solo por el remito (el PR no está aprobado). */
+export function entregadoSinFacturar(pr: { estado: string; eliminado?: boolean | null }, e: VentaEtapa): boolean {
+  return vaAFacturar(pr, e) && !ESTADOS_PARA_FACTURAR.includes(pr.estado);
 }
 
 /** Cantidad y plata de una bandeja, pesos y dólares por separado. */

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { detalleDePr, etapaVenta, enBandeja, fechaParaFacturar, resumenBandeja, type VentaEtapaInput } from "../src/lib/ventas-etapas";
+import { detalleDePr, entregadoSinFacturar, etapaVenta, enBandeja, fechaParaFacturar, resumenBandeja, vaAFacturar, type VentaEtapaInput } from "../src/lib/ventas-etapas";
 
 const hoy = "2026-10-12";
 const base: VentaEtapaInput = { fechaPr: "2026-10-01", totalPr: 1000, monedaPr: "ARS", ocCliente: null, clientePideOc: false, facturas: [], remitos: [] };
@@ -59,6 +59,28 @@ assert.equal(e.vencida, true);
 e = etapaVenta({ ...base, remitos: [{ estado: "pendiente" }] }, {}, hoy);
 assert.equal(e.enEntrega, false);
 assert.equal(e.entregado, true);
+
+// Remito anulado: no cuenta como entregado.
+e = etapaVenta({ ...base, remitos: [{ estado: "entregado", anulado: true }] }, {}, hoy);
+assert.equal(e.entregado, false);
+
+// Finanzas → Facturar (P03): aprobado como siempre; PR vencido con remito y sin factura también ("entregado sin facturar").
+const conRemito = etapaVenta({ ...base, remitos: [{ estado: "entregado", anulado: false }] }, {}, hoy);
+assert.equal(vaAFacturar({ estado: "aprobado" }, etapaVenta(base, {}, hoy)), true);
+assert.equal(entregadoSinFacturar({ estado: "aprobado" }, conRemito), false);
+assert.equal(vaAFacturar({ estado: "vencido" }, conRemito), true);
+assert.equal(entregadoSinFacturar({ estado: "vencido" }, conRemito), true);
+// Eliminado con remito: no (se reemplazó por otro PR y se facturó desde ese, ej. PR-2026-1030 de Bomberos).
+assert.equal(vaAFacturar({ estado: "vencido", eliminado: true }, conRemito), false);
+// Sin remito, o con el remito anulado, el vencido no aparece.
+assert.equal(vaAFacturar({ estado: "vencido" }, etapaVenta(base, {}, hoy)), false);
+assert.equal(vaAFacturar({ estado: "vencido" }, etapaVenta({ ...base, remitos: [{ estado: "entregado", anulado: true }] }, {}, hoy)), false);
+// Con factura vigente no aparece; con la factura anulada por NC, sí (volver a facturar).
+assert.equal(vaAFacturar({ estado: "vencido" }, etapaVenta({ ...base, facturas: [fa()], remitos: [{ estado: "entregado" }] }, {}, hoy)), false);
+assert.equal(vaAFacturar({ estado: "vencido" }, etapaVenta({ ...base, facturas: [fa({ estado: "anulada" })], remitos: [{ estado: "entregado" }] }, {}, hoy)), true);
+// «rechazado» (lo que deja "No facturar") y el aprobado eliminado sin remito no aparecen.
+assert.equal(vaAFacturar({ estado: "rechazado" }, conRemito), false);
+assert.equal(vaAFacturar({ estado: "aprobado", eliminado: true }, etapaVenta(base, {}, hoy)), false);
 
 // Resumen por moneda.
 const etapas = [
