@@ -93,3 +93,46 @@ export function proponerCbu(datos: DatoBancarioMail[], fichas: FichaBancaria[]):
   }
   return { propuestas, descartes };
 }
+
+// ── Datos bancarios cargados a mano en la OP (Augusto 03/11/2026: "Si cargo algún dato bancario a la hora de hacer alguna OP,
+// dejame guardarlo para que ya quede en ese proveedor"). Se guarda solo con el botón; los avisos informan y nunca frenan.
+export interface DatosBancariosProveedor { cbu: string | null; alias_bancario: string | null; banco: string | null; titular_cuenta: string | null; cuit_titular_cuenta: string | null }
+export const CAMPOS_BANCARIOS: (keyof DatosBancariosProveedor)[] = ["cbu", "alias_bancario", "banco", "titular_cuenta", "cuit_titular_cuenta"];
+
+/** Qué cambia en la ficha del proveedor y qué avisar antes de guardar (CBU mal, ficha con otro CBU, titular con otro CUIT). */
+export function cambiosBancarios(ficha: Partial<DatosBancariosProveedor> & { cuit?: string | null }, nuevo: Partial<DatosBancariosProveedor>): { cambios: Partial<DatosBancariosProveedor>; avisos: string[] } {
+  const limpio = (k: keyof DatosBancariosProveedor, v: unknown) => {
+    const t = String(v ?? "").trim();
+    if (!t) return null;
+    return k === "cbu" || k === "cuit_titular_cuenta" ? digitos(t) || null : t;
+  };
+  const cambios: Partial<DatosBancariosProveedor> = {};
+  for (const k of CAMPOS_BANCARIOS) {
+    if (!(k in nuevo)) continue;
+    const v = limpio(k, nuevo[k]);
+    if (v !== limpio(k, ficha[k])) cambios[k] = v;
+  }
+  const avisos: string[] = [];
+  if (cambios.cbu) {
+    if (!cbuValido(cambios.cbu)) avisos.push(`El CBU ${cambios.cbu} no da bien los dígitos verificadores (${cambios.cbu.length} dígitos): revisalo.`);
+    const viejo = limpio("cbu", ficha.cbu);
+    if (viejo) avisos.push(`⚠ El proveedor ya tenía otro CBU (${viejo}). Un "cambiamos de cuenta" puede ser una estafa: confirmalo por teléfono.`);
+  }
+  const cuitTit = "cuit_titular_cuenta" in cambios ? cambios.cuit_titular_cuenta : limpio("cuit_titular_cuenta", ficha.cuit_titular_cuenta);
+  if ((cambios.cbu || cambios.cuit_titular_cuenta) && cuitTit && digitos(ficha.cuit) && cuitTit !== digitos(ficha.cuit)) {
+    avisos.push(`El titular de la cuenta (CUIT ${cuitTit}) no es el CUIT del proveedor (${digitos(ficha.cuit)}).`);
+  }
+  return { cambios, avisos };
+}
+
+/** El CBU de destino que leyó la IA en el comprobante de la transferencia, si es válido y no es el de la ficha. */
+export function cbuNuevoDelComprobante(pagos: { cbu_destino?: unknown; alias_destino?: unknown; destinatario?: unknown; cuit_destinatario?: unknown; banco?: unknown }[], fichaCbu: string | null | undefined): { cbu: string; alias: string | null; titular: string | null; cuitTitular: string | null; banco: string | null } | null {
+  for (const p of pagos) {
+    const cbu = digitos(p.cbu_destino);
+    if (!cbuValido(cbu) || cbu === digitos(fichaCbu)) continue;
+    const txt = (v: unknown) => String(v ?? "").trim() || null;
+    const cuit = digitos(p.cuit_destinatario);
+    return { cbu, alias: txt(p.alias_destino), titular: txt(p.destinatario), cuitTitular: cuit.length === 11 ? cuit : null, banco: txt(p.banco) };
+  }
+  return null;
+}

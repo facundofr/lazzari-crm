@@ -1,6 +1,6 @@
 // Prueba rápida: npx tsx scripts/test-cbu.ts
 import assert from "node:assert/strict";
-import { cbuValido, datosBancariosDeMails, proponerCbu, remitenteDeFicha, type FichaBancaria } from "../src/lib/cbu";
+import { cambiosBancarios, cbuNuevoDelComprobante, cbuValido, datosBancariosDeMails, proponerCbu, remitenteDeFicha, type FichaBancaria } from "../src/lib/cbu";
 
 // Dígitos verificadores (CBU real de la ficha de BMS Building Management System SRL).
 assert.ok(cbuValido("0070037520000043301748"));
@@ -43,5 +43,23 @@ assert.equal(motivo({ remitente: "<estafa@otro.com>" }), "El mail no viene de un
 assert.equal(motivo({ cbu: "0070037520000043301749" }), "El CBU no pasa los dígitos verificadores");
 assert.equal(motivo({ cbu: null }), "El mail trae alias pero no el CBU completo");
 assert.equal(motivo({}, [ficha({ cuit: "30999999999" })]), "El CUIT del mail no es de ningún proveedor de esta sociedad");
+
+// Datos bancarios cargados en la OP (03/11/2026).
+{
+  const prov = { cuit: "33-71446094-9", cbu: null, alias_bancario: "BMS.SEGURIDAD", banco: null, titular_cuenta: null, cuit_titular_cuenta: null };
+  const r = cambiosBancarios(prov, { cbu: "0070 0375 2000 0043 3017 48", alias_bancario: "BMS.SEGURIDAD", banco: " Galicia ", cuit_titular_cuenta: "33714460949" });
+  assert.deepEqual(r.cambios, { cbu: "0070037520000043301748", banco: "Galicia", cuit_titular_cuenta: "33714460949" }, "solo lo que cambia, limpio");
+  assert.deepEqual(r.avisos, []);
+  const mal = cambiosBancarios(prov, { cbu: "0070037520000043301749" });
+  assert.match(mal.avisos[0], /dígitos verificadores/);
+  const otro = cambiosBancarios({ ...prov, cbu: "2850590940090418135201" }, { cbu: "0070037520000043301748", cuit_titular_cuenta: "20111111112" });
+  assert.equal(otro.avisos.length, 2, "ficha con otro CBU + titular con otro CUIT");
+  assert.match(otro.avisos[0], /estafa/);
+  assert.deepEqual(cambiosBancarios(prov, { alias_bancario: "" }).cambios, { alias_bancario: null }, "borrar un dato a mano");
+  assert.equal(cbuNuevoDelComprobante([{ cbu_destino: "0070037520000043301748" }], "0070037520000043301748"), null, "ya lo tiene");
+  assert.equal(cbuNuevoDelComprobante([{ cbu_destino: "0070037520000043301749" }], null), null, "CBU mal leído");
+  assert.deepEqual(cbuNuevoDelComprobante([{ tipo: "transferencia" } as any, { cbu_destino: "0070-0375-20000043301748", destinatario: "BMS SRL", cuit_destinatario: "33-71446094-9" }], null),
+    { cbu: "0070037520000043301748", alias: null, titular: "BMS SRL", cuitTitular: "33714460949", banco: null });
+}
 
 console.log("test-cbu OK");

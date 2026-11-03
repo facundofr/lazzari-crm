@@ -152,6 +152,9 @@ assert.equal(baseRetencion({ tipo: "X", subtotal: 0, total: 500 }), 500);
   const s2 = sugerirDesdeAvisos({ importe: 244687.5, fecha: "2026-10-27" }, sinNum, [fb], clientes);
   assert.deepEqual(s2[0].facturas.map((f) => f.id), ["otra"]);
   assert.equal(s2[0].retenciones.find((r) => r.tipo === "retencion_iva")!.monto, 23625.01);
+  // El mismo aviso reenviado (otro mail, mismos datos): una sola sugerencia (Cargill 03/11/2026).
+  const reenviado = [avisos[0], { ...avisos[0], id: "m1-rv" }];
+  assert.equal(sugerirDesdeAvisos({ importe: 244687.5, fecha: "2026-10-27" }, reenviado, [fa], clientes).length, 1, "reenvío: una sola vez");
 }
 
 console.log("test-banco-cobros OK");

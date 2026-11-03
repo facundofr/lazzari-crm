@@ -225,6 +225,7 @@ export function sugerirDesdeAvisos(
   if (!(linea.importe > 0)) return [];
   const cuitLinea = digitos(linea.cuit);
   const out: SugerenciaAviso[] = [];
+  const vistos = new Set<string>();
   for (const a of avisos) {
     if (!a.transferencias.some((t) => Math.abs(t - linea.importe) <= 1)) continue;
     if (a.fecha && Math.abs(diasEntre(a.fecha, linea.fecha)) > 15) continue;
@@ -241,6 +242,10 @@ export function sugerirDesdeAvisos(
     // Redondeo de hasta $ 1 entre las facturas y lo que entró + retenciones: a la retención más grande.
     const ajuste = fs.length && retenciones.length ? r2(fs.reduce((s, f) => s + f.saldo, 0) - linea.importe - retTotal) : 0;
     if (ajuste && Math.abs(ajuste) <= 1) { const mayor = retenciones.reduce((x, y) => (y.monto > x.monto ? y : x)); mayor.monto = r2(mayor.monto + ajuste); }
+    // El mismo aviso reenviado ("RV: …") llega como otro mail: si propone lo mismo, se muestra una sola vez.
+    const clave = `${c.id}|${fs.map((f) => f.id).sort().join(",")}|${retenciones.map((r) => `${r.tipo}:${r.monto}`).sort().join(",")}`;
+    if (vistos.has(clave)) continue;
+    vistos.add(clave);
     out.push({ aviso: a, clienteId: c.id, cliente: c.razon_social, facturas: fs, retenciones, transferencia: r2(linea.importe) });
   }
   return out.slice(0, 2);

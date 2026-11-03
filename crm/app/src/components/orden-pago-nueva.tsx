@@ -28,6 +28,8 @@ import { useToast } from "@/components/ui/toast";
 import { textoOP } from "@/lib/cartel-guardado";
 import { FileText, Minimize2, Maximize2, X, Search, Loader2, Sparkles, ShieldCheck, Landmark, Plus, Trash2, Paperclip } from "lucide-react";
 import { linkArchivo } from "@/lib/archivo-link";
+import { cbuNuevoDelComprobante } from "@/lib/cbu";
+import { DatosBancariosProveedor } from "@/components/datos-bancarios-proveedor";
 
 export interface ProveedorOption {
   id: string;
@@ -174,6 +176,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
   const [opError, setOpError] = useState("");
   const [opFiles, setOpFiles] = useState<File[]>([]);
   const [opParsingCount, setOpParsingCount] = useState(0);
+  const [opPagosLeidos, setOpPagosLeidos] = useState<{ cbu_destino?: unknown; alias_destino?: unknown; destinatario?: unknown; cuit_destinatario?: unknown; banco?: unknown }[]>([]);
   const opParsingFile = opParsingCount > 0;
   const [opProvCondicion, setOpProvCondicion] = useState<string | null>(null);
   const [opCondicionLoading, setOpCondicionLoading] = useState(false);
@@ -629,6 +632,8 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || "No se pudo leer el comprobante. Podés completar los medios de pago manualmente.");
       const pagos: any[] = json.data.pagos || (json.data.tipo ? [json.data] : []);
+      // CBU de destino leído (03/11/2026): el cuadro de Datos bancarios ofrece guardarlo en el proveedor si no lo tiene.
+      setOpPagosLeidos(prev => [...pagos.filter(p => p?.cbu_destino), ...prev]);
       if (pagos.length === 0) return;
       const mapped: OpMedioPago[] = pagos.map(d => {
         const fields = paymentDocumentFields(d, { context: "orden_pago_proveedor" });
@@ -1360,27 +1365,14 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
             </div>
           )}
 
-          {/* ── Datos bancarios del proveedor ── */}
+          {/* ── Datos bancarios del proveedor (03/11/2026: se cargan o editan acá y se guardan en su ficha) ── */}
           {opForm.proveedor_id && (() => {
             const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
-            if (!prov || (!prov.cuit && !prov.cbu && !prov.alias_bancario && !prov.banco && !prov.numero_cuenta && !prov.titular_cuenta)) return null;
-            const fila = (label: string, valor: string, copiar = false, mono = true) => (
-              <div className="flex items-center gap-1.5 min-w-0">
-                <span className="w-12 shrink-0 text-zinc-500">{label}</span>
-                <span className={`truncate font-medium ${mono ? "font-mono" : ""} select-all`}>{valor}</span>
-                {copiar && <CopiarBtn texto={valor} title={`Copiar ${label}`} />}
-              </div>
-            );
+            if (!prov) return null;
+            const delComprobante = cbuNuevoDelComprobante(opPagosLeidos, prov.cbu);
             return (
-              <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20 px-3 py-2 text-xs space-y-0.5">
-                <p className="font-semibold text-blue-700 dark:text-blue-300 flex items-center gap-1 min-w-0"><Landmark className="h-3.5 w-3.5 shrink-0" />Datos bancarios
-                  {(prov.banco || prov.tipo_cuenta || prov.numero_cuenta) && <span className="truncate font-normal text-zinc-600 dark:text-zinc-300">· {[prov.banco, prov.tipo_cuenta, prov.numero_cuenta ? `N° ${prov.numero_cuenta}` : ""].filter(Boolean).join(" · ")}</span>}
-                </p>
-                {prov.titular_cuenta && fila("Titular", prov.titular_cuenta, false, false)}
-                {prov.cbu && fila("CBU", prov.cbu, true)}
-                {prov.alias_bancario && fila("Alias", prov.alias_bancario, true)}
-                {prov.cuit && fila("CUIT", prov.cuit, true)}
-              </div>
+              <DatosBancariosProveedor key={prov.id} proveedor={prov} sociedadId={sociedadId} delComprobante={delComprobante}
+                onGuardado={(cambios) => setProveedoresOptions(prev => prev.map(p => p.id === prov.id ? { ...p, ...cambios } : p))} />
             );
           })()}
           </div>
