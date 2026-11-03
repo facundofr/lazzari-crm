@@ -1,7 +1,7 @@
 // Finanzas Lazza: lecturas de la base (solo SELECT, nada se guarda). Las cuentas están en lib/finanzas-lazza.
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
-import { armarTcDelDia, armarVencimientos, comprobanteVenta, reporteBasico, saldoFacturaCompra, type FacturaCompraFL, type FacturaVentaFL, type FilaVencimiento, type GastoFL, type GastoVepFL, type ItemCostoFL, type ItemFacturaFL, type TransporteFL, type PagoDirectoFC, type RetencionIvaFL, type TcDelDia } from "@/lib/finanzas-lazza";
+import { armarRetenciones, armarTcDelDia, armarVencimientos, comprobanteVenta, faltanCertificadosPorCliente, type FaltanCertificadosCliente, reporteBasico, saldoFacturaCompra, type FacturaCompraFL, type FacturaVentaFL, type FilaVencimiento, type GastoFL, type GastoVepFL, type ItemCostoFL, type ItemFacturaFL, type TransporteFL, type PagoDirectoFC, type RetencionIvaFL, type TcDelDia } from "@/lib/finanzas-lazza";
 import type { LineaMov } from "@/lib/movimientos-banco";
 import { leerDolarDelDia, soloConfiables } from "@/lib/dolar-presupuesto";
 import { calcularSaldosClientes, cobradoPorFactura, saldoFacturaVenta, traerDatosSaldoClientes, type SaldoCliente } from "@/lib/saldo-clientes";
@@ -120,6 +120,19 @@ export async function traerCertificadosCargados(sociedadId: string): Promise<Cer
     .eq("sociedad_id", sociedadId).eq("anulado", false).order("id"))
     .catch((e) => { console.warn("Certificados de retención:", e); return [] as any[]; });
   return Object.fromEntries(filas.map((c) => [c.movimiento_id, { id: c.id, numero: c.numero, url: c.archivo_url ?? null }]));
+}
+
+/**
+ * Retenciones sufridas sin N° de certificado, por cliente (Cobranzas, Augusto 03/11/2026): el cliente no debe plata, debe el
+ * certificado. Misma regla que Retenciones › Sufridas › Falta certificado (`armarRetenciones` + `faltanCertificadosPorCliente`).
+ */
+export async function traerFaltanCertificados(sociedadId: string): Promise<FaltanCertificadosCliente[]> {
+  const [movimientos, certificados] = await Promise.all([
+    traerTodo<any>(() => db.from("movimientos").select("id, tipo, fecha, monto, moneda, anulado, descripcion, cliente_id, clientes(razon_social, cuit)")
+      .eq("sociedad_id", sociedadId).in("tipo", ["retencion_iva", "retencion_ganancias", "retencion_iibb", "retencion_suss"]).not("cliente_id", "is", null).order("id")),
+    traerCertificadosCargados(sociedadId),
+  ]);
+  return faltanCertificadosPorCliente(armarRetenciones({ ops: [], movimientos, certificados }));
 }
 
 /**

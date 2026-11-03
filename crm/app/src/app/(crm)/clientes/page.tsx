@@ -33,6 +33,7 @@ import { esDni, digitosDocumento, textoDocumento, textoDocumentoConGuiones } fro
 import { WhatsAppInput } from "@/components/ui/whatsapp-input";
 import { mostrarWhatsApp } from "@/lib/whatsapp-ar";
 import { useTheme } from "@/lib/theme-context";
+import { CAMPOS_CONTACTO, CAMPOS_FICHA_CLIENTE, CAMPOS_SUCURSAL, coincideFicha, datosDeFicha } from "@/lib/buscar-texto";
 
 const condicionLabels: Record<string, string> = {
   RI: "Resp. Inscripto",
@@ -218,6 +219,8 @@ export default function ClientesPage() {
   // Saldo real de cuenta corriente (B3): si no se pudo calcular, se avisa en pantalla.
   const [saldosError, setSaldosError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  // Todo lo que se puede buscar de cada cliente: ficha, sucursales y contactos (Augusto 03/11/2026, lib/buscar-texto).
+  const [datosBusqueda, setDatosBusqueda] = useState<Map<string, string[]>>(new Map());
   const [clientes, setClientes] = useState<ClienteExt[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -790,11 +793,14 @@ export default function ClientesPage() {
         }
         return query.order("razon_social").order("id");
       };
-      const [res, saldos] = await Promise.all([
+      const [res, saldos, contactosTodos] = await Promise.all([
         traerTodo<Record<string, unknown>>(armarQuery).then((data) => ({ data, error: null as unknown })).catch((e: unknown) => ({ data: null, error: e })),
         sociedadActiva?.id
           ? traerSaldosClientes(supabase, sociedadActiva.id, traerTodo).catch((e: unknown) => { console.error("Error calculando saldos de clientes:", e); return null; })
           : Promise.resolve(null as Record<string, SaldoCliente> | null),
+        // Contactos de los clientes, solo para el buscador (si fallan, se busca en la ficha y las sucursales).
+        traerTodo<Record<string, unknown>>(() => (supabase as any).from("contactos").select("id, entity_id, nombre, cargo, email, telefono, whatsapp, notas").eq("entity_type", "cliente").order("id"))
+          .catch((e: unknown) => { console.warn("Clientes · contactos para buscar:", e); return [] as Record<string, unknown>[]; }),
       ]);
       const { data, error } = res;
       setSaldosError(saldos ? null : "No se pudo calcular el saldo de cuenta corriente: se muestra en 0. Recargá la página para reintentar.");
@@ -808,6 +814,16 @@ export default function ClientesPage() {
           const c = mapRow({ ...row, contactos: [] } as unknown as ClienteRow);
           return { ...c, saldoCuentaCorriente: saldoClienteEn(saldos, c.id, "ARS"), saldoUSD: saldoClienteEn(saldos, c.id, "USD") };
         }));
+        const contactosDe = new Map<string, string[]>();
+        for (const k of contactosTodos) {
+          const id = String(k.entity_id || "");
+          if (id) contactosDe.set(id, [...(contactosDe.get(id) || []), ...datosDeFicha(k, CAMPOS_CONTACTO)]);
+        }
+        setDatosBusqueda(new Map(data.map((row) => [String(row.id), [
+          ...datosDeFicha(row, CAMPOS_FICHA_CLIENTE),
+          ...(Array.isArray(row.cliente_sucursales) ? row.cliente_sucursales : []).flatMap((s: Record<string, unknown>) => datosDeFicha(s, CAMPOS_SUCURSAL)),
+          ...(contactosDe.get(String(row.id)) || []),
+        ]])));
       } else {
         setClientes([]);
       }
@@ -825,10 +841,8 @@ export default function ClientesPage() {
   }, [fetchClientes]);
 
   const filtered = clientes.filter((c) => {
-    const matchSearch =
-      c.razonSocial.toLowerCase().includes(search.toLowerCase()) ||
-      (c.cuit || "").includes(search) ||
-      c.email.toLowerCase().includes(search.toLowerCase());
+    // Cualquier dato: nombre, CUIT, mails, teléfonos, CBU/alias, dirección, notas, sucursales y contactos (lib/buscar-texto).
+    const matchSearch = coincideFicha(search, datosBusqueda.get(c.id) || [c.razonSocial, c.cuit, c.email]);
     const fProvincia = filterValues.provincia as string;
     const matchProvincia = !fProvincia || c.provincia === fProvincia;
     const fCondicion = filterValues.condicionIva as string;
@@ -1572,7 +1586,7 @@ export default function ClientesPage() {
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
             <input
               type="text"
-              placeholder="Buscar por razon social, CUIT o email..."
+              placeholder="Buscar por nombre, CUIT, mail, teléfono, CBU, dirección o contacto..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="h-8 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"

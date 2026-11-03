@@ -48,6 +48,8 @@ interface RetencionLinea {
   certificado: string;
   monto: string;
   observaciones: string;
+  /** Estimada desde Bancos (como el último cobro del cliente): si la IA lee el aviso de pago, la reemplaza (no se suma dos veces). */
+  estimada?: boolean;
 }
 
 interface Props {
@@ -67,6 +69,8 @@ interface Props {
   onCobrarOrdenCompleta?: (ordenPago: OpParsed) => void;
   /** Desde una línea del banco (02/11/2026): la transferencia viene con el importe y la fecha de la línea; se pueden cambiar. */
   medioInicial?: { monto: number; fecha: string };
+  /** Desde una línea del banco (03/11/2026): retenciones estimadas como el último cobro del cliente, sin N° de certificado. Se pueden cambiar. */
+  retencionesIniciales?: { tipo: string; monto: number; observaciones?: string }[];
 }
 
 // ── Helpers ──────────────────────────────────────────────
@@ -126,12 +130,13 @@ function buildDesc(prefix: string, ref: string, obs: string, opRef: string): str
 
 // ── Component ────────────────────────────────────────────
 export default function CobroMasivoLiquidacion({
-  facturas, clienteId, clienteNombre, sociedadId, moneda, onClose, onSuccess, ordenPago, ordenPagoAvisos, onCobrarOrdenCompleta, medioInicial,
+  facturas, clienteId, clienteNombre, sociedadId, moneda, onClose, onSuccess, ordenPago, ordenPagoAvisos, onCobrarOrdenCompleta, medioInicial, retencionesIniciales,
 }: Props) {
   const { toast } = useToast();
   const [opReferencia, setOpReferencia] = useState("");
   const [medios, setMedios] = useState<MedioPago[]>(() => [medioInicial ? { ...newMedio(), monto: toDecimalInput(medioInicial.monto), fecha: medioInicial.fecha } : newMedio()]);
-  const [retenciones, setRetenciones] = useState<RetencionLinea[]>([]);
+  const [retenciones, setRetenciones] = useState<RetencionLinea[]>(() => (retencionesIniciales || [])
+    .map((r) => ({ ...newRetencion(), tipo: r.tipo, monto: toDecimalInput(r.monto), observaciones: r.observaciones || "", estimada: true })));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [fullscreen, setFullscreen] = useState(false);
@@ -345,7 +350,11 @@ export default function CobroMasivoLiquidacion({
           return [...base, ...sinRepetir(base, parsedMedios, mismoMedio).agregar];
         });
       }
-      if (parsedRetenciones.length) setRetenciones((current) => [...current, ...sinRepetir(current, parsedRetenciones, mismaRet).agregar]);
+      // Las estimadas desde Bancos del mismo impuesto se reemplazan por las del aviso (03/11/2026): no se suman dos veces.
+      if (parsedRetenciones.length) setRetenciones((current) => {
+        const base = current.filter((r) => !(r.estimada && parsedRetenciones.some((p) => p.tipo === r.tipo)));
+        return [...base, ...sinRepetir(base, parsedRetenciones, mismaRet).agregar];
+      });
       if (parsed.orden_pago_cliente) setOpReferencia(String(parsed.orden_pago_cliente));
       if (!parsedMedios.length && !parsedRetenciones.length) throw new Error(["La IA no encontró medios de pago ni retenciones en el archivo.", ...otrasLineas, ...avisosPlan].join(" "));
       const nMedios = parsedMedios.length - mediosRepetidos.length;
@@ -799,6 +808,13 @@ export default function CobroMasivoLiquidacion({
                 <Plus size={14} /> Agregar
               </button>
             </div>
+            {retenciones.some((r) => r.estimada) && (
+              <p className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                💡 Retenciones estimadas como el último cobro de este cliente, sin N° de certificado: la factura queda pagada y la retención
+                aparece en Retenciones › Sufridas › Falta certificado y en Cobranzas hasta que cargues el certificado. Si tenés el aviso de pago,
+                arrastralo arriba: sus retenciones reemplazan a las estimadas.
+              </p>
+            )}
             {retenciones.length === 0 ? (
               <p className="text-xs text-zinc-400 italic">Sin retenciones ni percepciones. Hacé clic en &quot;Agregar&quot; si corresponde.</p>
             ) : (

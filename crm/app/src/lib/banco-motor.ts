@@ -18,10 +18,31 @@ import { cuitValido } from "./factura-texto";
 /** CUIT de las personas del equipo: una transferencia con su CUIT cruza con sus sueldos, premios o reintegros (por el nombre). */
 export const PERSONAS_EQUIPO: Record<string, string> = { "20379309128": "Augusto", "20372644606": "Jerónimo", "27339634578": "Mariana" };
 
-/** CUIT que trae el texto de la línea (prefijo de CUIT y dígito verificador bien: un N° de cuenta de 11 dígitos no cuenta). */
-export function cuitDeLinea(concepto: string): string | null {
-  for (const m of String(concepto || "").matchAll(/\b((?:20|23|24|27|30|33|34)\d{9})\b/g)) if (cuitValido(m[1])) return m[1];
+/**
+ * CUIT que trae el texto de la línea (prefijo de CUIT y dígito verificador bien: un N° de cuenta de 11 dígitos no cuenta).
+ * Si no trae CUIT pero trae el CBU de destino, entero o su final (el BBVA pone 15 dígitos: «TRANSF.BANEL 930004164421182»),
+ * vale el CUIT del proveedor o cliente que tiene ese CBU en su ficha (Augusto 03/11/2026). `cbus`: CBU de 22 dígitos → CUIT.
+ */
+export function cuitDeLinea(concepto: string, cbus?: Record<string, string>): string | null {
+  const t = String(concepto || "");
+  for (const m of t.matchAll(/\b((?:20|23|24|27|30|33|34)\d{9})\b/g)) if (cuitValido(m[1])) return m[1];
+  if (!cbus) return null;
+  for (const m of t.matchAll(/\b(\d{14,22})\b/g)) {
+    const cbu = Object.keys(cbus).find((c) => c.endsWith(m[1]));
+    if (cbu) return cbus[cbu];
+  }
   return null;
+}
+
+/** CBU (22 dígitos) → CUIT, de las fichas de proveedores y clientes (los que no tienen las dos cosas no cuentan). */
+export function cbusDeFichas(fichas: { cbu?: string | null; cuit?: string | null }[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const f of fichas) {
+    const cbu = String(f.cbu || "").replace(/\D/g, "");
+    const cuit = String(f.cuit || "").replace(/\D/g, "");
+    if (cbu.length === 22 && cuit.length === 11 && !out[cbu]) out[cbu] = cuit;
+  }
+  return out;
 }
 
 const sinTildes = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
@@ -77,6 +98,8 @@ export interface EntradaMotor {
   /** Cruces que una persona desató ("<linea_id>|<movimiento_id>", o "<linea_id>|*" para no tocar la línea): no se vuelven a hacer. */
   prohibidos?: Set<string>;
   personas?: Record<string, string>;
+  /** CBU (22 dígitos) → CUIT (`cbusDeFichas`): una transferencia con el CBU de destino vale como si trajera ese CUIT. */
+  cbus?: Record<string, string>;
 }
 
 const cent = (v: number | string) => Math.round(Number(v) * 100);
@@ -195,7 +218,7 @@ export function motorBanco(x: EntradaMotor): DecisionBanco[] {
   // Pago de OP: vale la parte en transferencias (OP mixta con cheques) o el pago entero.
   const valor = (m: MovMotor) => (m.montoCuenta !== null && m.montoCuenta !== undefined ? Math.min(Number(m.montoCuenta), Number(m.monto)) : Number(m.monto));
   const digitos = (s: unknown) => String(s || "").replace(/\D/g, "");
-  const cuitLinea = new Map(lineas.map((l) => [l.id, cuitDeLinea(l.concepto)]));
+  const cuitLinea = new Map(lineas.map((l) => [l.id, cuitDeLinea(l.concepto, x.cbus)]));
   // conCuit: si la línea trae un CUIT y el movimiento es de otro CUIT, no se cruzan solos (Augusto 30/10). Sin CUIT cargado, vale.
   const candidatos = (l: LineaCruce, conCuit = true) => x.movimientos.filter((m) => {
     if (usados.has(m.id) || prohibidos.has(`${l.id}|${m.id}`) || String(m.moneda || "ARS") !== "ARS") return false;

@@ -15,8 +15,9 @@ import { Card } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
-import { todayAR } from "@/lib/utils";
-import { traerFacturasFL, traerSaldosSacados } from "@/components/finanzas-lazza/datos";
+import { formatCurrency, todayAR } from "@/lib/utils";
+import { traerFacturasFL, traerFaltanCertificados, traerSaldosSacados } from "@/components/finanzas-lazza/datos";
+import type { FaltanCertificadosCliente } from "@/lib/finanzas-lazza";
 import { avisoDePagoReciente } from "@/lib/correo-finanzas";
 import { facturaPDFBase64 } from "@/lib/factura-pdf";
 import { fechaHoraAR } from "@/lib/presupuesto-envios";
@@ -68,6 +69,9 @@ export default function CobranzasPage() {
   const [resultados, setResultados] = useState<Record<string, Resultado>>({});
   const [programar, setProgramar] = useState(() => mananaALas9(hoy));
   const [cancelando, setCancelando] = useState<string | null>(null);
+  // Retenciones sin certificado (Augusto 03/11/2026): el cliente no debe plata, debe el certificado. Solo avisa.
+  const [faltan, setFaltan] = useState<FaltanCertificadosCliente[]>([]);
+  const [verFaltan, setVerFaltan] = useState(false);
 
   const cargarEnvios = useCallback(async () => {
     if (!sociedadId) return;
@@ -83,7 +87,12 @@ export default function CobranzasPage() {
     setCargando(true);
     setError(null);
     try {
-      const [{ filas }, sacados] = await Promise.all([traerFacturasFL(sociedadId, "venta", hoy, false), traerSaldosSacados(sociedadId)]);
+      const [{ filas }, sacados, sinCertificado] = await Promise.all([
+        traerFacturasFL(sociedadId, "venta", hoy, false), traerSaldosSacados(sociedadId),
+        // Si no se pueden leer, la pantalla anda igual sin el aviso.
+        traerFaltanCertificados(sociedadId).catch((e) => { console.warn("Cobranzas · certificados:", e); return [] as FaltanCertificadosCliente[]; }),
+      ]);
+      setFaltan(sinCertificado);
       // Con saldo y sin cobrar con cheque (el cheque sin acreditar ya es un cobro). Sin los saldos chicos que Augusto sacó de
       // pendientes en Cobrar (02/11/2026): a esos no se les manda aviso.
       const conSaldo = filas.filter((f) => f.entidadId && f.saldo >= 1 && !f.estado.startsWith("cheque_") && !sacados.has(`venta:${f.id}`));
@@ -137,6 +146,14 @@ export default function CobranzasPage() {
   const mandado = useCallback((g: GrupoAviso) => avisoMandado(ultimos.get(g.clienteId), hoy), [ultimos, hoy]);
   const cuentaFiltro = (f: FiltroEnvio) => f === "todos" ? todosGrupos.length : todosGrupos.filter((g) => mandado(g) === (f === "mandados")).length;
   const grupos = filtro === "todos" ? todosGrupos : todosGrupos.filter((g) => mandado(g) === (filtro === "mandados"));
+
+  // Certificados que le faltan a cada cliente (por CUIT, o por nombre si no tiene).
+  const faltanDe = useCallback((g: GrupoAviso) => faltan.find((c) => {
+    const a = String(c.cuit || "").replace(/\D/g, ""), b = String(g.cuit || "").replace(/\D/g, "");
+    return a && b ? a === b : c.nombre === g.cliente;
+  }), [faltan]);
+  const totalFaltan = (c: { total: { ARS: number; USD: number } }) => [c.total.ARS > 0 ? formatCurrency(c.total.ARS) : "", c.total.USD > 0 ? formatCurrency(c.total.USD, "USD") : ""].filter(Boolean).join(" + ");
+  const faltanTodos = useMemo(() => faltan.reduce((t, c) => ({ total: { ARS: t.total.ARS + c.total.ARS, USD: t.total.USD + c.total.USD } }), { total: { ARS: 0, USD: 0 } }), [faltan]);
 
   const nombreSociedad = sociedadActiva?.nombre || "Lazzari";
   const clave = (g: GrupoAviso) => `${g.tipo}:${g.clienteId}`;
@@ -247,6 +264,24 @@ export default function CobranzasPage() {
             </button>
           </div>
 
+          {!cargando && faltan.length > 0 && (
+            <div className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span>📄 Faltan certificados de retención: <b className="font-mono">{totalFaltan(faltanTodos)}</b> de {faltan.length} {faltan.length === 1 ? "cliente" : "clientes"}.
+                  <span className="text-amber-700 dark:text-amber-300"> No deben plata: pediles el certificado.</span></span>
+                <button onClick={() => setVerFaltan(!verFaltan)} className="text-xs font-medium underline">{verFaltan ? "Ocultar" : "Ver cuáles"}</button>
+                <Link href="/finanzas?seccion=retenciones" className="text-xs font-medium underline">Cargar certificados (Retenciones › Sufridas)</Link>
+              </div>
+              {verFaltan && (
+                <ul className="mt-1 space-y-0.5 text-xs">
+                  {faltan.map((c) => (
+                    <li key={`${c.cuit}-${c.nombre}`}>• <b>{c.nombre}</b> · <span className="font-mono">{totalFaltan(c)}</span> · {c.impuestos.join(", ")} · desde el {fmtFechaAviso(c.desde)}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
           {!cargando && todosGrupos.length > 0 && (
             <div className="flex flex-wrap items-center gap-3 border-b border-zinc-200 px-3 py-2 text-sm dark:border-zinc-800">
               <span className="inline-flex rounded-lg border border-zinc-200 p-0.5 dark:border-zinc-700">
@@ -329,6 +364,8 @@ export default function CobranzasPage() {
                         <span className="shrink-0 text-zinc-500">· {g.facturas.length} fact. · {totalTexto(g.total)} · {pestana === "vencidas" ? `vencida desde ${fmtFechaAviso(g.facturas[0].vence).slice(0, 5)}` : `vence ${fmtFechaAviso(g.facturas[0].vence).slice(0, 5)}`}</span>
                       </button>
                       {pago && <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-800 dark:bg-amber-950 dark:text-amber-200">avisó un pago el {fmtFechaAviso(pago).slice(0, 5)}: esperá</span>}
+                      {faltanDe(g) && <span title={`Retenciones sin certificado: ${faltanDe(g)!.impuestos.join(", ")}. No es plata que debe: pedile el certificado.`}
+                        className="shrink-0 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-800 dark:bg-amber-950 dark:text-amber-200">📄 faltan certificados {totalFaltan(faltanDe(g)!)}</span>}
                       {ult?.estado === "programado" && (
                         <span className="inline-flex shrink-0 items-center gap-1 rounded bg-sky-50 px-1.5 py-0.5 text-[11px] text-sky-700 dark:bg-sky-950 dark:text-sky-300">
                           <Clock className="h-3 w-3" /> programado para el {fechaHoraAR(ult.fecha).slice(0, 5)} {fechaHoraAR(ult.fecha).slice(11)}

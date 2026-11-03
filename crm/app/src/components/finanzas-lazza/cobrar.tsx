@@ -59,7 +59,7 @@ async function traerFacturasDeOrdenPago(sociedadId: string, clienteId: string, p
   return facturasDeOrdenPago(parsed, filas, await cobradoDe(sociedadId, filas));
 }
 
-export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preseleccion = [], directo = false, medioInicial, sugerido, onClose, onCobrado }: {
+export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preseleccion = [], directo = false, medioInicial, retencionesIniciales, sugerido, onClose, onCobrado }: {
   sociedadId: string;
   /** Sin cliente: primero se elige (Recibos → "Nuevo cobro"). */
   clienteId?: string | null;
@@ -73,6 +73,8 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
   onCobrado: () => void;
   /** Desde una línea del banco (02/11/2026): la transferencia en pesos viene con el importe y la fecha de la línea. */
   medioInicial?: { monto: number; fecha: string };
+  /** Desde una línea del banco (03/11/2026): retenciones estimadas como el último cobro del cliente (lib/banco-cobros). */
+  retencionesIniciales?: { tipo: string; monto: number; observaciones?: string }[];
   /** Cliente con el mismo CUIT que la línea del banco: se muestra para elegirlo con un clic (nunca se elige solo). */
   sugerido?: { id: string; nombre: string } | null;
 }) {
@@ -172,7 +174,7 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
     return (
       <CobroMasivoLiquidacion facturas={seleccion} clienteId={cliente.id} clienteNombre={cliente.nombre} sociedadId={sociedadId}
         profileId={profile?.id || null} moneda="ARS" onCobrarOrdenCompleta={(orden) => { void iniciarCobroOrdenPago(orden); }}
-        medioInicial={medioInicial} onClose={cerrarLiquidacion} onSuccess={listo} />
+        medioInicial={medioInicial} retencionesIniciales={retencionesIniciales} onClose={cerrarLiquidacion} onSuccess={listo} />
     );
   }
 

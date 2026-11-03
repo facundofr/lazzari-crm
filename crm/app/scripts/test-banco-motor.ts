@@ -1,6 +1,6 @@
 // Prueba rápida: npx tsx scripts/test-banco-motor.ts
 import assert from "node:assert/strict";
-import { cuitDeLinea, motorBanco, nombresDePersona, resumenMotor, type MovMotor } from "../src/lib/banco-motor";
+import { cbusDeFichas, cuitDeLinea, motorBanco, nombresDePersona, resumenMotor, type MovMotor } from "../src/lib/banco-motor";
 import type { ChequeCruce, CuentaCruce, LineaCruce } from "../src/lib/extracto-bbva";
 
 const EPP = "cta-epp";
@@ -176,6 +176,17 @@ const correr = (lineas: LineaCruce[], movimientos: MovMotor[] = [], cheques: Che
   assert.match(r.get(propio.id)!.aviso || "", /14\/10 por \$ 50\.000,00: .*PROPIO/);
   assert.equal(r.get(echeq.id)!.aviso, undefined);
   assert.ok(r.get(nose.id)!.aviso);
+}
+
+// CBU de destino (Augusto 03/11/2026): el final del CBU que pone el BBVA vale como el CUIT de la ficha que tiene ese CBU.
+{
+  const cbus = cbusDeFichas([{ cbu: "0170099220000041644211", cuit: "30-71111111-1" }, { cbu: "2850590940090418135201", cuit: "30711111112" }, { cbu: "123", cuit: "30711111113" }, { cbu: "0170099220000041644299", cuit: null }]);
+  assert.deepEqual(Object.keys(cbus).sort(), ["0170099220000041644211", "2850590940090418135201"]);
+  assert.equal(cuitDeLinea("TRANSF.BANEL 099220000041644211 · CTE 000011110004 #136", cbus), "30711111111");
+  assert.equal(cuitDeLinea("TRANSFERENCIA CBU 2850590940090418135201", cbus), "30711111112");
+  assert.equal(cuitDeLinea("TRANSF.BANEL 930004164421182 · CTE 000011110004 #136", cbus), null, "CBU que no está en ninguna ficha");
+  assert.equal(cuitDeLinea("TRANSF.BANEL 099220000041644211"), null, "sin fichas no adivina");
+  assert.equal(cuitDeLinea("TRANSFERENCI 30680346921 · CTE 000011111111", cbus), "30680346921", "el CUIT manda");
 }
 
 console.log("test-banco-motor OK");

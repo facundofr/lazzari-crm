@@ -25,8 +25,14 @@ import { montoCuentaDeOp } from "@/lib/saldo-cuentas";
 import { clasificarMovimiento } from "@/lib/tipos-movimiento";
 import { codigoDeConcepto, sinCodigoBanco } from "@/lib/bbva-codigos";
 import { nombreCodigoBanco } from "@/lib/nombres-estados";
-import { cuitDeLinea, motorBanco, type DecisionBanco, type MovMotor } from "@/lib/banco-motor";
+import { cbusDeFichas, cuitDeLinea, motorBanco, type DecisionBanco, type MovMotor } from "@/lib/banco-motor";
 import { candidatosManual, marcasRevision, separarDecisiones } from "@/lib/banco-revision";
+import {
+  eventosRetencion, modelosRetencion, NOMBRE_RETENCION, sugerirFacturas, textoAplicado, TIPOS_RETENCION,
+  type FacturaBanco, type ReglaRetencion, type RetencionEstimada, type SugerenciaFactura,
+} from "@/lib/banco-cobros";
+import { cobradoPorFactura, saldoFacturaVenta, traerDatosSaldoClientes } from "@/lib/saldo-clientes";
+import { comprobanteVenta } from "@/lib/finanzas-lazza";
 import { detalleDebitoAutomatico, pestanaDeLinea, PESTANAS_BANCO, resumenImpuestos, resumenPestanas, type LineaMov, type PestanaBanco } from "@/lib/movimientos-banco";
 import { CLASIFICACION_LABEL, SUBTIPO_LABEL, type ChequeCruce, type ClasificacionLinea, type CuentaCruce } from "@/lib/extracto-bbva";
 import FinanzasParaConfirmar from "@/components/finanzas-para-confirmar";
@@ -54,14 +60,59 @@ type Estado = "cruzada" | "del_banco" | "sin_cruzar" | "explicada";
 interface Fila {
   linea: Linea; importe: number; estado: Estado; detalle: string; conQue: string; porMotor: boolean;
   pestana: PestanaBanco; revisada: boolean; sugerencia: { decision: DecisionBanco; texto: string } | null;
+  /** Transferencia que entró sin cobro cargado: facturas que pueden ser (saldo exacto, o menos las retenciones de siempre). */
+  facturas: SugerenciaFactura[];
 }
 interface NoPaso { id: string; fecha: string; importe: number; texto: string }
 type Vista = "revisar" | "cruzada" | "del_banco" | "revisadas" | "todas" | "no_paso";
-type Tercero = { id: string; razon_social: string; cuit: string | null };
+type Tercero = { id: string; razon_social: string; cuit: string | null; cbu?: string | null };
+/** Facturas de venta con saldo, número de cada factura, facturas de cada cobro y cómo retiene cada cliente (lib/banco-cobros). */
+interface DatosFacturas {
+  pendientes: FacturaBanco[]; numero: Map<string, string>; facturasDeMov: Map<string, string[]>; modelos: Map<string, ReglaRetencion[]>;
+}
 interface Datos {
   cuentas: CuentaCruce[]; ls: Linea[]; movs: Mov[]; chs: (ChequeCruce & { destino_nombre?: string | null })[]; cli: Tercero[]; prov: Tercero[];
   ops: { id: string; numero: string | null; medios_pago: unknown }[]; gas: { id: string; descripcion: string | null }[];
   reg: { linea_id: string | null; accion: string; propuesta: any; created_at: string }[];
+  /** null si no se pudieron leer: la pantalla anda igual, sin sugerir facturas ni decir si el cobro está aplicado. */
+  fac: DatosFacturas | null;
+}
+
+/**
+ * Facturas de venta con saldo (el de lib/saldo-clientes, el mismo de Cobranzas: acá no se hace otra cuenta), las facturas de
+ * cada cobro y las retenciones sufridas de cada cliente (para estimar las del próximo cobro).
+ */
+async function leerFacturas(sociedadId: string, cli: Tercero[]): Promise<DatosFacturas> {
+  const [cc, filas, rets] = await Promise.all([
+    traerDatosSaldoClientes(db, sociedadId, traerTodo),
+    traerTodo<any>(() => db.from("facturas").select("id, cliente_id, tipo, punto_venta, numero, fecha, subtotal, total, moneda, estado")
+      .eq("sociedad_id", sociedadId).neq("estado", "anulada").order("id")),
+    traerTodo<any>(() => db.from("movimientos").select("id, tipo, fecha, monto, cliente_id, factura_id, anulado")
+      .eq("sociedad_id", sociedadId).in("tipo", TIPOS_RETENCION).not("cliente_id", "is", null).order("id")),
+  ]);
+  const cobrado = cobradoPorFactura(cc.facturas, cc.movimientos, cc.aplicaciones);
+  const ccPorId = new Map(cc.facturas.map((f) => [f.id, f]));
+  const cliente = new Map(cli.map((c) => [c.id, c]));
+  const numero = new Map<string, string>(filas.map((f) => [f.id, comprobanteVenta(f)]));
+  const pendientes: FacturaBanco[] = [];
+  for (const f of filas) {
+    const c = ccPorId.get(f.id);
+    if (!c || !f.cliente_id) continue;
+    const saldo = saldoFacturaVenta(c, cobrado[f.id] || 0);
+    if (saldo <= 0.005) continue;
+    const cl = cliente.get(f.cliente_id);
+    pendientes.push({
+      id: f.id, clienteId: f.cliente_id, cliente: cl?.razon_social || "", cuit: cl?.cuit || null, tipo: String(f.tipo || ""), numero: numero.get(f.id) || "",
+      fecha: String(f.fecha).slice(0, 10), moneda: String(f.moneda || "ARS").toUpperCase() === "USD" ? "USD" : "ARS",
+      subtotal: Number(f.subtotal) || 0, total: Number(f.total) || 0, saldo,
+    });
+  }
+  const facturasDeMov = new Map<string, string[]>();
+  const sumar = (mov: string | null | undefined, fac: string | null | undefined) => { if (mov && fac) facturasDeMov.set(mov, [...(facturasDeMov.get(mov) || []), fac]); };
+  for (const a of cc.aplicaciones) sumar(a.movimiento_id, a.factura_id);
+  for (const m of cc.movimientos) sumar(m.id, m.factura_id);
+  const eventos = eventosRetencion({ retenciones: rets, aplicaciones: cc.aplicaciones, facturas: new Map(filas.map((f) => [f.id, f])) });
+  return { pendientes, numero, facturasDeMov, modelos: modelosRetencion(eventos) };
 }
 
 /** Lo que el motor necesita: pendientes, movimientos sin cruzar, cheques usados y lo que una persona desató. */
@@ -89,6 +140,7 @@ function entradaMotor(d: Datos) {
     cuentas: d.cuentas,
     chequesUsados: new Set(d.ls.filter((l) => l.cheque_id && l.clasificacion).map((l) => `${l.clasificacion}:${l.cheque_id}`)),
     prohibidos,
+    cbus: cbusDeFichas([...d.prov, ...d.cli]),
   };
 }
 
@@ -122,7 +174,11 @@ export function BancoSimple({ sociedadId }: { sociedadId: string }) {
   const [ocupado, setOcupado] = useState<string | null>(null);
   const [otraCosa, setOtraCosa] = useState<{ id: string; que: "personal" | "anterior" | "otro"; nota: string } | null>(null);
   const [elegir, setElegir] = useState<{ id: string; ids: Set<string>; buscar: string } | null>(null);
-  const [cargarDesde, setCargarDesde] = useState<{ linea: Linea; tipo: "cobro" | "pago"; sugerido: { id: string; nombre: string } | null } | null>(null);
+  const [cargarDesde, setCargarDesde] = useState<{
+    linea: Linea; tipo: "cobro" | "pago"; sugerido: { id: string; nombre: string } | null;
+    /** «Cobrar» de una factura sugerida: la ventana de cobro abre con esa factura, la transferencia y las retenciones estimadas. */
+    factura?: { clienteId: string; nombre: string; facturaId: string; retenciones: RetencionEstimada[] };
+  } | null>(null);
   const [noPasaNota, setNoPasaNota] = useState<{ id: string; nota: string } | null>(null);
   const [verMarcados, setVerMarcados] = useState(false);
   const motivos = useRef(new Map<string, string>());
@@ -144,14 +200,18 @@ export function BancoSimple({ sociedadId }: { sociedadId: string }) {
         .eq("sociedad_id", sociedadId).gte("fecha", "2026-08-21").order("fecha").order("id")),
       traerTodo<ChequeCruce & { destino_nombre?: string | null }>(() => db.from("echeqs")
         .select("id, numero, monto, direccion, estado, fecha_pago, tipo_cheque, movimiento_id, origen_nombre, destino_nombre").eq("sociedad_id", sociedadId).order("id")),
-      traerTodo<Tercero>(() => db.from("clientes").select("id, razon_social, cuit").eq("sociedad_id", sociedadId).order("id")),
-      traerTodo<Tercero>(() => db.from("proveedores").select("id, razon_social, cuit").eq("sociedad_id", sociedadId).order("id")),
+      // El CBU de la ficha (clientes: alias_cbu, si es un CBU de 22 dígitos) reconoce a quién va o de quién viene una transferencia.
+      traerTodo<Tercero & { alias_cbu?: string | null }>(() => db.from("clientes").select("id, razon_social, cuit, alias_cbu").eq("sociedad_id", sociedadId).order("id"))
+        .then((cs) => cs.map(({ alias_cbu, ...c }) => ({ ...c, cbu: alias_cbu ?? null }))),
+      traerTodo<Tercero>(() => db.from("proveedores").select("id, razon_social, cuit, cbu").eq("sociedad_id", sociedadId).order("id")),
       traerTodo<{ id: string; numero: string | null; medios_pago: unknown }>(() => db.from("ordenes_pago").select("id, numero, medios_pago").eq("sociedad_id", sociedadId).order("id")),
       traerTodo<{ id: string; descripcion: string | null }>(() => db.from("gastos_manuales").select("id, descripcion").eq("sociedad_id", sociedadId).gte("fecha", "2026-07-01").order("id")),
       traerTodo<{ linea_id: string | null; accion: string; propuesta: any; created_at: string }>(() => db.from("finanzas_registro")
         .select("linea_id, accion, propuesta, created_at").eq("sociedad_id", sociedadId).in("accion", ACCIONES_REGISTRO).order("created_at").order("id")),
     ]);
-    return { cuentas: (cs || []) as CuentaCruce[], ls, movs, chs, cli, prov, ops, gas, reg };
+    // Si las facturas no se pueden leer, la pantalla sigue igual (solo no sugiere facturas): nunca frena.
+    const fac = await leerFacturas(sociedadId, cli).catch((e) => { console.warn("Bancos · facturas para sugerir:", e); return null; });
+    return { cuentas: (cs || []) as CuentaCruce[], ls, movs, chs, cli, prov, ops, gas, reg, fac };
   }, [sociedadId]);
 
   /** Arma la lista, las sugerencias, lo que no pasó por el banco y la última carga del motor. */
@@ -176,20 +236,27 @@ export function BancoSimple({ sociedadId }: { sociedadId: string }) {
         x.lineas.add(r.linea_id); x.cuando = r.created_at; cargas.set(c, x);
       }
     }
+    // Cobro de un cliente: si está aplicado a facturas del CRM o no (Augusto 03/11/2026). Pagos y lo demás, sin nada.
+    const aplicado = (m: Mov) => (d.fac && m.cliente_id && clasificarMovimiento(m) === "ingreso"
+      ? ` · ${textoAplicado((d.fac.facturasDeMov.get(m.id) || []).map((id) => d.fac!.numero.get(id) || ""))}` : "");
+    const cbus = cbusDeFichas([...d.prov, ...d.cli]);
     const lista: Fila[] = d.ls.map((l) => {
       const importe = (l.tipo === "credito" ? 1 : -1) * Number(l.monto);
       const movs = [...new Map([...(l.match_movimiento_id && movPorId.get(l.match_movimiento_id) ? [movPorId.get(l.match_movimiento_id)!] : []), ...(movsDeLinea.get(l.id) || [])].map((m) => [m.id, m])).values()];
       const ch = l.cheque_id ? cheque.get(l.cheque_id) : null;
       let estado: Estado, conQue: string;
       let sugerencia: Fila["sugerencia"] = null;
+      let facturas: SugerenciaFactura[] = [];
       if (l.estado === "pendiente") {
         estado = "sin_cruzar";
         const s = sugerencias.current.get(l.id);
-        if (s) sugerencia = { decision: s, texto: s.movimientos.map((id) => movPorId.get(id)).filter(Boolean).map((m) => `${textoMov(m!)} (${formatCurrency(Number(m!.monto))}, ${formatDate(m!.fecha)})`).join(" + ") };
+        if (s) sugerencia = { decision: s, texto: s.movimientos.map((id) => movPorId.get(id)).filter(Boolean).map((m) => `${textoMov(m!)} (${formatCurrency(Number(m!.monto))}, ${formatDate(m!.fecha)})${aplicado(m!)}`).join(" + ") };
+        // Entró plata y no hay cobro cargado que coincida: la factura con ese saldo, o la que da con las retenciones de siempre del cliente.
+        else if (importe > 0 && d.fac) facturas = sugerirFacturas({ importe, cuit: cuitDeLinea(l.descripcion || "", cbus) }, d.fac.pendientes, d.fac.modelos);
         conQue = motivos.current.get(l.id) || (l.tipo === "credito" ? "No está el cobro en el CRM" : "No está el pago en el CRM");
       } else if (movs.length || ch) {
         estado = "cruzada";
-        conQue = movs.length ? movs.map(textoMov).join(" + ") : `Cheque ${ch!.numero}${ch!.origen_nombre ? ` de ${ch!.origen_nombre}` : (ch as any).destino_nombre ? ` a ${(ch as any).destino_nombre}` : ""}`;
+        conQue = movs.length ? movs.map((m) => `${textoMov(m)}${aplicado(m)}`).join(" + ") : `Cheque ${ch!.numero}${ch!.origen_nombre ? ` de ${ch!.origen_nombre}` : (ch as any).destino_nombre ? ` a ${(ch as any).destino_nombre}` : ""}`;
       } else if (l.estado === "matcheado" && DEL_BANCO.has(String(l.clasificacion))) {
         estado = "del_banco";
         conQue = [CLASIFICACION_LABEL[l.clasificacion as ClasificacionLinea] || l.clasificacion, l.subtipo && (SUBTIPO_LABEL[l.subtipo] || l.subtipo)].filter(Boolean).join(" · ");
@@ -197,7 +264,7 @@ export function BancoSimple({ sociedadId }: { sociedadId: string }) {
       const mov: LineaMov = { ...l, descripcion: l.descripcion || "", monto: Number(l.monto) };
       return {
         linea: l, importe, estado, detalle: sinCodigoBanco(l.descripcion), conQue, porMotor: l.estado !== "pendiente" && ultimo.get(l.id) === "cruce_solo",
-        pestana: pestanaDeLinea(mov), revisada: estado === "sin_cruzar" && revisadas.has(l.id), sugerencia,
+        pestana: pestanaDeLinea(mov), revisada: estado === "sin_cruzar" && revisadas.has(l.id), sugerencia, facturas,
       };
     }).reverse();
     setFilas(lista);
@@ -396,9 +463,15 @@ export function BancoSimple({ sociedadId }: { sociedadId: string }) {
     }
   }
 
+  /** «Cobrar» una factura sugerida: la misma ventana de cobro de siempre, directo con la factura tildada; se revisa y se guarda ahí. */
+  function abrirCobrarFactura(f: Fila, s: SugerenciaFactura) {
+    setCargarDesde({ linea: f.linea, tipo: "cobro", sugerido: null,
+      factura: { clienteId: s.factura.clienteId, nombre: s.factura.cliente, facturaId: s.factura.id, retenciones: s.retenciones } });
+  }
+
   function abrirCargar(f: Fila) {
     const d = datos.current;
-    const cuit = cuitDeLinea(f.linea.descripcion || "");
+    const cuit = cuitDeLinea(f.linea.descripcion || "", d ? cbusDeFichas([...d.prov, ...d.cli]) : undefined);
     const lista = f.importe > 0 ? d?.cli : d?.prov;
     const t = cuit ? (lista || []).filter((x) => String(x.cuit || "").replace(/\D/g, "") === cuit) : [];
     setCargarDesde({ linea: f.linea, tipo: f.importe > 0 ? "cobro" : "pago", sugerido: t.length === 1 ? { id: t[0].id, nombre: t[0].razon_social } : null });
@@ -613,6 +686,25 @@ export function BancoSimple({ sociedadId }: { sociedadId: string }) {
                             </span>
                           </span>
                         </span>
+                      ) : sin && f.facturas.length > 0 ? (
+                        <span className="flex items-start gap-1.5 text-amber-800 dark:text-amber-200">
+                          <Lightbulb className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                          <span>
+                            {f.facturas.map((s) => {
+                              const ret = s.retenciones.reduce((t, r) => t + r.monto, 0);
+                              return (
+                                <span key={s.factura.id} className="block">
+                                  Parece: {s.factura.numero} de {s.factura.cliente} (saldo {formatCurrency(s.factura.saldo)}
+                                  {ret > 0 && <> − retenciones {formatCurrency(ret)}: {s.retenciones.map((r) => NOMBRE_RETENCION[r.tipo]).join(", ")}</>})
+                                  {" "}<span className="text-xs text-zinc-500">({ret > 0 ? "como el último cobro de este cliente; faltan los certificados" : "saldo exacto"})</span>
+                                  <button disabled={ocupado !== null} onClick={() => abrirCobrarFactura(f, s)} title="Abre la ventana de cobro con esta factura y lo que entró al banco: revisás y guardás ahí"
+                                    className="ml-2 whitespace-nowrap rounded-md bg-emerald-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50">Cobrar</button>
+                                </span>
+                              );
+                            })}
+                            <span className="block text-xs text-zinc-500">No está el cobro en el CRM.</span>
+                          </span>
+                        </span>
                       ) : (
                         <span className="flex items-start gap-1.5 text-zinc-700 dark:text-zinc-300">
                           {f.estado === "cruzada" ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" /> : f.estado === "del_banco" ? <Landmark className="mt-0.5 h-3.5 w-3.5 shrink-0 text-violet-600" /> : f.estado === "explicada" ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-zinc-400" /> : <Circle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-zinc-400" />}
@@ -677,7 +769,13 @@ export function BancoSimple({ sociedadId }: { sociedadId: string }) {
         </div>
       )}
 
-      {cargarDesde?.tipo === "cobro" && lineaCargar && (
+      {cargarDesde?.tipo === "cobro" && lineaCargar && cargarDesde.factura && (
+        <CobrarCliente sociedadId={sociedadId} clienteId={cargarDesde.factura.clienteId} clienteNombre={cargarDesde.factura.nombre}
+          preseleccion={[cargarDesde.factura.facturaId]} directo medioInicial={lineaCargar}
+          retencionesIniciales={cargarDesde.factura.retenciones.map((r) => ({ tipo: r.tipo, monto: r.monto, observaciones: "Estimada desde Bancos (como el último cobro del cliente)" }))}
+          onClose={() => setCargarDesde(null)} onCobrado={() => { const id = cargarDesde.linea.id; setCargarDesde(null); void procesar(id); }} />
+      )}
+      {cargarDesde?.tipo === "cobro" && lineaCargar && !cargarDesde.factura && (
         <CobrarCliente sociedadId={sociedadId} medioInicial={lineaCargar} sugerido={cargarDesde.sugerido}
           onClose={() => setCargarDesde(null)} onCobrado={() => { const id = cargarDesde.linea.id; setCargarDesde(null); void procesar(id); }} />
       )}

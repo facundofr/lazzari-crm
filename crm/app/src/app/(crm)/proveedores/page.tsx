@@ -31,6 +31,7 @@ import { ProveedorFormModal, CONCEPTOS_RG830, TAG_COLORS, type ProveedorForm } f
 import { EliminarConMotivoModal } from "@/components/eliminar-con-motivo";
 import { ListaCostosTab } from "@/components/lista-costos/lista-costos-tab";
 import { ReglasProveedorFicha } from "@/components/lista-costos/reglas-proveedor-ficha";
+import { CAMPOS_CONTACTO, CAMPOS_FICHA_PROVEEDOR, coincideFicha, datosDeFicha } from "@/lib/buscar-texto";
 
 function ClasificacionTag({ tag }: { tag: string }) {
   const color = TAG_COLORS[tag] ?? "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300";
@@ -166,6 +167,8 @@ export default function ProveedoresPage() {
   const canDeleteProveedores = canManageProveedores;
   const [tab, setTab] = useState<"proveedores" | "costos" | "listas">("proveedores");
   const [search, setSearch] = useState("");
+  // Todo lo que se puede buscar de cada proveedor: ficha (CBU, alias, banco, titular…) y contactos (Augusto 03/11/2026, lib/buscar-texto).
+  const [datosBusqueda, setDatosBusqueda] = useState<Map<string, string[]>>(new Map());
   const [filtroRapido, setFiltroRapido] = useState<FiltroRapido>("todos");
   const [orden, setOrden] = useState<{ col: "proveedor" | "saldo" | "ultima"; dir: "asc" | "desc" }>({ col: "proveedor", dir: "asc" });
   // Saldo a pagar y última compra: se calculan de facturas de compra, pagos y OC (igual que la CC de Finanzas)
@@ -251,13 +254,26 @@ export default function ProveedoresPage() {
         provQuery = provQuery.eq("sociedad_id" as any, sociedadActiva.id);
         listasQuery = listasQuery.eq("sociedad_id" as any, sociedadActiva.id);
       }
-      const [provRes, listasRes] = await Promise.all([provQuery, listasQuery]);
+      const [provRes, listasRes, contactosTodos] = await Promise.all([provQuery, listasQuery,
+        // Contactos de los proveedores, solo para el buscador (si fallan, se busca en la ficha).
+        traerTodo<Record<string, unknown>>(() => (supabase as any).from("contactos").select("id, entity_id, nombre, cargo, email, telefono, whatsapp, notas").eq("entity_type", "proveedor").order("id"))
+          .catch((e: unknown) => { console.warn("Proveedores · contactos para buscar:", e); return [] as Record<string, unknown>[]; }),
+      ]);
 
       if (provRes.error) {
         setProveedores([]);
         toast.error("No se pudieron cargar los proveedores. Recargá la página.");
       } else {
         setProveedores((provRes.data || []).map((r) => mapSupabaseProveedor(r as Record<string, unknown>)));
+        const contactosDe = new Map<string, string[]>();
+        for (const k of contactosTodos) {
+          const id = String(k.entity_id || "");
+          if (id) contactosDe.set(id, [...(contactosDe.get(id) || []), ...datosDeFicha(k, CAMPOS_CONTACTO)]);
+        }
+        setDatosBusqueda(new Map((provRes.data || []).map((r) => {
+          const row = r as Record<string, unknown>;
+          return [String(row.id), [...datosDeFicha(row, CAMPOS_FICHA_PROVEEDOR), ...(contactosDe.get(String(row.id)) || [])]];
+        })));
       }
       if (listasRes.error) {
         setListas([]);
@@ -447,14 +463,9 @@ export default function ProveedoresPage() {
     if (f === "talleres") return Boolean((p as any).esPersonalizador);
     return true;
   };
-  const coincideBusqueda = (p: Proveedor) => {
-    if (!search.trim()) return true;
-    const q = search.toLowerCase().trim();
-    const qDigitos = q.replace(/\D/g, "");
-    const textos = [p.razonSocial, (p as any).nombreFantasia, p.rubro, p.localidad, p.provincia, p.email];
-    if (textos.some((t) => String(t || "").toLowerCase().includes(q))) return true;
-    return qDigitos.length >= 3 && String(p.cuit || "").replace(/\D/g, "").includes(qDigitos);
-  };
+  // Cualquier dato: nombre, fantasía, CUIT, mail, teléfono, CBU, alias, banco, titular, rubro, marcas, notas y contactos (lib/buscar-texto).
+  const coincideBusqueda = (p: Proveedor) => coincideFicha(search,
+    datosBusqueda.get(p.id) || [p.razonSocial, (p as any).nombreFantasia, p.cuit, p.rubro, p.localidad, p.provincia, p.email]);
   const proveedoresBuscados = proveedores.filter(coincideBusqueda);
   const filteredProveedores = proveedoresBuscados
     .filter((p) => pasaFiltroRapido(p, filtroRapido))
@@ -744,7 +755,7 @@ export default function ProveedoresPage() {
             <div className="flex flex-wrap items-center gap-2">
               <div className="relative min-w-[220px] flex-1 max-w-md">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-                <input type="text" placeholder="Buscar por nombre, fantasía, CUIT o localidad..." value={search} onChange={(e) => setSearch(e.target.value)}
+                <input type="text" placeholder="Buscar por nombre, CUIT, mail, teléfono, CBU, alias, rubro o contacto..." value={search} onChange={(e) => setSearch(e.target.value)}
                   className="h-8 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900" />
               </div>
               <div className="flex flex-wrap gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800" role="group" aria-label="Filtros rápidos">

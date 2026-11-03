@@ -870,6 +870,36 @@ export function totalesRetenciones(filas: FilaRetencion[]): TotalRetencion[] {
   return [...por.values()].sort((a, b) => orden(a.impuesto) - orden(b.impuesto) || a.impuesto.localeCompare(b.impuesto) || a.moneda.localeCompare(b.moneda));
 }
 
+export interface FaltanCertificadosCliente {
+  nombre: string; cuit: string; cantidad: number; total: { ARS: number; USD: number };
+  /** "IVA", "Ganancias", "IIBB", "SUSS", en ese orden. */
+  impuestos: string[];
+  /** La retención sin certificado más vieja. */
+  desde: string;
+}
+
+/**
+ * Retenciones sufridas sin N° de certificado, por cliente (Cobranzas, Augusto 03/11/2026: "tendría que dejarme notificado de que
+ * me deben esas retenciones"). El cliente no debe plata: debe el certificado. Misma regla que Sufridas › Falta certificado
+ * (`armarRetenciones`). Ordenado por lo que falta, de mayor a menor.
+ */
+export function faltanCertificadosPorCliente(filas: FilaRetencion[]): FaltanCertificadosCliente[] {
+  const por = new Map<string, FaltanCertificadosCliente>();
+  for (const r of filas) {
+    if (r.lado !== "sufrida" || !r.faltaCertificado) continue;
+    const k = r.cuit.replace(/\D/g, "") || r.nombre;
+    const c = por.get(k) || { nombre: r.nombre, cuit: r.cuit, cantidad: 0, total: { ARS: 0, USD: 0 }, impuestos: [], desde: r.fecha };
+    c.cantidad += 1;
+    c.total[r.moneda] = r2(c.total[r.moneda] + r.monto);
+    if (!c.impuestos.includes(r.impuesto)) c.impuestos.push(r.impuesto);
+    if (r.fecha < c.desde) c.desde = r.fecha;
+    por.set(k, c);
+  }
+  const orden = (i: string) => (ORDEN_IMPUESTO.includes(i) ? ORDEN_IMPUESTO.indexOf(i) : ORDEN_IMPUESTO.length);
+  for (const c of por.values()) c.impuestos.sort((a, b) => orden(a) - orden(b));
+  return [...por.values()].sort((a, b) => b.total.ARS - a.total.ARS || b.total.USD - a.total.USD || a.nombre.localeCompare(b.nombre));
+}
+
 const ddmmaaaa = (iso: string) => iso.slice(0, 10).split("-").reverse().join("/");
 
 /**
