@@ -22,6 +22,8 @@
  * 8. Solo IVA (Augusto 02/11): «Es: Solo IVA» = la factura solo cuenta en el libro de IVA. No se elige pago: queda tipo
  *    "solo_iva", solo_iva = true y estado "pagada" sin pagos (igual que «Ya pagada por otro medio» de la ventana vieja), así no
  *    va a Pagos ni suma en la cuenta corriente del proveedor.
+ * 9. Forma de pago (Augusto 02/11, P04): además de la línea "Pago: …" de las notas, se guarda condicion_pago / dias_pago
+ *    (condicionDeCarga) para que la OP la vea y la sugiera. El cartel al guardar dice "Pago: … · Nota: …" (pagoDeFactura).
  * Guardar usa guardar_conciliacion_compra (la de siempre), sin OC, sin aceptar costos ni aprender equivalencias.
  */
 import { useEffect, useRef, useState } from "react";
@@ -36,6 +38,7 @@ import { leerFacturaLocal } from "@/lib/leer-factura-local";
 import { traerTarjetas, tarjetaSugerida, registrarPagoTarjeta, movimientoPagoTarjeta } from "@/lib/pago-tarjeta";
 import { cant } from "@/lib/cargar-factura";
 import { ivaYPercepciones, netoFactura, tipoNotaCredito, vencimientoPorDias } from "@/lib/compras-lazza";
+import { condicionDeCarga, pagoDeFactura, textoPagoCarga } from "@/lib/condicion-pago";
 import { Autocompletar } from "@/components/ui/autocompletar";
 import { AlertTriangle, Check, CreditCard, FileUp, Loader2, Sparkles, UserPlus, X } from "lucide-react";
 import { linkArchivo } from "@/lib/archivo-link";
@@ -294,7 +297,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
       toast.error(`No se pudo guardar en el proveedor (${e?.message || "error"})`);
     } finally { setGuardandoProv(false); }
   }
-  const textoPago = `Pago: ${formaPago === "echeq" ? "eCheq" : "transferencia"}${dias.trim() ? ` a ${Math.round(num(dias))} días` : ""}`;
+  const textoPago = textoPagoCarga(formaPago, dias);
   const vendedorNuevo = deMercadoLibre && !!factura && !proveedor && !buscandoProv && !esNota && factura.cuit.length === 11;
   const datosVendedor = vendedorNuevo ? vendedorML({ cuit: factura!.cuit, tipo: factura!.tipo, arca: vendedorArca, leido: factura!.razonSocialLeida }) : null;
   const nombreProveedor = proveedor?.razon_social ?? datosVendedor?.razon_social ?? "";
@@ -404,6 +407,12 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
         const { error: eTipo } = await db.from("facturas_compra").update({ tipo: "transporte" }).eq("id", facturaId);
         if (eTipo) toast.warning(`La factura quedó como Compra, no como Transporte (${eTipo.message}).`);
       }
+      // Forma de pago en sus columnas (la RPC no las guarda), para que la OP la vea. Si falla, queda igual en las notas.
+      const condicion = !soloIva && !pagaVisa ? condicionDeCarga(dias) : null;
+      if (facturaId && condicion) {
+        const { error: eCond } = await db.from("facturas_compra").update(condicion).eq("id", facturaId);
+        if (eCond) toast.warning(`La forma de pago quedó solo en las notas (${eCond.message}).`);
+      }
 
       // d) PDF y pago (si algo de esto falla, la factura ya quedó: solo se avisa).
       if (facturaId) await subirArchivo(facturaId);
@@ -435,7 +444,8 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
       } else if (facturaId) {
         await db.from("facturas_compra").update({ estado: "pendiente" }).eq("id", facturaId).eq("estado", "pendiente_aprobacion");
       }
-      toast.success([`✔ FC ${numero} cargada`, tipoFactura === "transporte" ? "Transporte" : "", pagoTxt].filter(Boolean).join(" · "));
+      const paraFinanzas = !soloIva && !pagaVisa ? pagoDeFactura({ ...condicion, notas }).texto : "";
+      toast.success([`✔ FC ${numero} cargada`, tipoFactura === "transporte" ? "Transporte" : "", pagoTxt, paraFinanzas].filter(Boolean).join(" · "));
       if (data?.aviso) toast.warning(String(data.aviso));
       if (facturaId && onGuardada) await onGuardada(facturaId);
       window.dispatchEvent(new Event(EVENTO_FACTURAS_COMPRA));

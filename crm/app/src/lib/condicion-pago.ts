@@ -185,3 +185,44 @@ export function condicionDesdeFactura(notas: string | null | undefined, fecha?: 
   if (/cuenta\s*corriente|cta\.?\s*cte/.test(t) && Number.isFinite(d) && d >= 0 && d <= 180) return d === 0 ? { condicion_pago: "contra_entrega", dias_pago: 0 } : { condicion_pago: "cuenta_corriente", dias_pago: d };
   return null;
 }
+
+/** Línea "Pago: …" que Compras Lazza › Cargar factura deja en las notas: "Pago: eCheq a 60 días", "Pago: transferencia". */
+export function textoPagoCarga(medio: "transferencia" | "echeq", dias: string | number | null | undefined): string {
+  const d = String(dias ?? "").trim();
+  return `Pago: ${medio === "echeq" ? "eCheq" : "transferencia"}${d ? ` a ${Math.round(Number(d) || 0)} días` : ""}`;
+}
+
+/**
+ * Condición que se guarda en la factura al cargarla en Compras Lazza (Augusto 02/11, P04: antes quedaba solo en las notas y la OP no la veía).
+ * La columna solo acepta anticipado / contra entrega / cuenta corriente / escalonado: 0 días = contra entrega, N días = cuenta corriente N.
+ * Sin días = null (vence cuando dice la factura). El medio (eCheq o transferencia) queda en la línea "Pago: …" de las notas.
+ */
+export function condicionDeCarga(dias: string | number | null | undefined): PlanPago | null {
+  const d = String(dias ?? "").trim();
+  if (!d || !Number.isFinite(Number(d))) return null;
+  const n = Math.max(0, Math.round(Number(d)));
+  return n === 0 ? { condicion_pago: "contra_entrega", dias_pago: 0 } : { condicion_pago: "cuenta_corriente", dias_pago: n };
+}
+
+export interface PagoDeFactura {
+  medio: "transferencia" | "echeq" | null;
+  dias: number | null;
+  /** "Nota para Finanzas" de quien la cargó. */
+  nota: string;
+  /** "Pago: eCheq a 60 días · Nota: …" ("" si no dice nada). */
+  texto: string;
+}
+
+/**
+ * Cómo pidió Compras que se pague una factura de compra, para mostrarlo y sugerirlo en la OP. Lee condicion_pago / dias_pago
+ * y las notas (las cargadas antes del 02/11 lo tienen solo en las notas). Es sugerencia: la OP se paga como se elija.
+ */
+export function pagoDeFactura(f: { condicion_pago?: string | null; dias_pago?: number | null; notas?: string | null } | null | undefined): PagoDeFactura {
+  const notas = String(f?.notas || "");
+  const m = notas.match(/^Pago:\s*(echeq|transferencia)(?:\s+a\s+(\d{1,3})\s+d[ií]as)?/im);
+  const medio = m ? (m[1].toLowerCase() === "echeq" ? "echeq" : "transferencia") : null;
+  const dias = f?.condicion_pago && f.dias_pago != null ? f.dias_pago : m?.[2] != null ? Number(m[2]) : null;
+  const nota = (notas.match(/^Nota para Finanzas:\s*(.+)$/im)?.[1] || "").trim();
+  const pago = medio ? textoPagoCarga(medio, dias) : dias != null ? (dias === 0 ? "Pago: contra entrega" : `Pago: a ${dias} días`) : "";
+  return { medio, dias, nota, texto: [pago, nota && `Nota: ${nota}`].filter(Boolean).join(" · ") };
+}
