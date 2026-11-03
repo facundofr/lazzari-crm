@@ -50,6 +50,8 @@ interface RetencionLinea {
   observaciones: string;
   /** Estimada desde Bancos (como el último cobro del cliente): si la IA lee el aviso de pago, la reemplaza (no se suma dos veces). */
   estimada?: boolean;
+  /** De dónde vino la retención cargada desde Bancos: estimada (último cobro del cliente) o del aviso de pago del correo. */
+  origenInicial?: "estimada" | "aviso";
 }
 
 interface Props {
@@ -70,7 +72,7 @@ interface Props {
   /** Desde una línea del banco (02/11/2026): la transferencia viene con el importe y la fecha de la línea; se pueden cambiar. */
   medioInicial?: { monto: number; fecha: string };
   /** Desde una línea del banco (03/11/2026): retenciones estimadas como el último cobro del cliente, sin N° de certificado. Se pueden cambiar. */
-  retencionesIniciales?: { tipo: string; monto: number; observaciones?: string }[];
+  retencionesIniciales?: { tipo: string; monto: number; observaciones?: string; certificado?: string | null; origen?: "estimada" | "aviso" }[];
 }
 
 // ── Helpers ──────────────────────────────────────────────
@@ -136,7 +138,8 @@ export default function CobroMasivoLiquidacion({
   const [opReferencia, setOpReferencia] = useState("");
   const [medios, setMedios] = useState<MedioPago[]>(() => [medioInicial ? { ...newMedio(), monto: toDecimalInput(medioInicial.monto), fecha: medioInicial.fecha } : newMedio()]);
   const [retenciones, setRetenciones] = useState<RetencionLinea[]>(() => (retencionesIniciales || [])
-    .map((r) => ({ ...newRetencion(), tipo: r.tipo, monto: toDecimalInput(r.monto), observaciones: r.observaciones || "", estimada: true })));
+    .map((r) => ({ ...newRetencion(), tipo: r.tipo, monto: toDecimalInput(r.monto), observaciones: r.observaciones || "", certificado: r.certificado || "",
+      estimada: true, origenInicial: r.origen || "estimada" })));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [fullscreen, setFullscreen] = useState(false);
@@ -808,11 +811,17 @@ export default function CobroMasivoLiquidacion({
                 <Plus size={14} /> Agregar
               </button>
             </div>
-            {retenciones.some((r) => r.estimada) && (
+            {retenciones.some((r) => r.estimada && r.origenInicial !== "aviso") && (
               <p className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
                 💡 Retenciones estimadas como el último cobro de este cliente, sin N° de certificado: la factura queda pagada y la retención
                 aparece en Retenciones › Sufridas › Falta certificado y en Cobranzas hasta que cargues el certificado. Si tenés el aviso de pago,
                 arrastralo arriba: sus retenciones reemplazan a las estimadas.
+              </p>
+            )}
+            {retenciones.some((r) => r.estimada && r.origenInicial === "aviso") && (
+              <p className="mb-2 rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-800 dark:bg-sky-950/30 dark:text-sky-200">
+                📧 Retenciones del aviso de pago que llegó por mail (con el N° de certificado si el aviso lo trae). Las que quedan sin N° salen en
+                Retenciones › Sufridas › Falta certificado y en Cobranzas hasta que cargues el certificado.
               </p>
             )}
             {retenciones.length === 0 ? (

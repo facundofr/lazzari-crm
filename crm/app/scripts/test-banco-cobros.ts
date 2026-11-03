@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import {
   baseRetencion, estimarRetenciones, eventosRetencion, facturaMenosRetenciones, facturasConSaldoExacto, modelosRetencion, reglasDeEvento,
-  sugerirFacturas, textoAplicado, type FacturaBanco,
+  sugerirFacturas, textoAplicado, avisosDeMails, sugerirDesdeAvisos, type FacturaBanco,
 } from "../src/lib/banco-cobros";
 import { faltanCertificadosPorCliente, type FilaRetencion } from "../src/lib/finanzas-lazza";
 
@@ -122,6 +122,36 @@ assert.equal(baseRetencion({ tipo: "X", subtotal: 0, total: 500 }), 500);
   assert.equal(r.length, 2);
   assert.deepEqual(r[0], { nombre: "Cargill", cuit: "30-50000000-1", cantidad: 3, total: { ARS: 37368.04, USD: 0 }, impuestos: ["IVA", "Ganancias", "IIBB"], desde: "2026-11-02" });
   assert.equal(r[1].nombre, "Synthon");
+}
+
+// Avisos de pago del correo (03/11/2026): Soychú 26/10 (total 272.250, IIBB 3.937,50 + IVA 23.625, entró 244.687,50).
+{
+  const avisos = avisosDeMails([
+    { id: "m1", fecha_mail: "2026-10-26T10:00:00Z", remitente: "<pagos@soychu.com.ar>", datos: { pago: { direccion: "recibido", cliente_cuit: "30-50500086-9", monto_total: 272250, monto_neto: null,
+      retenciones_total: 27562.5, retenciones: [{ tipo: "iibb", monto: 3937.5, certificado: "0176-00011775" }, { tipo: "iva", monto: 23625 }, { tipo: "otra", monto: 5 }], fecha_pago: "2026-10-26",
+      referencia: "3400022705", facturas: [{ numero: "0008-00000671", importe: 272250 }] } } },
+    { id: "m2", datos: { pago: { direccion: "emitido", monto_total: 100 } } },
+    { id: "m3", datos: { pago: { direccion: "recibido", monto_total: null, monto_neto: null } } },
+  ]);
+  assert.equal(avisos.length, 1);
+  assert.deepEqual(avisos[0].transferencias, [244687.5, 272250]);
+  assert.deepEqual(avisos[0].retenciones, [{ tipo: "retencion_iibb", monto: 3937.5, certificado: "0176-00011775" }, { tipo: "retencion_iva", monto: 23625, certificado: null }]);
+  const clientes = [{ id: "soy", razon_social: "Frigorifico de Aves Soychu Saicfia", cuit: "30505000869" }];
+  const fa = fac({ id: "fa671", clienteId: "soy", numero: "FA 0008-00000671", total: 272250, saldo: 272250 });
+  const s = sugerirDesdeAvisos({ importe: 244687.5, fecha: "2026-10-27" }, avisos, [fa], clientes);
+  assert.equal(s.length, 1);
+  assert.deepEqual(s[0].facturas.map((f) => f.id), ["fa671"], "la factura por el número que nombra el aviso");
+  assert.equal(s[0].transferencia, 244687.5);
+  assert.equal(sugerirDesdeAvisos({ importe: 244690, fecha: "2026-10-27" }, avisos, [fa], clientes).length, 0, "importe distinto");
+  assert.equal(sugerirDesdeAvisos({ importe: 244687.5, fecha: "2026-12-27" }, avisos, [fa], clientes).length, 0, "lejos en fecha");
+  assert.equal(sugerirDesdeAvisos({ importe: 244687.5, fecha: "2026-10-27", cuit: "30111111112" }, avisos, [fa], clientes).length, 0, "la línea trae otro CUIT");
+  assert.equal(sugerirDesdeAvisos({ importe: 244687.5, fecha: "2026-10-27" }, avisos, [fa], []).length, 0, "cliente que no está");
+  // Sin número en el aviso: la única factura con saldo = entró + retenciones; con 1 centavo de diferencia, va a la retención más grande.
+  const sinNum = [{ ...avisos[0], facturasNumeros: [] }];
+  const fb = fac({ id: "otra", clienteId: "soy", numero: "FA 0008-00000700", total: 272250.01, saldo: 272250.01 });
+  const s2 = sugerirDesdeAvisos({ importe: 244687.5, fecha: "2026-10-27" }, sinNum, [fb], clientes);
+  assert.deepEqual(s2[0].facturas.map((f) => f.id), ["otra"]);
+  assert.equal(s2[0].retenciones.find((r) => r.tipo === "retencion_iva")!.monto, 23625.01);
 }
 
 console.log("test-banco-cobros OK");

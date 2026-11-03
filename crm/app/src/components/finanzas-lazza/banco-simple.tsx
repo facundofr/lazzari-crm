@@ -15,7 +15,7 @@
  * - «No pasó por el banco»: lo cargado en el CRM que no está en el extracto; «No pasa por el BBVA» lo saca (Banco Nación, Gubia…).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, Circle, Landmark, Lightbulb, Loader2, Search, Undo2 } from "lucide-react";
+import { CheckCircle2, Circle, Landmark, Lightbulb, Loader2, Mail, Search, Sparkles, Undo2 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
 import { useToast } from "@/components/ui/toast";
@@ -28,9 +28,11 @@ import { nombreCodigoBanco } from "@/lib/nombres-estados";
 import { cbusDeFichas, cuitDeLinea, motorBanco, type DecisionBanco, type MovMotor } from "@/lib/banco-motor";
 import { candidatosManual, marcasRevision, separarDecisiones } from "@/lib/banco-revision";
 import {
-  eventosRetencion, modelosRetencion, NOMBRE_RETENCION, sugerirFacturas, textoAplicado, TIPOS_RETENCION,
-  type FacturaBanco, type ReglaRetencion, type RetencionEstimada, type SugerenciaFactura,
+  avisosDeMails, eventosRetencion, modelosRetencion, NOMBRE_RETENCION, sugerirDesdeAvisos, sugerirFacturas, textoAplicado, TIPOS_RETENCION,
+  type AvisoPago, type FacturaBanco, type ReglaRetencion, type SugerenciaAviso, type SugerenciaFactura,
 } from "@/lib/banco-cobros";
+import type { ContextoQueEs, RespuestaQueEs } from "@/lib/banco-que-es";
+import type { OpParsed } from "@/lib/orden-pago-plan";
 import { cobradoPorFactura, saldoFacturaVenta, traerDatosSaldoClientes } from "@/lib/saldo-clientes";
 import { comprobanteVenta } from "@/lib/finanzas-lazza";
 import { detalleDebitoAutomatico, pestanaDeLinea, PESTANAS_BANCO, resumenImpuestos, resumenPestanas, type LineaMov, type PestanaBanco } from "@/lib/movimientos-banco";
@@ -62,6 +64,8 @@ interface Fila {
   pestana: PestanaBanco; revisada: boolean; sugerencia: { decision: DecisionBanco; texto: string } | null;
   /** Transferencia que entró sin cobro cargado: facturas que pueden ser (saldo exacto, o menos las retenciones de siempre). */
   facturas: SugerenciaFactura[];
+  /** Avisos de pago del correo que explican la transferencia (antes que las facturas: traen las retenciones exactas). */
+  avisos: SugerenciaAviso[];
 }
 interface NoPaso { id: string; fecha: string; importe: number; texto: string }
 type Vista = "revisar" | "cruzada" | "del_banco" | "revisadas" | "todas" | "no_paso";
@@ -69,7 +73,11 @@ type Tercero = { id: string; razon_social: string; cuit: string | null; cbu?: st
 /** Facturas de venta con saldo, número de cada factura, facturas de cada cobro y cómo retiene cada cliente (lib/banco-cobros). */
 interface DatosFacturas {
   pendientes: FacturaBanco[]; numero: Map<string, string>; facturasDeMov: Map<string, string[]>; modelos: Map<string, ReglaRetencion[]>;
+  /** Avisos de pago que leyó el agente de correo en los últimos 75 días. */
+  avisos: AvisoPago[];
 }
+/** Retenciones con las que abre la ventana de cobro desde Bancos. */
+type RetencionInicial = { tipo: string; monto: number; observaciones: string; certificado?: string | null; origen: "estimada" | "aviso" };
 interface Datos {
   cuentas: CuentaCruce[]; ls: Linea[]; movs: Mov[]; chs: (ChequeCruce & { destino_nombre?: string | null })[]; cli: Tercero[]; prov: Tercero[];
   ops: { id: string; numero: string | null; medios_pago: unknown }[]; gas: { id: string; descripcion: string | null }[];
@@ -83,12 +91,16 @@ interface Datos {
  * cada cobro y las retenciones sufridas de cada cliente (para estimar las del próximo cobro).
  */
 async function leerFacturas(sociedadId: string, cli: Tercero[]): Promise<DatosFacturas> {
-  const [cc, filas, rets] = await Promise.all([
+  const [cc, filas, rets, mails] = await Promise.all([
     traerDatosSaldoClientes(db, sociedadId, traerTodo),
     traerTodo<any>(() => db.from("facturas").select("id, cliente_id, tipo, punto_venta, numero, fecha, subtotal, total, moneda, estado")
       .eq("sociedad_id", sociedadId).neq("estado", "anulada").order("id")),
     traerTodo<any>(() => db.from("movimientos").select("id, tipo, fecha, monto, cliente_id, factura_id, anulado")
       .eq("sociedad_id", sociedadId).in("tipo", TIPOS_RETENCION).not("cliente_id", "is", null).order("id")),
+    // Avisos de pago del correo (si no se pueden leer, sin avisos).
+    db.from("agente_mail_procesados").select("id, fecha_mail, remitente, datos").eq("categoria", "pago_retencion")
+      .gte("fecha_mail", sumarDias(todayAR(), -75)).order("fecha_mail", { ascending: false }).limit(500)
+      .then(({ data }: { data: any[] | null }) => data || [], () => [] as any[]),
   ]);
   const cobrado = cobradoPorFactura(cc.facturas, cc.movimientos, cc.aplicaciones);
   const ccPorId = new Map(cc.facturas.map((f) => [f.id, f]));
@@ -112,7 +124,7 @@ async function leerFacturas(sociedadId: string, cli: Tercero[]): Promise<DatosFa
   for (const a of cc.aplicaciones) sumar(a.movimiento_id, a.factura_id);
   for (const m of cc.movimientos) sumar(m.id, m.factura_id);
   const eventos = eventosRetencion({ retenciones: rets, aplicaciones: cc.aplicaciones, facturas: new Map(filas.map((f) => [f.id, f])) });
-  return { pendientes, numero, facturasDeMov, modelos: modelosRetencion(eventos) };
+  return { pendientes, numero, facturasDeMov, modelos: modelosRetencion(eventos), avisos: avisosDeMails(mails) };
 }
 
 /** Lo que el motor necesita: pendientes, movimientos sin cruzar, cheques usados y lo que una persona desató. */
@@ -176,9 +188,14 @@ export function BancoSimple({ sociedadId }: { sociedadId: string }) {
   const [elegir, setElegir] = useState<{ id: string; ids: Set<string>; buscar: string } | null>(null);
   const [cargarDesde, setCargarDesde] = useState<{
     linea: Linea; tipo: "cobro" | "pago"; sugerido: { id: string; nombre: string } | null;
-    /** «Cobrar» de una factura sugerida: la ventana de cobro abre con esa factura, la transferencia y las retenciones estimadas. */
-    factura?: { clienteId: string; nombre: string; facturaId: string; retenciones: RetencionEstimada[] };
+    /** «Cobrar» de una sugerencia: la ventana de cobro abre con ese cliente, esas facturas (si hay), la transferencia y las retenciones. */
+    factura?: { clienteId: string; nombre: string; facturaIds: string[]; retenciones: RetencionInicial[] };
+    /** Comprobante arrastrado sobre la línea, ya leído por la IA (cobra las facturas que nombra). */
+    ordenPago?: OpParsed;
   } | null>(null);
+  // «¿Qué es?» (IA) de cada línea y la línea sobre la que se arrastra un comprobante.
+  const [queEs, setQueEs] = useState<Record<string, RespuestaQueEs | { error: string } | "cargando">>({});
+  const [soltando, setSoltando] = useState<string | null>(null);
   const [noPasaNota, setNoPasaNota] = useState<{ id: string; nota: string } | null>(null);
   const [verMarcados, setVerMarcados] = useState(false);
   const motivos = useRef(new Map<string, string>());
@@ -247,12 +264,18 @@ export function BancoSimple({ sociedadId }: { sociedadId: string }) {
       let estado: Estado, conQue: string;
       let sugerencia: Fila["sugerencia"] = null;
       let facturas: SugerenciaFactura[] = [];
+      let avisos: SugerenciaAviso[] = [];
       if (l.estado === "pendiente") {
         estado = "sin_cruzar";
         const s = sugerencias.current.get(l.id);
         if (s) sugerencia = { decision: s, texto: s.movimientos.map((id) => movPorId.get(id)).filter(Boolean).map((m) => `${textoMov(m!)} (${formatCurrency(Number(m!.monto))}, ${formatDate(m!.fecha)})${aplicado(m!)}`).join(" + ") };
         // Entró plata y no hay cobro cargado que coincida: la factura con ese saldo, o la que da con las retenciones de siempre del cliente.
-        else if (importe > 0 && d.fac) facturas = sugerirFacturas({ importe, cuit: cuitDeLinea(l.descripcion || "", cbus) }, d.fac.pendientes, d.fac.modelos);
+        // Primero el aviso de pago del correo (retenciones exactas, con su N°); si no hay, la factura.
+        else if (importe > 0 && d.fac) {
+          const cuit = cuitDeLinea(l.descripcion || "", cbus);
+          avisos = sugerirDesdeAvisos({ importe, fecha: l.fecha, cuit }, d.fac.avisos, d.fac.pendientes, d.cli);
+          if (!avisos.length) facturas = sugerirFacturas({ importe, cuit }, d.fac.pendientes, d.fac.modelos);
+        }
         conQue = motivos.current.get(l.id) || (l.tipo === "credito" ? "No está el cobro en el CRM" : "No está el pago en el CRM");
       } else if (movs.length || ch) {
         estado = "cruzada";
@@ -264,7 +287,7 @@ export function BancoSimple({ sociedadId }: { sociedadId: string }) {
       const mov: LineaMov = { ...l, descripcion: l.descripcion || "", monto: Number(l.monto) };
       return {
         linea: l, importe, estado, detalle: sinCodigoBanco(l.descripcion), conQue, porMotor: l.estado !== "pendiente" && ultimo.get(l.id) === "cruce_solo",
-        pestana: pestanaDeLinea(mov), revisada: estado === "sin_cruzar" && revisadas.has(l.id), sugerencia, facturas,
+        pestana: pestanaDeLinea(mov), revisada: estado === "sin_cruzar" && revisadas.has(l.id), sugerencia, facturas, avisos,
       };
     }).reverse();
     setFilas(lista);
@@ -466,7 +489,102 @@ export function BancoSimple({ sociedadId }: { sociedadId: string }) {
   /** «Cobrar» una factura sugerida: la misma ventana de cobro de siempre, directo con la factura tildada; se revisa y se guarda ahí. */
   function abrirCobrarFactura(f: Fila, s: SugerenciaFactura) {
     setCargarDesde({ linea: f.linea, tipo: "cobro", sugerido: null,
-      factura: { clienteId: s.factura.clienteId, nombre: s.factura.cliente, facturaId: s.factura.id, retenciones: s.retenciones } });
+      factura: { clienteId: s.factura.clienteId, nombre: s.factura.cliente, facturaIds: [s.factura.id],
+        retenciones: s.retenciones.map((r) => ({ tipo: r.tipo, monto: r.monto, observaciones: "Estimada desde Bancos (como el último cobro del cliente)", origen: "estimada" })) } });
+  }
+
+  /** «Cobrar» de un aviso de pago del correo: las facturas que paga (si están) y sus retenciones con el N° de certificado. */
+  function abrirCobrarAviso(f: Fila, s: SugerenciaAviso) {
+    const fecha = s.aviso.fecha ? formatDate(s.aviso.fecha) : "";
+    setCargarDesde({ linea: f.linea, tipo: "cobro", sugerido: null,
+      factura: { clienteId: s.clienteId, nombre: s.cliente, facturaIds: s.facturas.map((x) => x.id),
+        retenciones: s.retenciones.map((r) => ({ tipo: r.tipo, monto: r.monto, certificado: r.certificado, observaciones: `Del aviso de pago del ${fecha}${s.aviso.referencia ? ` (${s.aviso.referencia})` : ""}`, origen: "aviso" })) } });
+  }
+
+  /**
+   * Comprobante arrastrado sobre una línea que entró (aviso de pago, OP o transferencia del cliente): la IA lo lee (la misma
+   * lectura de la ventana de cobro) y abre el cobro con ese cliente y las facturas que nombra. Nada se guarda sin confirmar.
+   */
+  async function soltarComprobante(f: Fila, files: FileList | null) {
+    setSoltando(null);
+    const lista = Array.from(files || []).filter((x) => /pdf|image\//i.test(x.type) || /\.pdf$/i.test(x.name));
+    if (!lista.length) { toast.warning("Arrastrá un PDF o una foto del comprobante."); return; }
+    setOcupado(f.linea.id);
+    try {
+      const form = new FormData();
+      lista.forEach((x) => form.append("file", x));
+      form.append("contexto", "orden_pago_cliente");
+      const res = await fetch("/api/parse-cobro", { method: "POST", body: form });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) throw new Error(json?.error || "No se pudo leer el comprobante");
+      const parsed = (json.data || {}) as OpParsed;
+      const cuit = String(parsed.pagador?.cuit || "").replace(/\D/g, "");
+      const cs = cuit ? (datos.current?.cli || []).filter((c) => String(c.cuit || "").replace(/\D/g, "") === cuit) : [];
+      if (cs.length === 1) {
+        setCargarDesde({ linea: f.linea, tipo: "cobro", sugerido: null, ordenPago: parsed, factura: { clienteId: cs[0].id, nombre: cs[0].razon_social, facturaIds: [], retenciones: [] } });
+      } else {
+        if (!cs.length) toast.info(parsed.pagador?.razon_social ? `El comprobante es de ${parsed.pagador.razon_social}: elegí el cliente.` : "No encontré el cliente del comprobante: elegilo.");
+        setCargarDesde({ linea: f.linea, tipo: "cobro", sugerido: null, ordenPago: parsed });
+      }
+    } catch (e) {
+      toast.error(errorTexto(e));
+    } finally {
+      setOcupado(null);
+    }
+  }
+
+  /** «¿Qué es?»: la IA mira la línea, lo cargado sin línea, las facturas con saldo y los avisos del correo (lib/banco-que-es). Solo sugiere. */
+  async function preguntarQueEs(f: Fila) {
+    const d = datos.current;
+    if (!d) return;
+    setQueEs((q) => ({ ...q, [f.linea.id]: "cargando" }));
+    try {
+      const texto = textoDeMovimiento(d);
+      const cbus = cbusDeFichas([...d.prov, ...d.cli]);
+      const cuit = cuitDeLinea(f.linea.descripcion || "", cbus);
+      const tercero = cuit ? [...d.cli, ...d.prov].find((t) => String(t.cuit || "").replace(/\D/g, "") === cuit) : null;
+      const movimientos = candidatosManual({ fecha: f.linea.fecha, importe: f.importe }, entradaMotor(d).movimientos, 45).slice(0, 40)
+        .map((m) => ({ id: m.id, fecha: String(m.fecha), importe: (clasificarMovimiento(m) === "ingreso" ? 1 : -1) * Number(m.monto), texto: texto(m as unknown as Mov) }));
+      const facturas = f.importe > 0 && d.fac ? [...d.fac.pendientes].filter((x) => x.moneda === "ARS")
+        .sort((a, b) => Math.abs(a.saldo - f.importe) - Math.abs(b.saldo - f.importe)).slice(0, 40)
+        .map((x) => ({ id: x.id, numero: x.numero, cliente: x.cliente, fecha: x.fecha, saldo: x.saldo })) : [];
+      const avisos = f.importe > 0 && d.fac ? d.fac.avisos.slice(0, 20).map((a) => ({ cliente: a.clienteNombre || a.clienteCuit || "", fecha: a.fecha, transferencias: a.transferencias,
+        retenciones: a.retenciones.reduce((s, r) => s + r.monto, 0), facturas: a.facturasNumeros })) : [];
+      const contexto: ContextoQueEs = {
+        empresa: "Lazzari", linea: { id: f.linea.id, fecha: f.linea.fecha.slice(0, 10), concepto: f.linea.descripcion || "", importe: f.importe, cuenta: cuentas.get(f.linea.cuenta_id) || "" },
+        movimientos, facturas, avisos, terceros: tercero ? [`${tercero.cuit} = ${tercero.razon_social}`] : [],
+      };
+      const res = await fetch("/api/finanzas/banco-que-es", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ contexto }) });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json || json.error) throw new Error(json?.error || "La IA no respondió");
+      setQueEs((q) => ({ ...q, [f.linea.id]: json as RespuestaQueEs }));
+    } catch (e) {
+      setQueEs((q) => ({ ...q, [f.linea.id]: { error: errorTexto(e) } }));
+    }
+  }
+
+  /** «Asociar» lo que propuso la IA (la persona lo confirma con el clic; avisa si no suma igual, no frena). */
+  async function asociarQueEs(f: Fila, r: RespuestaQueEs) {
+    setOcupado(f.linea.id);
+    try {
+      const n = await aplicar([{ linea_id: f.linea.id, estado: "cruzada", clasificacion: f.importe > 0 ? "cobro" : "pago", subtipo: null, movimientos: r.movimientos,
+        cheque_id: null, contra_cuenta_id: null, motivo: `Sugerido por la IA (¿Qué es?) y confirmado por ${profile?.full_name || "una persona"}` }]);
+      toast[n ? "success" : "info"](n ? "Asociada." : "No se pudo: la línea o el movimiento ya los cambió alguien.");
+      setQueEs((q) => { const x = { ...q }; delete x[f.linea.id]; return x; });
+      await procesar();
+    } catch (e) {
+      toast.error(errorTexto(e));
+    } finally {
+      setOcupado(null);
+    }
+  }
+
+  /** «Cobrar» las facturas que propuso la IA (las del primer cliente). */
+  function cobrarQueEs(f: Fila, r: RespuestaQueEs) {
+    const fs = (datos.current?.fac?.pendientes || []).filter((x) => r.facturas.includes(x.id));
+    if (!fs.length) return;
+    const delCliente = fs.filter((x) => x.clienteId === fs[0].clienteId);
+    setCargarDesde({ linea: f.linea, tipo: "cobro", sugerido: null, factura: { clienteId: fs[0].clienteId, nombre: fs[0].cliente, facturaIds: delCliente.map((x) => x.id), retenciones: [] } });
   }
 
   function abrirCargar(f: Fila) {
@@ -526,7 +644,7 @@ export function BancoSimple({ sociedadId }: { sociedadId: string }) {
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
         {procesando ? <span className="flex items-center gap-1.5"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Revisando las líneas del banco…</span>
-          : <span>Lo del banco (impuestos, comisiones, pases, cheques) queda solo. Los cobros y pagos que encuentro los sugiero: los asociás con un clic o los dejás. Nada queda pendiente.</span>}
+          : <span>Lo del banco (impuestos, comisiones, pases, cheques) queda solo. Los cobros y pagos que encuentro los sugiero: los asociás con un clic o los dejás. Nada queda pendiente. Podés arrastrar el aviso de pago de un cliente sobre la línea que entró.</span>}
         {ultimaCarga && !procesando && (
           <button disabled={ocupado !== null} onClick={() => { if (window.confirm(`¿Deshacer lo que hizo el banco el ${new Date(ultimaCarga.cuando).toLocaleString("es-AR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })} (${ultimaCarga.n} línea${ultimaCarga.n > 1 ? "s" : ""})? No lo vuelve a hacer.`)) void desatar(null, ultimaCarga.carga); }}
             className="flex items-center gap-1 text-zinc-600 underline-offset-2 hover:underline disabled:opacity-50 dark:text-zinc-300">
@@ -654,7 +772,11 @@ export function BancoSimple({ sociedadId }: { sociedadId: string }) {
                 const codigo = nombreCodigoBanco(codigoDeConcepto(f.linea.descripcion));
                 const sin = f.estado === "sin_cruzar";
                 return [
-                  <tr key={f.linea.id} className={`align-top ${tildados.has(f.linea.id) ? "bg-orange-50/60 dark:bg-orange-950/20" : ""}`}>
+                  <tr key={f.linea.id} className={`align-top ${soltando === f.linea.id ? "bg-sky-50 outline outline-2 outline-sky-400 dark:bg-sky-950/30" : tildados.has(f.linea.id) ? "bg-orange-50/60 dark:bg-orange-950/20" : ""}`}
+                    // Arrastrar el aviso de pago u OP del cliente sobre una línea que entró: la IA lo lee y abre el cobro (03/11/2026).
+                    onDragOver={sin && f.importe > 0 ? (e) => { e.preventDefault(); if (soltando !== f.linea.id) setSoltando(f.linea.id); } : undefined}
+                    onDragLeave={sin && f.importe > 0 ? () => setSoltando(null) : undefined}
+                    onDrop={sin && f.importe > 0 ? (e) => { e.preventDefault(); if (ocupado === null) void soltarComprobante(f, e.dataTransfer.files); else setSoltando(null); } : undefined}>
                     <td className="px-3 py-1.5">{sin && <input type="checkbox" aria-label="Tildar" className="h-4 w-4 accent-orange-500" checked={tildados.has(f.linea.id)} onChange={(e) => tildar(f.linea.id, e.target.checked)} />}</td>
                     <td className="whitespace-nowrap px-2 py-1.5 text-zinc-500">{formatDate(f.linea.fecha)}</td>
                     <td className="whitespace-nowrap px-2 py-1.5 text-xs text-zinc-500">{(cuentas.get(f.linea.cuenta_id) || "").replace(/^BBVA /, "")}</td>
@@ -684,6 +806,25 @@ export function BancoSimple({ sociedadId }: { sociedadId: string }) {
                               <button disabled={ocupado !== null} onClick={() => void asociar([f.linea.id])} className="rounded-md bg-emerald-600 px-2 py-0.5 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">{ocupado === f.linea.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Asociar"}</button>
                               <button disabled={ocupado !== null} onClick={() => void noEs(f)} className={boton}>No es</button>
                             </span>
+                          </span>
+                        </span>
+                      ) : sin && f.avisos.length > 0 ? (
+                        <span className="flex items-start gap-1.5 text-sky-800 dark:text-sky-200">
+                          <Mail className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                          <span>
+                            {f.avisos.map((s) => {
+                              const ret = s.retenciones.reduce((t, r) => t + r.monto, 0);
+                              return (
+                                <span key={s.aviso.id} className="block">
+                                  Aviso de pago de {s.cliente} del {formatDate(s.aviso.fecha)}{s.aviso.referencia ? ` (${s.aviso.referencia})` : ""}:{" "}
+                                  {s.facturas.length ? s.facturas.map((x) => x.numero).join(", ") : "no encontré la factura en el CRM (la elegís al cobrar)"}
+                                  {ret > 0 && <> · retenciones {formatCurrency(ret)}: {s.retenciones.map((r) => `${NOMBRE_RETENCION[r.tipo]}${r.certificado ? ` N° ${r.certificado}` : ""}`).join(", ")}</>}
+                                  <button disabled={ocupado !== null} onClick={() => abrirCobrarAviso(f, s)} title="Abre la ventana de cobro con lo del aviso y lo que entró al banco: revisás y guardás ahí"
+                                    className="ml-2 whitespace-nowrap rounded-md bg-emerald-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50">Cobrar</button>
+                                </span>
+                              );
+                            })}
+                            <span className="block text-xs text-zinc-500">Lo leyó el agente de correo. No está el cobro en el CRM.</span>
                           </span>
                         </span>
                       ) : sin && f.facturas.length > 0 ? (
@@ -722,12 +863,48 @@ export function BancoSimple({ sociedadId }: { sociedadId: string }) {
                         {sin && otraCosa?.id !== f.linea.id && (<>
                           <button disabled={ocupado !== null} onClick={() => setElegir(elegir?.id === f.linea.id ? null : { id: f.linea.id, ids: new Set(), buscar: "" })} className={boton}>Elegir…</button>
                           <button disabled={ocupado !== null} onClick={() => abrirCargar(f)} className={boton}>{f.importe > 0 ? "Cargar cobro" : "Cargar pago"}</button>
+                          <button disabled={ocupado !== null || queEs[f.linea.id] === "cargando"} onClick={() => void preguntarQueEs(f)} title="La IA mira la línea, lo cargado, las facturas y los avisos del correo y te dice qué parece. Solo sugiere."
+                            className="inline-flex items-center gap-0.5 text-violet-700 hover:underline disabled:opacity-50 dark:text-violet-300">
+                            {queEs[f.linea.id] === "cargando" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />} ¿Qué es?
+                          </button>
                           <button disabled={ocupado !== null} onClick={() => setOtraCosa({ id: f.linea.id, que: "otro", nota: "" })} className={boton}>Es otra cosa…</button>
                           <button disabled={ocupado !== null} onClick={() => void marcarRevisada([f.linea.id], !f.revisada)} className={boton}>{f.revisada ? "Volver a revisar" : "Revisada"}</button>
                         </>)}
                       </span>
                     </td>
                   </tr>,
+                  sin && queEs[f.linea.id] && queEs[f.linea.id] !== "cargando" && (() => {
+                    const q = queEs[f.linea.id] as RespuestaQueEs | { error: string };
+                    const cerrar = () => setQueEs((x) => { const y = { ...x }; delete y[f.linea.id]; return y; });
+                    if ("error" in q) return (
+                      <tr key={`${f.linea.id}-quees`} className="bg-violet-50/60 dark:bg-violet-950/20"><td /><td colSpan={6} className="px-2 py-1.5 text-xs text-amber-700 dark:text-amber-300">
+                        ⚠ {q.error} <button onClick={cerrar} className="ml-2 text-zinc-500 hover:underline">Cerrar</button></td></tr>
+                    );
+                    const movs = (datos.current?.movs || []).filter((m) => q.movimientos.includes(m.id));
+                    const sumaMovs = movs.reduce((s, m) => s + Number(m.monto), 0);
+                    const facs = (datos.current?.fac?.pendientes || []).filter((x) => q.facturas.includes(x.id));
+                    return (
+                      <tr key={`${f.linea.id}-quees`} className="bg-violet-50/60 dark:bg-violet-950/20">
+                        <td />
+                        <td colSpan={6} className="px-2 py-1.5 text-xs">
+                          <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-violet-900 dark:text-violet-100">
+                            <Sparkles className="h-3.5 w-3.5 shrink-0" />
+                            <span><b>La IA dice</b> ({q.confianza === "alta" ? "bastante segura" : q.confianza === "media" ? "medio segura" : "poco segura"}): {q.explicacion}</span>
+                            {movs.length > 0 && (
+                              <button disabled={ocupado !== null} onClick={() => void asociarQueEs(f, q)}
+                                title={Math.abs(sumaMovs - Math.abs(f.importe)) < 0.005 ? "Suman igual a la línea" : `Suman ${formatCurrency(sumaMovs)}: diferencia ${formatCurrency(sumaMovs - Math.abs(f.importe))}`}
+                                className="rounded-md bg-emerald-600 px-2 py-0.5 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">Asociar {movs.length === 1 ? "ese movimiento" : `esos ${movs.length}`}</button>
+                            )}
+                            {facs.length > 0 && f.importe > 0 && (
+                              <button disabled={ocupado !== null} onClick={() => cobrarQueEs(f, q)} title={`Abre la ventana de cobro con ${facs.map((x) => x.numero).join(", ")}`}
+                                className="rounded-md bg-emerald-600 px-2 py-0.5 font-medium text-white hover:bg-emerald-700 disabled:opacity-50">Cobrar {facs.length === 1 ? facs[0].numero : `${facs.length} facturas`}</button>
+                            )}
+                            <button onClick={cerrar} className="text-zinc-500 hover:underline">Cerrar</button>
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })(),
                   elegir?.id === f.linea.id && (
                     <tr key={`${f.linea.id}-elegir`} className="bg-zinc-50 dark:bg-zinc-800/40">
                       <td />
@@ -771,12 +948,12 @@ export function BancoSimple({ sociedadId }: { sociedadId: string }) {
 
       {cargarDesde?.tipo === "cobro" && lineaCargar && cargarDesde.factura && (
         <CobrarCliente sociedadId={sociedadId} clienteId={cargarDesde.factura.clienteId} clienteNombre={cargarDesde.factura.nombre}
-          preseleccion={[cargarDesde.factura.facturaId]} directo medioInicial={lineaCargar}
-          retencionesIniciales={cargarDesde.factura.retenciones.map((r) => ({ tipo: r.tipo, monto: r.monto, observaciones: "Estimada desde Bancos (como el último cobro del cliente)" }))}
+          preseleccion={cargarDesde.factura.facturaIds} directo={cargarDesde.factura.facturaIds.length > 0} medioInicial={lineaCargar}
+          retencionesIniciales={cargarDesde.factura.retenciones} ordenPagoInicial={cargarDesde.ordenPago}
           onClose={() => setCargarDesde(null)} onCobrado={() => { const id = cargarDesde.linea.id; setCargarDesde(null); void procesar(id); }} />
       )}
       {cargarDesde?.tipo === "cobro" && lineaCargar && !cargarDesde.factura && (
-        <CobrarCliente sociedadId={sociedadId} medioInicial={lineaCargar} sugerido={cargarDesde.sugerido}
+        <CobrarCliente sociedadId={sociedadId} medioInicial={lineaCargar} sugerido={cargarDesde.sugerido} ordenPagoInicial={cargarDesde.ordenPago}
           onClose={() => setCargarDesde(null)} onCobrado={() => { const id = cargarDesde.linea.id; setCargarDesde(null); void procesar(id); }} />
       )}
       {cargarDesde?.tipo === "pago" && lineaCargar && (

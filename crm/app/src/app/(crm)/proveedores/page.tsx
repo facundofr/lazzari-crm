@@ -32,6 +32,7 @@ import { EliminarConMotivoModal } from "@/components/eliminar-con-motivo";
 import { ListaCostosTab } from "@/components/lista-costos/lista-costos-tab";
 import { ReglasProveedorFicha } from "@/components/lista-costos/reglas-proveedor-ficha";
 import { CAMPOS_CONTACTO, CAMPOS_FICHA_PROVEEDOR, coincideFicha, datosDeFicha } from "@/lib/buscar-texto";
+import { CbuDelCorreo } from "@/components/cbu-del-correo";
 
 function ClasificacionTag({ tag }: { tag: string }) {
   const color = TAG_COLORS[tag] ?? "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300";
@@ -751,6 +752,8 @@ export default function ProveedoresPage() {
         {/* -- TAB: Proveedores -- */}
         {tab === "proveedores" && (
           <>
+            {/* CBU que llegaron por mail (03/11/2026): solo los seguros, se guardan de a uno con OK */}
+            {sociedadActiva?.id && <CbuDelCorreo tipo="proveedor" sociedadId={sociedadActiva.id} onGuardado={() => void fetchData()} />}
             {/* Búsqueda, filtros rápidos y exportar en una sola línea */}
             <div className="flex flex-wrap items-center gap-2">
               <div className="relative min-w-[220px] flex-1 max-w-md">

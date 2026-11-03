@@ -13,7 +13,24 @@ const CLAVE = "agente_mail_activo";
 export function AgenteMailInterruptor() {
   const [activo, setActivo] = useState<boolean | null>(null);
   const [guardando, setGuardando] = useState(false);
+  // «Revisar ahora» (03/11/2026): la misma lectura que hace solo 3 veces por día hábil; lee lo que falta (con el tope diario de gasto).
+  const [revisando, setRevisando] = useState(false);
+  const [resultado, setResultado] = useState<string | null>(null);
   const db = supabase as any;
+
+  async function revisarAhora() {
+    setRevisando(true);
+    setResultado(null);
+    try {
+      const r = await fetch("/api/agente-mail/ejecutar", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const j = await r.json().catch(() => null);
+      setResultado(j?.resumen || j?.error || (r.ok ? "Listo." : "No se pudo revisar el correo."));
+    } catch {
+      setResultado("No se pudo conectar. Probá de nuevo.");
+    } finally {
+      setRevisando(false);
+    }
+  }
 
   useEffect(() => {
     db.from("configuracion").select("value").eq("key", CLAVE).is("sociedad_id", null).maybeSingle()
@@ -51,6 +68,13 @@ export function AgenteMailInterruptor() {
           className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs font-medium hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800">
           {guardando && <Loader2 className="h-3.5 w-3.5 animate-spin" />} {activo ? "Apagar" : "Prender"}
         </button>
+        {activo && (
+          <button type="button" disabled={revisando} onClick={() => void revisarAhora()} title="Lee ahora los mails que todavía no leyó (si son muchos, sigue en la próxima vuelta)"
+            className="ml-2 mt-1.5 inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs font-medium hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800">
+            {revisando && <Loader2 className="h-3.5 w-3.5 animate-spin" />} {revisando ? "Leyendo el correo…" : "Revisar ahora"}
+          </button>
+        )}
+        {resultado && <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">{resultado}</p>}
       </div>
     </Card>
   );

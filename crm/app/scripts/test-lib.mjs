@@ -27,7 +27,7 @@ const PRUEBAS = [
   "test-fci-custodia.mjs", "test-fecha-cobro.mjs", "test-finanzas-destino.ts", "test-finanzas-grupos.mjs",
   "test-finanzas-lazza.ts", "test-finanzas-notas.ts", "test-finanzas-propuestas.ts", "test-gasto-fijo-factura.ts",
   "test-gastos-lazza.ts", "test-ia-acciones.ts", "test-lista-costos.ts", "test-mayusculas.ts",
-  "test-movimientos-banco.ts", "test-banco-revision.ts", "test-banco-cobros.ts", "test-buscar-ficha.ts", "test-casos-de-oro.ts", "test-cheques-a-cubrir.ts", "test-movimientos-bbva.ts", "test-nc-sugerencia.ts", "test-nombres-estados.ts", "test-nombres-telefonos.ts", "test-numero-ar.ts",
+  "test-movimientos-banco.ts", "test-banco-revision.ts", "test-banco-cobros.ts", "test-buscar-ficha.ts", "test-cbu.ts", "test-banco-que-es.ts", "test-casos-de-oro.ts", "test-cheques-a-cubrir.ts", "test-movimientos-bbva.ts", "test-nc-sugerencia.ts", "test-nombres-estados.ts", "test-nombres-telefonos.ts", "test-numero-ar.ts",
   "test-observaciones-cliente.ts", "test-oc-diferencia.mjs", "test-oc-lista.ts", "test-oc-reclamos.mjs",
   "test-oc-sin-proveedor.ts", "test-op-parcial.ts", "test-op-usd-pesos.ts", "test-pago-tarjeta.ts", "test-premios-lazza.ts", "test-jose-alvarez.ts",
   "test-pdf-descuento.ts", "test-pendientes.ts", "test-precio-factura.ts", "test-precios-ia.ts", "test-presupuesto-ayudas.ts",

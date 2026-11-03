@@ -32,6 +32,7 @@ import { ALICUOTA_POR_CONCEPTO, CONCEPTOS_RG830 } from "@/lib/retencion-concepto
 import { desdeSinConcepto, sugerirConcepto, type SugerenciaConcepto } from "@/lib/sugerir-concepto";
 import { coincideNumeroCheque } from "@/lib/cheques-lazza";
 import { CargarCertificado, CeldaCertificado } from "@/components/finanzas-lazza/cargar-certificado";
+import { certificadosDeCorreo, type CertificadoDelCorreo } from "@/lib/certificado-sufrido";
 import { traerCertificadosCargados } from "@/components/finanzas-lazza/datos";
 
 const db = supabase as any;
@@ -803,6 +804,15 @@ export function FinanzasLazzaRetenciones({ sociedadId }: { sociedadId: string })
     return armarRetenciones({ ops, movimientos: movs, recibos, certificados });
   }, [sociedadId, recarga]);
   const recargar = () => setRecarga((n) => n + 1);
+  // Certificados que leyó el agente de correo en los avisos de pago (03/11/2026): «Del correo» en Cargar certificado. Si falla, no aparece.
+  const [delCorreo, setDelCorreo] = useState<CertificadoDelCorreo[]>([]);
+  useEffect(() => {
+    let vivo = true;
+    db.from("agente_mail_procesados").select("id, fecha_mail, remitente, datos").eq("categoria", "pago_retencion").gte("fecha_mail", "2026-09-01")
+      .order("fecha_mail", { ascending: false }).limit(1000)
+      .then(({ data }: { data: any[] | null }) => { if (vivo) setDelCorreo(certificadosDeCorreo(data || [])); }, () => {});
+    return () => { vivo = false; };
+  }, [sociedadId, recarga]);
   // Para «Cargar certificado»: todas las sufridas (sin el filtro de fechas) y de qué sociedad es cada CUIT.
   const todasSufridas = useMemo(() => (datos || []).filter((r) => r.lado === "sufrida"), [datos]);
   const sociedadCert = useMemo(() => ({ cuit: sociedadActiva?.cuit || "", otras: sociedades.filter((s) => s.id !== sociedadId).map((s) => ({ nombre: s.nombre, cuit: s.cuit })) }), [sociedadActiva, sociedades, sociedadId]);
@@ -866,7 +876,7 @@ export function FinanzasLazzaRetenciones({ sociedadId }: { sociedadId: string })
           Falta certificado ({faltan.length})
         </button>
       )}
-      {sufridas && <CargarCertificado sociedadId={sociedadId} sufridas={todasSufridas} sociedad={sociedadCert} onGuardado={recargar} />}
+      {sufridas && <CargarCertificado sociedadId={sociedadId} sufridas={todasSufridas} sociedad={sociedadCert} onGuardado={recargar} delCorreo={delCorreo} />}
       <Buscador valor={texto} cambiar={setTexto} placeholder={sufridas ? "Buscar cliente, CUIT, certificado o recibo" : "Buscar nombre, CUIT u OP"} />
       <Fechas desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} />
       {sufridas ? (

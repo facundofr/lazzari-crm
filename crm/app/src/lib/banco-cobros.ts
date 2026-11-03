@@ -169,3 +169,79 @@ export function sugerirFacturas(linea: { importe: number; cuit?: string | null }
   const conRet = facturaMenosRetenciones(linea, facturas, modelos);
   return conRet.length === 1 ? conRet : [];
 }
+
+// ── Avisos de pago que leyó el agente de correo (Augusto 03/11/2026: "el correo… que lea los que no leyó") ──
+
+const TIPO_AVISO: Record<string, TipoRetencion> = { iva: "retencion_iva", ganancias: "retencion_ganancias", iibb: "retencion_iibb", suss: "retencion_suss" };
+export interface RetencionAviso { tipo: TipoRetencion; monto: number; certificado: string | null }
+/** Un aviso de pago de un cliente leído por el agente (agente_mail_procesados.datos.pago, dirección "recibido"). */
+export interface AvisoPago {
+  id: string; fecha: string; remitente: string; referencia: string | null; clienteCuit: string | null; clienteNombre: string | null;
+  /** Lo que puede haber entrado al banco: el neto, el total menos las retenciones o el total (el aviso no siempre los distingue). */
+  transferencias: number[];
+  retenciones: RetencionAviso[];
+  /** Facturas del CRM que el agente cruzó al leer el aviso, y los números que nombra el aviso. */
+  facturasIds: string[]; facturasNumeros: string[];
+}
+export interface SugerenciaAviso { aviso: AvisoPago; clienteId: string; cliente: string; facturas: FacturaBanco[]; retenciones: RetencionAviso[]; transferencia: number }
+
+export function avisosDeMails(filas: { id: string; fecha_mail?: string | null; remitente?: string | null; datos?: any }[]): AvisoPago[] {
+  const out: AvisoPago[] = [];
+  for (const f of filas) {
+    const p = f.datos?.pago;
+    if (!p || p.direccion !== "recibido") continue;
+    const retenciones: RetencionAviso[] = (Array.isArray(p.retenciones) ? p.retenciones : [])
+      .filter((r: any) => TIPO_AVISO[String(r?.tipo || "").toLowerCase()] && Number(r.monto) > 0)
+      .map((r: any) => ({ tipo: TIPO_AVISO[String(r.tipo).toLowerCase()], monto: r2(Number(r.monto)), certificado: r.certificado ? String(r.certificado).trim() || null : null }));
+    const sumaRet = r2(retenciones.reduce((s, r) => s + r.monto, 0));
+    const ret = Number(p.retenciones_total) > 0 ? r2(Number(p.retenciones_total)) : sumaRet;
+    const neto = Number(p.monto_neto) || 0, total = Number(p.monto_total) || 0;
+    const transferencias = [...new Set([neto, total > 0 && ret > 0 ? r2(total - ret) : 0, total].filter((x) => x > 0).map(r2))];
+    if (!transferencias.length) continue;
+    out.push({
+      id: f.id, fecha: String(p.fecha_pago || f.fecha_mail || "").slice(0, 10), remitente: String(f.remitente || ""),
+      referencia: p.referencia ? String(p.referencia) : null, clienteCuit: digitos(p.cliente_cuit) || null, clienteNombre: p.cliente_nombre ? String(p.cliente_nombre) : null,
+      transferencias, retenciones,
+      facturasIds: (Array.isArray(f.datos?.cruce?.facturas) ? f.datos.cruce.facturas : []).map((x: any) => x?.id).filter(Boolean),
+      facturasNumeros: (Array.isArray(p.facturas) ? p.facturas : []).map((x: any) => String(x?.numero || "")).filter(Boolean),
+    });
+  }
+  return out;
+}
+
+/** "00016-00000018" o "FA 0016-00000018" → "16-18" (punto de venta y número, sin ceros). */
+const pvNumero = (s: string) => { const m = String(s).match(/(\d+)\D+(\d+)\s*$/); return m ? `${Number(m[1])}-${Number(m[2])}` : null; };
+const diasEntre = (a: string, b: string) => Math.round((Date.parse(`${b.slice(0, 10)}T12:00:00Z`) - Date.parse(`${a.slice(0, 10)}T12:00:00Z`)) / 86_400_000);
+
+/**
+ * Avisos de pago que explican una transferencia que entró: mismo importe (hasta $ 1), hasta 15 días de diferencia, el cliente por su
+ * CUIT (si la línea trae CUIT, tiene que ser el mismo). Las facturas: las que cruzó el agente y siguen con saldo, o las que nombra el
+ * aviso, o una sola con saldo igual a lo que entró más las retenciones. Las retenciones son las del aviso, con su N° de certificado.
+ */
+export function sugerirDesdeAvisos(
+  linea: { importe: number; fecha: string; cuit?: string | null },
+  avisos: AvisoPago[], facturas: FacturaBanco[], clientes: { id: string; razon_social: string; cuit: string | null }[],
+): SugerenciaAviso[] {
+  if (!(linea.importe > 0)) return [];
+  const cuitLinea = digitos(linea.cuit);
+  const out: SugerenciaAviso[] = [];
+  for (const a of avisos) {
+    if (!a.transferencias.some((t) => Math.abs(t - linea.importe) <= 1)) continue;
+    if (a.fecha && Math.abs(diasEntre(a.fecha, linea.fecha)) > 15) continue;
+    if (!a.clienteCuit || (cuitLinea && cuitLinea !== a.clienteCuit)) continue;
+    const cs = clientes.filter((c) => digitos(c.cuit) === a.clienteCuit);
+    if (cs.length !== 1) continue;
+    const c = cs[0];
+    const delCliente = facturas.filter((f) => f.clienteId === c.id && f.moneda === "ARS" && f.saldo > 0.005);
+    const retTotal = r2(a.retenciones.reduce((s, r) => s + r.monto, 0));
+    let fs = delCliente.filter((f) => a.facturasIds.includes(f.id));
+    if (!fs.length) { const nums = new Set(a.facturasNumeros.map(pvNumero).filter(Boolean)); fs = delCliente.filter((f) => nums.has(pvNumero(f.numero))); }
+    if (!fs.length) { const exactas = delCliente.filter((f) => Math.abs(f.saldo - (linea.importe + retTotal)) <= 1); if (exactas.length === 1) fs = exactas; }
+    const retenciones = a.retenciones.map((r) => ({ ...r }));
+    // Redondeo de hasta $ 1 entre las facturas y lo que entró + retenciones: a la retención más grande.
+    const ajuste = fs.length && retenciones.length ? r2(fs.reduce((s, f) => s + f.saldo, 0) - linea.importe - retTotal) : 0;
+    if (ajuste && Math.abs(ajuste) <= 1) { const mayor = retenciones.reduce((x, y) => (y.monto > x.monto ? y : x)); mayor.monto = r2(mayor.monto + ajuste); }
+    out.push({ aviso: a, clienteId: c.id, cliente: c.razon_social, facturas: fs, retenciones, transferencia: r2(linea.importe) });
+  }
+  return out.slice(0, 2);
+}

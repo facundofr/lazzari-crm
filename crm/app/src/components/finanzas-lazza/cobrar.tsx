@@ -5,7 +5,7 @@
 // FxSettlementDialog para US$). Acá solo se elige el cliente y las facturas.
 // Lugar central: tarjeta "Cobrar" del inicio (FinanzasLazzaCobrar: clientes que deben → Cobrar). Atajos a la misma ventana:
 // Cuentas corrientes (ficha del cliente), Vencimientos y Facturas (facturas de venta) y Recibos ("Nuevo cobro").
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, HandCoins, Loader2, Search, X } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
@@ -59,7 +59,7 @@ async function traerFacturasDeOrdenPago(sociedadId: string, clienteId: string, p
   return facturasDeOrdenPago(parsed, filas, await cobradoDe(sociedadId, filas));
 }
 
-export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preseleccion = [], directo = false, medioInicial, retencionesIniciales, sugerido, onClose, onCobrado }: {
+export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preseleccion = [], directo = false, medioInicial, retencionesIniciales, ordenPagoInicial, sugerido, onClose, onCobrado }: {
   sociedadId: string;
   /** Sin cliente: primero se elige (Recibos → "Nuevo cobro"). */
   clienteId?: string | null;
@@ -74,7 +74,9 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
   /** Desde una línea del banco (02/11/2026): la transferencia en pesos viene con el importe y la fecha de la línea. */
   medioInicial?: { monto: number; fecha: string };
   /** Desde una línea del banco (03/11/2026): retenciones estimadas como el último cobro del cliente (lib/banco-cobros). */
-  retencionesIniciales?: { tipo: string; monto: number; observaciones?: string }[];
+  retencionesIniciales?: { tipo: string; monto: number; observaciones?: string; certificado?: string | null }[];
+  /** Comprobante del cliente ya leído por la IA (arrastrado sobre la línea del banco, 03/11/2026): con el cliente elegido, cobra las facturas que nombra. */
+  ordenPagoInicial?: OpParsed;
   /** Cliente con el mismo CUIT que la línea del banco: se muestra para elegirlo con un clic (nunca se elige solo). */
   sugerido?: { id: string; nombre: string } | null;
 }) {
@@ -127,6 +129,15 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
     setSaltoDirecto(false);
     if (seleccion.length && moneda) setLiquidando(true);
   }, [saltoDirecto, facturas, seleccion.length, moneda]);
+
+  // Comprobante arrastrado sobre la línea del banco: apenas está el cliente y sus facturas, arma el cobro de las que nombra (una vez).
+  const ordenAplicada = useRef(false);
+  useEffect(() => {
+    if (!ordenPagoInicial || ordenAplicada.current || !cliente || !facturas) return;
+    ordenAplicada.current = true;
+    void iniciarCobroOrdenPago(ordenPagoInicial);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ordenPagoInicial, cliente, facturas]);
 
   const tildar = (id: string, si: boolean) => setElegidas((prev) => { const n = new Set(prev); if (si) n.add(id); else n.delete(id); return n; });
   const cerrarLiquidacion = () => { setLiquidando(false); if (directo) onClose(); };

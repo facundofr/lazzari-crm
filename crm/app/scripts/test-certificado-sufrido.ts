@@ -1,4 +1,4 @@
-import { claveNumero, corregirPartes, normalizarCertificados, proponerRetenciones, type CertificadoLeido, type RetencionSufrida } from "../src/lib/certificado-sufrido";
+import { certificadosDeCorreo, claveNumero, corregirPartes, normalizarCertificados, proponerRetenciones, type CertificadoLeido, type RetencionSufrida } from "../src/lib/certificado-sufrido";
 const ok = (c: boolean, m: string) => { if (!c) { console.error("FALLA", m); process.exit(1); } };
 
 // Lo que devuelve la IA: textos con formato argentino, repetidos y basura
@@ -88,4 +88,14 @@ ok(sinImporte.estado === "difiere" && sinImporte.diferencia === null && !!sinImp
 // Retención en US$: no se compara el importe
 const usd = proponerRetenciones([cert("IVA", "7", "2026-10-20", 100, CORTEVA)], [{ ...ret("usd", "2026-10-20", "IVA", 100, CORTEVA), moneda: "USD" }], LAZZARI)[0];
 ok(usd.estado === "difiere" && usd.diferencia === null, "US$: difiere sin diferencia");
+// Certificados del correo (03/11/2026): los N° que leyó el agente en el aviso de pago; sin N° no van; el mismo N° dos veces, una.
+const delMail = certificadosDeCorreo([
+  { id: "m1", fecha_mail: "2026-10-27T10:00:00Z", remitente: "<pagos@soychu.com.ar>", datos: { pago: { direccion: "recibido", cliente_cuit: "30-50500086-9", cliente_nombre: "Soychú", fecha_pago: "2026-10-27",
+    retenciones: [{ tipo: "iva", monto: 23625, certificado: "0176-00035368" }, { tipo: "iibb", monto: 3937.5, certificado: null, jurisdiccion: "Entre Ríos" }], facturas: [{ numero: "0008-00000671" }] } } },
+  { id: "m2", fecha_mail: "2026-10-28T10:00:00Z", datos: { pago: { direccion: "recibido", cliente_cuit: "30505000869", retenciones: [{ tipo: "iva", monto: 23625, certificado: "0176-00035368" }] } } },
+  { id: "m3", datos: { pago: { direccion: "emitido", retenciones: [{ tipo: "iva", monto: 1, certificado: "9" }] } } },
+]);
+ok(delMail.length === 1, "un certificado del correo");
+ok(delMail[0].cert.impuesto === "IVA" && delMail[0].cert.numero === "0176-00035368" && delMail[0].cert.agenteCuit === "30505000869" && delMail[0].cert.fecha === "2026-10-27", "datos del certificado del correo");
+
 console.log("OK certificado-sufrido");

@@ -249,3 +249,38 @@ export function proponerRetenciones(certs: CertificadoLeido[], retenciones: Rete
   }
   return out;
 }
+
+// ── Certificados que llegaron por mail (Augusto 03/11/2026) ──────────────────
+const IMPUESTO_AVISO: Record<string, ImpuestoCertificado> = { iva: "IVA", ganancias: "Ganancias", iibb: "IIBB", suss: "SUSS" };
+export interface CertificadoDelCorreo { cert: CertificadoLeido; mailId: string; fechaMail: string; remitente: string }
+
+/**
+ * Los certificados que leyó el agente de correo en los avisos de pago (datos.pago.retenciones con N°): el cliente que paga es el
+ * agente de retención. Uno por certificado (el mismo N° en dos mails, una vez). Van a «Cargar certificado» como si se hubieran
+ * subido: lib/certificado-sufrido propone la retención y una persona confirma.
+ */
+export function certificadosDeCorreo(filas: { id: string; fecha_mail?: string | null; remitente?: string | null; datos?: any }[]): CertificadoDelCorreo[] {
+  const out: CertificadoDelCorreo[] = [];
+  const vistos = new Set<string>();
+  for (const f of filas) {
+    const p = f.datos?.pago;
+    if (!p || p.direccion !== "recibido" || !Array.isArray(p.retenciones)) continue;
+    for (const r of p.retenciones) {
+      const impuesto = IMPUESTO_AVISO[String(r?.tipo || "").toLowerCase()];
+      const numero = r?.certificado ? String(r.certificado).trim() : "";
+      if (!impuesto || !numero || !(Number(r.monto) > 0)) continue;
+      const cert: CertificadoLeido = {
+        impuesto, numero, fecha: p.fecha_pago ? String(p.fecha_pago).slice(0, 10) : (f.fecha_mail ? String(f.fecha_mail).slice(0, 10) : null),
+        monto: Math.round(Number(r.monto) * 100) / 100, agenteNombre: p.cliente_nombre ? String(p.cliente_nombre) : null, agenteCuit: cuit(p.cliente_cuit),
+        retenidoNombre: null, retenidoCuit: null, jurisdiccion: r.jurisdiccion ? String(r.jurisdiccion) : null,
+        comprobantes: (Array.isArray(p.facturas) ? p.facturas : []).map((x: any) => String(x?.numero || "")).filter(Boolean),
+        referencia: p.referencia ? String(p.referencia) : null,
+      };
+      const k = claveCertificado(cert);
+      if (vistos.has(k)) continue;
+      vistos.add(k);
+      out.push({ cert, mailId: f.id, fechaMail: String(f.fecha_mail || "").slice(0, 10), remitente: String(f.remitente || "") });
+    }
+  }
+  return out;
+}

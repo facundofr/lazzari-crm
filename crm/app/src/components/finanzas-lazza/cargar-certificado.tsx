@@ -7,12 +7,12 @@
 // - CeldaCertificado: la columna «Certificado» con el N°, 📎 para abrir el archivo y «Quitar» (queda anulado, no se borra);
 //   en «falta», el N° se escribe a mano.
 import { useMemo, useRef, useState } from "react";
-import { Check, Loader2, Paperclip, Sparkles, Upload, X } from "lucide-react";
+import { Check, Loader2, Mail, Paperclip, Sparkles, Upload, X } from "lucide-react";
 import { Modal } from "@/components/ui/modal";
 import { Select } from "@/components/ui/input";
 import { supabase } from "@/lib/supabase/client";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
-import { claveCertificado, corregirPartes, proponerRetenciones, soloDigitos, TOLERANCIA_CERTIFICADO, type CertificadoLeido, type Propuesta, type RetencionSufrida } from "@/lib/certificado-sufrido";
+import { claveCertificado, corregirPartes, proponerRetenciones, soloDigitos, TOLERANCIA_CERTIFICADO, type CertificadoDelCorreo, type CertificadoLeido, type Propuesta, type RetencionSufrida } from "@/lib/certificado-sufrido";
 import type { FilaRetencion } from "@/lib/finanzas-lazza";
 import { linkArchivo } from "@/lib/archivo-link";
 
@@ -23,7 +23,7 @@ const cuitAR = (c: string) => (c.length === 11 ? `${c.slice(0, 2)}-${c.slice(2, 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
 /** Un certificado leído y el archivo de donde salió (un PDF puede traer varios). */
-interface Leido { clave: string; cert: CertificadoLeido; archivo: File }
+interface Leido { clave: string; cert: CertificadoLeido; archivo: File | null; correo?: { mailId: string; fecha: string; remitente: string } }
 
 /** Algunas compus mandan el PDF sin tipo: por la extensión se sabe. */
 const conTipo = (f: File) => (f.type || !/\.pdf$/i.test(f.name) ? f : new File([f], f.name, { type: "application/pdf" }));
@@ -54,12 +54,14 @@ function aviso(p: Propuesta, c: CertificadoLeido, r: FilaRetencion | null): { ok
  * Botón «Cargar certificado (IA)» y su ventana. `sufridas`: todas las retenciones sufridas de la sociedad (sin el filtro
  * de fechas de la lista). `onGuardado`: se guardó al menos uno (la lista se recarga al cerrar).
  */
-export function CargarCertificado({ sociedadId, sufridas, sociedad, onGuardado }: {
+export function CargarCertificado({ sociedadId, sufridas, sociedad, onGuardado, delCorreo = [] }: {
   sociedadId: string;
   sufridas: FilaRetencion[];
   /** CUIT de la sociedad activa y las otras (para avisar si el certificado es de otra). */
   sociedad: { cuit: string; otras: { nombre: string; cuit: string }[] };
   onGuardado: () => void;
+  /** Certificados que leyó el agente en los avisos de pago (03/11/2026): «Del correo» abre la ventana con ellos, sin subir nada. */
+  delCorreo?: CertificadoDelCorreo[];
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const subidos = useRef(new Map<File, string | null>()); // archivo → URL: un PDF con varios certificados se sube una sola vez
@@ -94,6 +96,21 @@ export function CargarCertificado({ sociedadId, sufridas, sociedad, onGuardado }
     const p = propuestas.get(l.clave);
     return p?.estado === "coincide" && !!p.movimientoId && movDe(l) === p.movimientoId && !p.otroCliente && !p.yaCargado;
   });
+
+  // Del correo: los que todavía no están cargados en ninguna retención (mismo impuesto y N°).
+  const correoNuevos = useMemo(() => {
+    const clave = (impuesto: string | null, n: string | null) => `${impuesto || ""}|${soloDigitos(n).replace(/^0+/, "")}`;
+    const ya = new Set(sufridas.filter((r) => r.certificado).map((r) => clave(r.impuesto, r.certificado)));
+    return delCorreo.filter((d) => !ya.has(clave(d.cert.impuesto, d.cert.numero)));
+  }, [delCorreo, sufridas]);
+  const abrirCorreo = () => {
+    setLeidos((prev) => {
+      const ya = new Set(prev.map((x) => x.clave));
+      return [...prev, ...correoNuevos.filter((d) => !ya.has(claveCertificado(d.cert)))
+        .map((d) => ({ clave: claveCertificado(d.cert), cert: d.cert, archivo: null, correo: { mailId: d.mailId, fecha: d.fechaMail, remitente: d.remitente } }))];
+    });
+    setAbierto(true);
+  };
 
   const leer = async (files: FileList | null) => {
     const lista = Array.from(files || []).map(conTipo);
@@ -130,8 +147,8 @@ export function CargarCertificado({ sociedadId, sufridas, sociedad, onGuardado }
       const mov = movDe(l);
       const c = corregirPartes(l.cert, sociedad.cuit);
       if (!mov || !c.numero) continue;
-      let url = subidos.current.get(l.archivo);
-      if (url === undefined) {
+      let url = l.archivo ? subidos.current.get(l.archivo) : null;
+      if (url === undefined && l.archivo) {
         const ext = (l.archivo.name.split(".").pop() || "").toLowerCase().replace(/[^a-z0-9]/g, "") || "pdf";
         const ruta = `sufridas/${sociedadId}/${todayAR()}-${crypto.randomUUID()}.${ext}`;
         const { error: eS } = await db.storage.from("certificados").upload(ruta, l.archivo, { upsert: false, contentType: l.archivo.type || undefined });
@@ -141,11 +158,12 @@ export function CargarCertificado({ sociedadId, sufridas, sociedad, onGuardado }
       }
       const { error } = await db.from("certificados_retencion").insert({
         sociedad_id: sociedadId, movimiento_id: mov, numero: c.numero, fecha: c.fecha, monto: c.monto, agente_cuit: c.agenteCuit,
-        archivo_url: url, archivo_nombre: l.archivo.name, origen: "ia", lectura_ia: l.cert,
+        archivo_url: url ?? null, archivo_nombre: l.archivo ? l.archivo.name : `Mail del ${formatDate(l.correo?.fecha || "")} de ${l.correo?.remitente || ""}`.slice(0, 200),
+        origen: "ia", lectura_ia: l.correo ? { ...l.cert, fuente: "correo", mail_id: l.correo.mailId, remitente: l.correo.remitente } : l.cert,
       });
       if (error) { fallas.push(`${c.impuesto || ""} N° ${c.numero}: ${error.code === "23505" ? "esa retención ya tiene un certificado cargado" : error.message}`.trim()); continue; }
       hechos[l.clave] = { mov, numero: c.numero };
-      if (!url) sinArchivo.push(c.numero);
+      if (!url && l.archivo) sinArchivo.push(c.numero);
     }
     setCargados((x) => ({ ...x, ...hechos }));
     setGuardando(false);
@@ -167,6 +185,12 @@ export function CargarCertificado({ sociedadId, sufridas, sociedad, onGuardado }
         className="flex h-8 items-center gap-1 rounded-lg border border-orange-300 bg-orange-50 px-2.5 text-xs font-medium text-orange-700 hover:bg-orange-100 dark:border-orange-700 dark:bg-orange-950/30 dark:text-orange-300">
         <Sparkles className="h-3 w-3" /> Cargar certificado (IA)
       </button>
+      {correoNuevos.length > 0 && (
+        <button type="button" onClick={abrirCorreo} title="Los certificados que llegaron en los avisos de pago por mail: propone a qué retención va cada uno; vos confirmás"
+          className="flex h-8 items-center gap-1 rounded-lg border border-sky-300 bg-sky-50 px-2.5 text-xs font-medium text-sky-700 hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-950/30 dark:text-sky-300">
+          <Mail className="h-3 w-3" /> Del correo ({correoNuevos.length})
+        </button>
+      )}
       <Modal open={abierto} onClose={cerrar} size="xl" title="Cargar certificados de retención" confirmarCierre={sinConfirmar}
         description="La IA lee cada certificado y propone a qué retención sin N° va. Nada se guarda hasta que tocás «Confirmar»: se guardan el N° y el archivo."
         footer={<>
@@ -207,7 +231,7 @@ export function CargarCertificado({ sociedadId, sufridas, sociedad, onGuardado }
                     <span className="font-medium text-zinc-800 dark:text-zinc-200">
                       {c.impuesto || "¿Impuesto?"}{c.impuesto === "IIBB" && c.jurisdiccion ? ` ${c.jurisdiccion}` : ""} · N° <span className="font-mono">{c.numero || "—"}</span>
                     </span>
-                    <span className="block truncate text-[10px] text-zinc-400" title={l.archivo.name}>
+                    <span className="block truncate text-[10px] text-zinc-400" title={l.archivo ? l.archivo.name : `Mail de ${l.correo?.remitente || ""}`}>
                       {c.agenteNombre || (c.agenteCuit ? `CUIT ${cuitAR(c.agenteCuit)}` : "Cliente sin leer")}{c.fecha ? ` · ${formatDate(c.fecha)}` : ""}
                     </span>
                   </div>
