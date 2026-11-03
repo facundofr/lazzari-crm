@@ -7,9 +7,10 @@
  * - Desde la semana de hoy, 12 semanas PROYECTADAS con doble columna (Nati 29/10): "Proy." (la foto del inicio del mes) y "Real".
  *   La foto se guarda sola la primera vez que se abre el Cashflow en el mes; si el mes todavía no tiene foto, "Proy." es lo de hoy.
  * - Proyectado: facturas de venta por vencimiento (lo vencido sin cobrar NO se cuenta, se avisa: no se sabe cuándo entra, como en
- *   Caja), cheques en cartera por fecha de pago, facturas de compra por vencimiento y cheques propios por fecha de pago (lo atrasado
- *   se cuenta hoy), gastos fijos del mes sin pagar, (Lazzari) los premios del mes, que se pagan con el sueldo del mes siguiente,
- *   y el IIBB y tasas de cada mes (el % de las ventas, como en el Estado de resultados) el día 22 del mes siguiente (Augusto 29/10).
+ *   Caja), cheques en cartera por fecha de pago, facturas de compra por vencimiento y cheques propios a cubrir (la regla de
+ *   lib/cheques-lazza: fechaACubrir; lo atrasado se cuenta hoy), gastos fijos del mes sin pagar, (Lazzari) los premios del
+ *   mes, que se pagan con el sueldo del mes siguiente, y el IIBB y tasas de cada mes (el % de las ventas, como en el Estado de resultados) el día 22 del mes siguiente (Augusto 29/10),
+ *   menos el SIRCREB, las retenciones de IIBB y el saldo a favor de los meses anteriores (regla de Nati, iibbNeto).
  * - Cada línea del banco va a una fila: por el gasto al que está atada (mismo criterio que el Estado de resultados) o por su
  *   clasificación en Bancos. Los pases entre cuentas propias y al FCI van aparte (no es plata que se gasta).
  * Funciones puras. Prueba: npx tsx scripts/test-cashflow.ts
@@ -18,6 +19,7 @@ import { clasificarGasto, mesDevengado, type GastoCont } from "./contabilidad";
 import { clasificarMovimiento } from "./movimientos-banco";
 import { gastosFijosEnVentana, lunesDe, sumarDias, type GastoFijoCaja } from "./caja-proyectada";
 import { chequePendiente } from "./cheques-plazo";
+import { fechaACubrir } from "./cheques-lazza";
 
 export type FilaCF = "cobros" | "otros_ingresos" | "proveedores" | "sueldos" | "gastos" | "impuestos" | "bancos" | "otros_pagos" | "retiros" | "pases";
 
@@ -155,8 +157,23 @@ export interface ChequeCF {
 }
 export interface FijoCF extends GastoFijoCaja { grupo?: string | null; categoria?: string | null }
 export interface PremioCF { persona: string; monto: number; mes: string }
-/** IIBB y tasas: % de las ventas de cada mes (las de Reportes) y los gastos cargados, para no contar el que ya se pagó. */
-export interface IibbCF { pct: number; meses: { mes: string; ventas: number }[]; cargados: { descripcion: string | null; fecha: string }[] }
+/**
+ * IIBB y tasas: % de las ventas de cada mes (las de Reportes), lo pagado a cuenta en el mes (SIRCREB del banco neto de devoluciones
+ * y retenciones de IIBB que nos hicieron los clientes) y los gastos cargados, para no contar el que ya se pagó.
+ */
+export interface IibbCF {
+  pct: number;
+  meses: { mes: string; ventas: number; sircreb?: number; retenciones?: number }[];
+  cargados: { descripcion: string | null; fecha: string }[];
+}
+/** Desde este mes hay extracto del banco (SIRCREB) y retenciones cargadas: el saldo a favor de IIBB se arrastra desde acá. */
+export const DESDE_IIBB_NETO = "2026-09";
+export interface IibbMes {
+  mes: string; bruto: number; sircreb: number; retenciones: number; saldoAnterior: number;
+  aPagar: number; saldoAFavor: number;
+  /** Ya hay un VEP del mes cargado en Gastos. */
+  pagado: boolean;
+}
 
 const sinCeros = (n: string) => String(n || "").trim().replace(/^0+/, "");
 const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
@@ -178,6 +195,23 @@ export function iibbCargado(cargados: IibbCF["cargados"], mes: string): boolean 
   });
 }
 
+/**
+ * IIBB y tasas de cada mes con la regla de Nati (29/10: "el monto del mes menos saldos a favor previos y del mes"): el % de las
+ * ventas menos el SIRCREB y las retenciones del mes y el saldo a favor que viene de antes, nunca menos de 0. Lo que sobra queda a
+ * favor para el mes siguiente. Un mes ya pagado (VEP cargado en Gastos) deja el saldo a favor en 0: lo real manda.
+ */
+export function iibbNeto(iibb: IibbCF): IibbMes[] {
+  let saldo = 0;
+  return [...iibb.meses].sort((a, b) => a.mes.localeCompare(b.mes)).map((m) => {
+    const bruto = r2(m.ventas * iibb.pct / 100);
+    const sircreb = r2(m.sircreb || 0), retenciones = r2(m.retenciones || 0), saldoAnterior = saldo;
+    const neto = r2(bruto - sircreb - retenciones - saldoAnterior);
+    const pagado = iibbCargado(iibb.cargados, m.mes);
+    saldo = pagado ? 0 : Math.max(0, -neto);
+    return { mes: m.mes, bruto, sircreb, retenciones, saldoAnterior, aPagar: Math.max(0, neto), saldoAFavor: saldo, pagado };
+  });
+}
+
 /** Lo que se espera cobrar y pagar desde hoy hasta `hasta` (inclusive). Nunca inventa fechas: usa vencimientos, fechas de pago y días de los gastos fijos. */
 export function proyeccionCF(x: {
   hoy: string; hasta: string;
@@ -191,11 +225,10 @@ export function proyeccionCF(x: {
   premios?: PremioCF[];
   iibb?: IibbCF | null;
   dolar: number | null;
-}): { items: ItemCF[]; vencidoSinCobrar: { total: number; cantidad: number }; chequesDeTerceros: { total: number; cantidad: number }; sinDolar: string[] } {
+}): { items: ItemCF[]; vencidoSinCobrar: { total: number; cantidad: number }; sinDolar: string[] } {
   const items: ItemCF[] = [];
   const sinDolar: string[] = [];
   const vencido = { total: 0, cantidad: 0 };
-  const terceros = { total: 0, cantidad: 0 };
   const enPesos = (monto: number, moneda: string | null | undefined, que: string): number | null => {
     if (moneda !== "USD") return monto;
     if (!x.dolar) { sinDolar.push(que); return null; }
@@ -230,10 +263,11 @@ export function proyeccionCF(x: {
     const monto = enPesos(num(ch.monto), ch.moneda, detalle);
     if (monto === null) continue;
     if (ch.direccion === "emitido") {
-      if (x.debitados?.has(sinCeros(ch.numero)) || String(ch.estadoBanco || "").toUpperCase() === "PAGADO") continue;
-      // Los que cubre un tercero (préstamos que paga otro) no salen de la caja de la empresa: se avisan aparte, como en Caja.
-      if (ch.cubreTercero) { if (f <= x.hasta) { terceros.total += monto; terceros.cantidad++; } continue; }
-      salida(f, monto, "proveedores", "cheque_emitido", detalle);
+      // La misma regla de "a cubrir" que Inicio, Finanzas y Cheques (P07, lib/cheques-lazza): sin los que el banco ya debitó ni
+      // los de más de 30 días; el que ya está en fecha se cubre hoy. Los que cubre Martín F. suman (Augusto: "Suman en a cubrir").
+      const cubrir = fechaACubrir(ch, x.hoy, x.debitados);
+      if (!cubrir) continue;
+      salida(cubrir, monto, "proveedores", "cheque_emitido", ch.cubreTercero ? `${detalle} (lo cubre ${ch.cubreTercero})` : detalle);
     } else if (f <= x.hasta) {
       // Un cheque en cartera ya en fecha se puede depositar hoy.
       items.push({ fecha: f < x.hoy ? x.hoy : f, monto: r2(monto), fila: "cobros", origen: "cheque_recibido", detalle });
@@ -259,20 +293,23 @@ export function proyeccionCF(x: {
   }
 
   // IIBB y tasas: el vencido no se cuenta (no se sabe si se pagó por otro lado), ni el que ya está cargado en Gastos.
-  // El mes en curso va con lo facturado hasta hoy; los meses sin ventas todavía no suman.
+  // El mes en curso va con lo facturado hasta hoy; los meses sin ventas todavía no suman. Si el SIRCREB, las retenciones y el
+  // saldo a favor cubren el mes, no sale nada (el saldo a favor se ve aparte).
   if (x.iibb && x.iibb.pct > 0) {
-    for (const m of x.iibb.meses) {
+    const $ = (n: number) => n.toLocaleString("es-AR", { maximumFractionDigits: 0 });
+    for (const m of iibbNeto(x.iibb)) {
       const fecha = vencimientoIibb(m.mes);
-      if (fecha < x.hoy || iibbCargado(x.iibb.cargados, m.mes)) continue;
+      if (fecha < x.hoy || m.pagado) continue;
       const enCurso = m.mes >= x.hoy.slice(0, 7);
-      const ventas = m.ventas.toLocaleString("es-AR", { maximumFractionDigits: 0 });
-      salida(fecha, r2(m.ventas * x.iibb.pct / 100), "impuestos", "iibb",
-        `IIBB y tasas ${MESES[Number(m.mes.slice(5, 7)) - 1]} — ${x.iibb.pct} % de las ventas ($ ${ventas}${enCurso ? ", lo facturado hasta hoy" : ""}) (estimado)`);
+      const ventas = x.iibb.meses.find((v) => v.mes === m.mes)!.ventas;
+      const menos = [m.sircreb ? `SIRCREB $ ${$(m.sircreb)}` : "", m.retenciones ? `retenciones $ ${$(m.retenciones)}` : "", m.saldoAnterior ? `saldo a favor $ ${$(m.saldoAnterior)}` : ""].filter(Boolean);
+      salida(fecha, m.aPagar, "impuestos", "iibb",
+        `IIBB y tasas ${MESES[Number(m.mes.slice(5, 7)) - 1]} — ${x.iibb.pct} % de las ventas ($ ${$(ventas)}${enCurso ? ", lo facturado hasta hoy" : ""})${menos.length ? ` menos ${menos.join(", ")}` : ""} (estimado)`);
     }
   }
 
   items.sort((a, b) => a.fecha.localeCompare(b.fecha) || a.monto - b.monto);
-  return { items, vencidoSinCobrar: { total: r2(vencido.total), cantidad: vencido.cantidad }, chequesDeTerceros: { total: r2(terceros.total), cantidad: terceros.cantidad }, sinDolar: [...new Set(sinDolar)] };
+  return { items, vencidoSinCobrar: { total: r2(vencido.total), cantidad: vencido.cantidad }, sinDolar: [...new Set(sinDolar)] };
 }
 
 // ── Cashflow semanal ────────────────────────────────────────────────

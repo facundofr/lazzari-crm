@@ -13,6 +13,9 @@
  *   = Resultado neto
  * Fuera del resultado (informativo): retiros de accionistas, impuestos que son pago (IVA, SICORE, anticipos, IIBB pagado),
  * Ley 25.413 (100% a cuenta de Ganancias, Nati 29/10), SIRCREB (a cuenta de IIBB) e IVA de las comisiones del banco.
+ * En pantalla ese bloque va en dos partes (Nati 02/11, bloqueInformativo): a) plata que entró o salió y no es venta ni gasto,
+ * por el mes en que se movió; b) ventas y gastos del mes que al último día del mes todavía no se cobraron o pagaron.
+ * (`fuera`, por lo devengado, lo sigue usando Reportes para "No son gasto".)
  *
  * Cada gasto cuenta en el mes que dice su detalle ("Premio agosto", "Comisión septiembre 2026"); si no dice, en el de su fecha.
  * Desde octubre 2026, los premios, la comisión de José y los sueldos fijos que todavía no se cargaron van estimados en su mes.
@@ -28,6 +31,8 @@ export type LineaId =
   | "comisiones" | "consultoria" | "iibb" | "colaborador_m" | "administrativos" | "bancarios" | "intereses" | "ganancias";
 export type FueraId = "retiros" | "impuestos_pago" | "ley_25413" | "sircreb" | "iva_banco";
 export type SubtotalId = "bruto" | "operativo" | "antes_ganancias" | "neto";
+export type InfoAId = "a_retiros" | "a_impuestos_pago" | "a_ley_25413" | "a_sircreb" | "a_iva_banco" | "a_retenciones" | "a_total";
+export type InfoBId = "b_ventas" | "b_mercaderia" | "b_transportes" | "b_sueldos" | "b_otros" | "b_visa" | "b_iibb" | "b_ganancias" | "b_falta_cobrar" | "b_falta_pagar";
 
 export const LINEAS: { id: LineaId; nombre: string; que: string; bloque: "ventas" | "directos" | "estructura" | "financiero" | "ganancias" }[] = [
   { id: "ventas", nombre: "Ventas", que: "Facturas del mes − NC, neto de IVA (US$ al TC de cada factura)", bloque: "ventas" },
@@ -69,6 +74,13 @@ export interface GastoCont {
 export interface LineaBancoCont {
   id: string; fecha: string; descripcion: string | null; monto: number | string | null; tipo: string | null;
   clasificacion: string | null; subtipo: string | null; match_movimiento_id?: string | null;
+  /** Cuenta del otro lado (Bancos): en un pago de tarjeta, cuál tarjeta. */
+  contra_cuenta_id?: string | null;
+}
+/** Renglón del resumen de la Visa (tarjeta_consumos) con el vencimiento de su resumen (cuando sale la plata). */
+export interface ConsumoVisaCont {
+  id: string; fecha: string; descripcion: string; importe: number | string; moneda: string | null;
+  tipo: "consumo" | "cargo"; clase: string | null; vencimiento: string | null;
 }
 /** Lo de cada mes que sale de Reportes (reporteBasico): ventas, costo y transportes, netos. */
 export interface BaseMes {
@@ -81,7 +93,7 @@ export interface EstimadoMes { premios: { persona: string; monto: number }[]; co
 
 export interface ItemDetalle { fecha: string; detalle: string; monto: number; origen: "gasto" | "banco" | "estimado" | "calculo" | "factura"; aviso?: string | null }
 export interface FilaER {
-  id: LineaId | FueraId | SubtotalId; nombre: string; que: string;
+  id: LineaId | FueraId | SubtotalId | InfoAId | InfoBId; nombre: string; que: string;
   /** Con signo: ventas e ingresos en +, costos y gastos en −. */
   valores: Record<string, number>; total: number;
   detalle: Record<string, ItemDetalle[]>;
@@ -166,6 +178,8 @@ export function clasificarLineaBanco(l: LineaBancoCont): LineaId | FueraId | nul
   if (c === "impuesto" && s === "ley_25413") return "ley_25413";
   if (c === "impuesto" && s === "sircreb") return "sircreb";
   if (c === "impuesto" && s === "iva") return "iva_banco";
+  // Impuesto de sellos del banco (código 030): es un gasto del banco (Augusto 03/11, paso 3 punto 8; antes no entraba).
+  if (c === "impuesto" && s === "sellos") return "bancarios";
   if (c || l.match_movimiento_id) return null;
   const m = clasificarMovimiento({ id: l.id, fecha: l.fecha, descripcion: l.descripcion || "", monto: Math.abs(num(l.monto)), tipo: l.tipo === "credito" ? "credito" : "debito", clasificacion: null, subtipo: null });
   if (m.tipo !== "impuestos_comisiones") return null;
@@ -174,6 +188,27 @@ export function clasificarLineaBanco(l: LineaBancoCont): LineaId | FueraId | nul
   if (/sircreb/i.test(m.categoria)) return "sircreb";
   if (/25\.413/.test(m.categoria)) return "ley_25413";
   return null;
+}
+
+/** Cargo del banco en el resumen de la Visa: IVA y percepciones (a cuenta, no es gasto), intereses o gasto del banco (sellos y otros). */
+export function claseCargoVisa(descripcion: string | null | undefined): "iva_percepcion" | "intereses" | "bancarios" {
+  const d = sinAcentos(descripcion);
+  if (/\biva\b|percep|imp(uesto)?\.? ?pais|\brg ?\d|ganancias|\biibb\b|ing(resos)?\.? ?brutos/.test(d)) return "iva_percepcion";
+  if (/interes|financ/.test(d)) return "intereses";
+  return "bancarios";
+}
+
+const diasEntre = (a: string, b: string) => Math.abs(Math.round((Date.parse(a) - Date.parse(b)) / 86_400_000));
+/** ¿Ya hay un gasto cargado con el mismo importe (±$ 1) y fecha cercana (25 días) en esos grupos? Así la Visa no se cuenta dos veces. */
+function yaEnGastos(gastos: GastoCont[], importe: number, fecha: string, grupos: string[]): boolean {
+  return gastos.some((g) => grupos.includes(grupoDe(g)) && Math.abs(num(g.monto) - importe) <= 1 && diasEntre(g.fecha, fecha) <= 25);
+}
+/** Importe en $ de un renglón de la Visa (US$ al dólar del día del consumo); null si falta el dólar. */
+function pesosVisa(c: ConsumoVisaCont, tcDia: TcDelDia): number | null {
+  const importe = num(c.importe);
+  if (String(c.moneda || "").toUpperCase() !== "USD") return importe;
+  const tc = tcDia(c.fecha);
+  return tc ? r2(importe * tc) : null;
 }
 
 /** Gasto fijo de sueldo ("Sueldo Augusto", "Sueldo Mariana Santinelli"…), para estimar el del mes mientras no se carga. */
@@ -206,6 +241,8 @@ export function estadoDeResultados(input: {
   tcDia: TcDelDia;
   iibbPct: number | null;
   estimados?: Record<string, EstimadoMes>;
+  /** Renglones del resumen de la Visa: los cargos del banco (intereses, sellos) son gasto si no están ya en Gastos. */
+  visa?: ConsumoVisaCont[];
 }): EstadoResultados {
   const { periodos, base, tcDia } = input;
   const enRango = new Set(periodos);
@@ -264,6 +301,19 @@ export function estadoDeResultados(input: {
     if (!destino) continue;
     const monto = l.tipo === "credito" ? num(l.monto) : -num(l.monto);
     sumar(destino, p, monto, { fecha: l.fecha, detalle: l.descripcion || "", monto, origen: "banco" });
+  }
+
+  // Cargos del banco en el resumen de la Visa (paso 3, punto 8): intereses e impuesto de sellos; el IVA y las percepciones no son
+  // gasto (van en la parte a del bloque informativo). Si ya están cargados en Gastos, no se suman otra vez.
+  for (const c of input.visa || []) {
+    const p = periodoDeFecha(c.fecha);
+    if (c.tipo !== "cargo" || !enRango.has(p)) continue;
+    const clase = claseCargoVisa(c.descripcion);
+    if (clase === "iva_percepcion") continue;
+    const monto = pesosVisa(c, tcDia);
+    if (monto === null) { avisos.push(`Cargo de la Visa en US$ sin cotización del día (no suma): ${c.descripcion} (${c.fecha}).`); continue; }
+    if (yaEnGastos(input.gastos, monto, c.fecha, ["Bancos y financieros"])) continue;
+    sumar(clase, p, -monto, { fecha: c.fecha, detalle: `Visa: ${c.descripcion}`, monto: -monto, origen: "banco" });
   }
 
   // Premios y comisión de José que corresponden al mes pero todavía no se cargaron (se cargan el mes siguiente).
@@ -333,6 +383,238 @@ export function estadoDeResultados(input: {
   };
 }
 
+// ── Bloque informativo en dos partes (Nati 02/11/2026; Augusto aprobó los 8 puntos el 03/11) ──────────────────────
+
+export const INFO_A: { id: InfoAId; nombre: string; que: string }[] = [
+  { id: "a_retiros", nombre: "Retiros de accionistas", que: "Gastos personales de Augusto, su plan de ARBA, el pago de la Mastercard y los consumos personales de la Visa" },
+  { id: "a_impuestos_pago", nombre: "Impuestos que son pago", que: "IVA, SICORE y anticipos de Ganancias (VEP). El IIBB no: su gasto ya es el % de las ventas" },
+  { id: "a_ley_25413", nombre: "Ley 25.413", que: "Débitos y créditos del banco: 100% a cuenta de Ganancias" },
+  { id: "a_sircreb", nombre: "SIRCREB", que: "Retenciones de IIBB del banco: a cuenta de IIBB" },
+  { id: "a_iva_banco", nombre: "IVA del banco", que: "IVA de las comisiones (crédito fiscal) y el IVA y las percepciones de la Visa" },
+  { id: "a_retenciones", nombre: "Retenciones que nos hicieron los clientes", que: "IVA, Ganancias, IIBB y SUSS: a cuenta de impuestos (plata que no entró)" },
+];
+export const INFO_B: { id: InfoBId; nombre: string; que: string; lado: "cobrar" | "pagar" }[] = [
+  { id: "b_ventas", nombre: "Ventas sin cobrar", que: "Facturas del mes que al cierre seguían sin cobrar, neto de IVA (como la línea Ventas)", lado: "cobrar" },
+  { id: "b_mercaderia", nombre: "Mercadería sin pagar", que: "Facturas de compra del mes sin pagar al cierre, neto. No es exactamente el costo de lo vendido: la diferencia es stock", lado: "pagar" },
+  { id: "b_transportes", nombre: "Transportes sin pagar", que: "Facturas de transporte del mes sin pagar al cierre, neto", lado: "pagar" },
+  { id: "b_sueldos", nombre: "Sueldos, premios y comisión sin pagar", que: "Los del mes que se pagan después: cargados con fecha posterior o estimados", lado: "pagar" },
+  { id: "b_otros", nombre: "Otros gastos del mes pagados después", que: "Gastos del mes cargados con fecha posterior al cierre (ej.: alquiler de octubre pagado en noviembre)", lado: "pagar" },
+  { id: "b_visa", nombre: "Consumos de la Visa del mes", que: "Se debitan con el resumen siguiente", lado: "pagar" },
+  { id: "b_iibb", nombre: "IIBB y tasas del mes", que: "El % de las ventas: se paga el 22 del mes siguiente", lado: "pagar" },
+  { id: "b_ganancias", nombre: "Ganancias del mes", que: "El 25 % del resultado: se paga en mayo", lado: "pagar" },
+];
+
+/** Factura de venta (o NC) con lo que hace falta para saber cuánto se debía al cierre de su mes. */
+export interface VentaCierre {
+  id: string; fecha: string; tipo: string | null; estado: string | null; comprobante: string; cliente: string;
+  total: number | string | null; subtotal: number | string | null; moneda: string | null; tipo_cambio: number | string | null;
+  total_acreditado?: number | string | null; factura_origen_id?: string | null;
+}
+/** Movimiento con factura (cobro o retención sufrida) y aplicación de un cobro consolidado, con su fecha. */
+export interface CobroCierre { id: string; factura_id: string | null; monto: number | string | null; moneda?: string | null; anulado?: boolean | null; fecha: string }
+export interface AplicacionCierre { movimiento_id: string | null; factura_id: string | null; monto: number | string | null; anulado?: boolean | null; fecha: string }
+/** Factura de compra del mes con sus pagos con fecha (directos, NC aplicadas y OP no anuladas). */
+export interface CompraCierre {
+  id: string; fecha: string; tipo: string | null; tipo_comprobante: string | null; estado: string | null; solo_iva?: boolean | null;
+  comprobante: string; proveedor: string; subtotal: number | string | null; total: number | string | null; moneda: string | null;
+  total_acreditado?: number | string | null; pagos: { fecha: string; monto: number }[];
+}
+/** Retención que nos hizo un cliente (movimientos retencion_iva / _ganancias / _iibb / _suss con cliente o factura). */
+export interface RetencionCont { fecha: string; tipo: string; monto: number | string | null; moneda: string | null; quien: string }
+
+export interface BloqueInformativo { a: FilaER[]; totalA: FilaER; b: FilaER[]; faltaCobrar: FilaER; faltaPagar: FilaER }
+
+const esNCVenta = (tipo: string | null | undefined) => String(tipo || "").toUpperCase().startsWith("NC");
+const esNCCompra = (tipo: string | null | undefined) => /^NC/i.test(String(tipo || "").trim());
+/** Último día que cuenta para "al cierre" de `p`: el último del mes; el mes en curso, hoy. */
+export function cierreDe(p: string, hoy: string): string {
+  const fin = new Date(Date.parse(`${sumarMeses(p, 1)}-01T12:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+  return hoy < fin ? hoy : fin;
+}
+
+/**
+ * Saldo de cada factura de venta al cierre `fin` (en su moneda), con la regla de las cuentas corrientes (lib/saldo-clientes):
+ * total − NC aplicadas hasta esa fecha (nunca más que su total_acreditado) − cobros y retenciones hasta esa fecha
+ * (un cobro con aplicaciones se cuenta por ellas). Anuladas y NC = 0.
+ */
+export function saldosVentaAlCierre(fin: string, ventas: VentaCierre[], cobros: CobroCierre[], aplicaciones: AplicacionCierre[]): Record<string, number> {
+  const monedaDe = new Map(ventas.map((f) => [f.id, String(f.moneda || "ARS").toUpperCase() === "USD" ? "USD" : "ARS"]));
+  const cobrado: Record<string, number> = {};
+  const aplicados = new Set<string>();
+  for (const a of aplicaciones) {
+    if (!a.factura_id || a.anulado || a.fecha > fin) continue;
+    if (a.movimiento_id) aplicados.add(a.movimiento_id);
+    cobrado[a.factura_id] = (cobrado[a.factura_id] || 0) + num(a.monto);
+  }
+  for (const m of cobros) {
+    if (!m.factura_id || m.anulado || m.fecha > fin || aplicados.has(m.id)) continue;
+    const mon = monedaDe.get(m.factura_id);
+    if (mon && m.moneda && (String(m.moneda).toUpperCase() === "USD" ? "USD" : "ARS") !== mon) continue;
+    cobrado[m.factura_id] = (cobrado[m.factura_id] || 0) + num(m.monto);
+  }
+  const nc: Record<string, number> = {};
+  for (const f of ventas) {
+    if (!esNCVenta(f.tipo) || f.estado === "anulada" || !f.factura_origen_id || f.fecha > fin) continue;
+    nc[f.factura_origen_id] = (nc[f.factura_origen_id] || 0) + num(f.total);
+  }
+  const out: Record<string, number> = {};
+  for (const f of ventas) {
+    if (f.estado === "anulada" || esNCVenta(f.tipo) || f.fecha > fin) continue;
+    const acreditado = Math.min(nc[f.id] || 0, num(f.total_acreditado));
+    out[f.id] = r2(Math.max(0, num(f.total) - acreditado - (cobrado[f.id] || 0)));
+  }
+  return out;
+}
+
+/** Saldo de una factura de compra al cierre: total − NC (total_acreditado) − pagos hasta esa fecha. "Pagada" sin pagos cargados = 0. */
+export function saldoCompraAlCierre(f: CompraCierre, fin: string): number {
+  if (f.estado === "anulada" || esNCCompra(f.tipo_comprobante) || f.solo_iva || f.tipo === "solo_iva" || f.fecha > fin) return 0;
+  if (f.estado === "pagada" && !f.pagos.length) return 0;
+  const pagado = f.pagos.filter((x) => x.fecha <= fin).reduce((s, x) => s + num(x.monto), 0);
+  return r2(Math.max(0, num(f.total) - num(f.total_acreditado) - pagado));
+}
+
+const IIBB_O_TASA = /\biibb\b|ingresos brutos|convenio multilateral|seguridad e higiene|\btasa\b/;
+
+/**
+ * Las dos partes del bloque informativo, para los meses del Estado de resultados `er`.
+ * a) Por el mes en que se movió la plata (fecha del gasto, de la línea del banco, de la retención o del vencimiento del resumen de
+ *    la Visa), con signo: + entró, − salió.
+ * b) Al cierre de cada mes (el mes en curso, a hoy), en positivo: lo que faltaba cobrar o pagar de las ventas y gastos de ese mes.
+ */
+export function bloqueInformativo(x: {
+  er: EstadoResultados; hoy: string; gastos: GastoCont[]; lineasBanco: LineaBancoCont[]; tcDia: TcDelDia;
+  tarjetasPersonales: Set<string>; visa?: ConsumoVisaCont[]; retenciones: RetencionCont[];
+  ventas: VentaCierre[]; cobros: CobroCierre[]; aplicaciones: AplicacionCierre[]; compras: CompraCierre[];
+}): BloqueInformativo {
+  const { er, tcDia } = x;
+  const periodos = er.periodos;
+  const enRango = new Set(periodos);
+  const nueva = (id: InfoAId | InfoBId, nombre: string, que: string): FilaER => ({
+    id, nombre, que, valores: Object.fromEntries(periodos.map((p) => [p, 0])), total: 0, detalle: Object.fromEntries(periodos.map((p) => [p, []])),
+  });
+  const filas = new Map<string, FilaER>();
+  for (const f of [...INFO_A, ...INFO_B]) filas.set(f.id, nueva(f.id, f.nombre, f.que));
+  const sumar = (id: InfoAId | InfoBId, p: string, monto: number, item: ItemDetalle) => {
+    if (!enRango.has(p) || !monto) return;
+    const f = filas.get(id)!;
+    f.valores[p] += monto;
+    f.detalle[p].push(item);
+  };
+  const pesos = (monto: number, moneda: string | null | undefined, fecha: string, tc?: number | string | null): number | null => {
+    if (String(moneda || "").toUpperCase() !== "USD") return monto;
+    const t = num(tc) || tcDia(fecha);
+    return t ? r2(monto * t) : null;
+  };
+
+  // ── a) Gastos que no son gasto, por su fecha ──
+  for (const g of x.gastos) {
+    const destino = clasificarGasto(g);
+    if (destino !== "retiros" && destino !== "impuestos_pago") continue;
+    const d = sinAcentos(g.descripcion);
+    if (destino === "impuestos_pago" && IIBB_O_TASA.test(d) && !/reten|percep|sircreb/.test(d)) continue; // punto 2: el IIBB ya es el %
+    const monto = pesos(num(g.monto), g.moneda, g.fecha);
+    if (monto === null) continue;
+    sumar(destino === "retiros" ? "a_retiros" : "a_impuestos_pago", periodoDeFecha(g.fecha), -monto, { fecha: g.fecha, detalle: g.descripcion || "", monto: -monto, origen: "gasto" });
+  }
+  // Líneas del banco: impuestos a cuenta y el pago de la tarjeta personal (si no está atado a un gasto ya contado).
+  for (const l of x.lineasBanco) {
+    const p = periodoDeFecha(l.fecha);
+    const monto = l.tipo === "credito" ? num(l.monto) : -num(l.monto);
+    const item: ItemDetalle = { fecha: l.fecha, detalle: l.descripcion || "", monto, origen: "banco" };
+    const personal = !l.match_movimiento_id && ((l.clasificacion === "tarjeta" && !!l.contra_cuenta_id && x.tarjetasPersonales.has(l.contra_cuenta_id)) || l.clasificacion === "personal");
+    if (personal) { sumar("a_retiros", p, monto, { ...item, detalle: `${item.detalle} (tarjeta o gasto personal)` }); continue; }
+    const destino = clasificarLineaBanco(l);
+    if (destino === "ley_25413") sumar("a_ley_25413", p, monto, item);
+    else if (destino === "sircreb") sumar("a_sircreb", p, monto, item);
+    else if (destino === "iva_banco") sumar("a_iva_banco", p, monto, item);
+  }
+  // Visa: consumos personales (retiro) e IVA y percepciones, en el mes del vencimiento de su resumen (cuando sale la plata).
+  for (const c of x.visa || []) {
+    const personal = c.tipo === "consumo" && c.clase === "personal";
+    const aCuenta = c.tipo === "cargo" && claseCargoVisa(c.descripcion) === "iva_percepcion";
+    if (!personal && !aCuenta) continue;
+    const monto = pesosVisa(c, tcDia);
+    if (monto === null) continue;
+    if (personal && yaEnGastos(x.gastos, monto, c.fecha, ["Personales"])) continue;
+    const fecha = c.vencimiento || c.fecha;
+    sumar(personal ? "a_retiros" : "a_iva_banco", periodoDeFecha(fecha), -monto, { fecha, detalle: `Visa: ${c.descripcion} (consumo del ${c.fecha.slice(8, 10)}/${c.fecha.slice(5, 7)})`, monto: -monto, origen: "banco" });
+  }
+  // Retenciones que nos hicieron los clientes (punto 3).
+  const IMP: Record<string, string> = { retencion_iva: "IVA", retencion_ganancias: "Ganancias", retencion_iibb: "IIBB", retencion_suss: "SUSS" };
+  for (const r of x.retenciones) {
+    const monto = pesos(num(r.monto), r.moneda, r.fecha);
+    if (monto === null) continue;
+    sumar("a_retenciones", periodoDeFecha(r.fecha), -monto, { fecha: r.fecha, detalle: `Retención ${IMP[r.tipo] || r.tipo} — ${r.quien}`, monto: -monto, origen: "banco" });
+  }
+
+  // ── b) Al cierre de cada mes ──
+  for (const p of periodos) {
+    const fin = cierreDe(p, x.hoy);
+    const delMes = (f: string) => periodoDeFecha(f) === p && f <= fin;
+    // Ventas sin cobrar (punto 4): el saldo de la factura en neto (subtotal/total), US$ al cambio de la factura.
+    const saldos = saldosVentaAlCierre(fin, x.ventas, x.cobros, x.aplicaciones);
+    for (const f of x.ventas) {
+      const s = saldos[f.id];
+      if (!s || !delMes(f.fecha) || !num(f.total)) continue;
+      const neto = pesos(s * num(f.subtotal) / num(f.total), f.moneda, f.fecha, f.tipo_cambio);
+      if (neto) sumar("b_ventas", p, r2(neto), { fecha: f.fecha, detalle: `${f.comprobante} — ${f.cliente}`, monto: r2(neto), origen: "factura" });
+    }
+    // Facturas de compra sin pagar (punto 5): mercadería y transportes, neto.
+    for (const f of x.compras) {
+      if (!delMes(f.fecha) || !num(f.total)) continue;
+      const s = saldoCompraAlCierre(f, fin);
+      const neto = s ? pesos(s * num(f.subtotal) / num(f.total), f.moneda, f.fecha) : null;
+      if (neto) sumar(f.tipo === "transporte" ? "b_transportes" : "b_mercaderia", p, r2(neto), { fecha: f.fecha, detalle: `${f.comprobante} — ${f.proveedor}`, monto: r2(neto), origen: "factura" });
+    }
+    // Gastos del mes cargados con fecha posterior al cierre.
+    for (const g of x.gastos) {
+      if (mesDevengado(g.descripcion, g.fecha) !== p || g.fecha <= fin) continue;
+      const destino = clasificarGasto(g);
+      if (FUERA.some((f) => f.id === destino)) continue;
+      const monto = pesos(num(g.monto), g.moneda, g.fecha);
+      if (!monto) continue;
+      const sueldo = destino === "colaboradores_lsj" || destino === "colaborador_m" || destino === "comisiones";
+      sumar(sueldo ? "b_sueldos" : "b_otros", p, monto, { fecha: g.fecha, detalle: `${g.descripcion || ""} (pagado el ${g.fecha.slice(8, 10)}/${g.fecha.slice(5, 7)})`, monto, origen: "gasto" });
+    }
+    // Sueldos, premios y comisión estimados (todavía no cargados): los mismos del resultado.
+    for (const id of ["colaboradores_lsj", "colaborador_m", "comisiones"] as LineaId[]) {
+      for (const d of er.lineas.find((l) => l.id === id)!.detalle[p]) if (d.origen === "estimado") sumar("b_sueldos", p, -d.monto, { ...d, monto: -d.monto });
+    }
+    // Visa (punto 7): consumos y cargos del mes que se debitan con un resumen que vence después del cierre.
+    for (const c of x.visa || []) {
+      if (!delMes(c.fecha) || (c.vencimiento && c.vencimiento <= fin)) continue;
+      if ((c.tipo === "consumo" && c.clase === "personal") || (c.tipo === "cargo" && claseCargoVisa(c.descripcion) === "iva_percepcion")) continue;
+      const monto = pesosVisa(c, tcDia);
+      if (monto) sumar("b_visa", p, monto, { fecha: c.fecha, detalle: `Visa: ${c.descripcion}${c.vencimiento ? ` (resumen que vence el ${c.vencimiento.slice(8, 10)}/${c.vencimiento.slice(5, 7)})` : ""}`, monto, origen: "banco" });
+    }
+    // IIBB y Ganancias del mes: nunca están pagados al cierre (se pagan el mes siguiente y en mayo).
+    const iibb = -(er.lineas.find((l) => l.id === "iibb")!.valores[p] || 0);
+    sumar("b_iibb", p, iibb, { fecha: `${p}-01`, detalle: "El % de las ventas del mes", monto: iibb, origen: "calculo" });
+    const gan = -(er.lineas.find((l) => l.id === "ganancias")!.valores[p] || 0);
+    sumar("b_ganancias", p, gan, { fecha: `${p}-01`, detalle: gan < 0 ? "El mes dio pérdida: descuenta" : "El 25 % del resultado del mes", monto: gan, origen: "calculo" });
+  }
+
+  const cerrar = (f: FilaER, acumula: boolean) => {
+    for (const p of periodos) f.valores[p] = r2(f.valores[p]);
+    f.total = acumula ? r2(periodos.reduce((s, p) => s + f.valores[p], 0)) : 0;
+    return f;
+  };
+  const a = INFO_A.map((f) => cerrar(filas.get(f.id)!, true));
+  const b = INFO_B.map((f) => cerrar(filas.get(f.id)!, false));
+  const suma = (id: InfoAId | InfoBId, nombre: string, que: string, de: FilaER[], acumula: boolean) => {
+    const f = nueva(id, nombre, que);
+    for (const p of periodos) f.valores[p] = de.reduce((s, x) => s + x.valores[p], 0);
+    return cerrar(f, acumula);
+  };
+  return {
+    a, b,
+    totalA: suma("a_total", "Total a)", "Lo que entró menos lo que salió que no es venta ni gasto", a, true),
+    faltaCobrar: suma("b_falta_cobrar", "Falta cobrar", "Ventas del mes sin cobrar al cierre", b.filter((f) => f.id === "b_ventas"), false),
+    faltaPagar: suma("b_falta_pagar", "Falta pagar", "Gastos del mes sin pagar al cierre", b.filter((f) => f.id !== "b_ventas"), false),
+  };
+}
+
 /** Meses desde enero del año de `hasta` hasta `hasta`, en orden. */
 export function mesesDelAnio(hasta: string): string[] {
   const out: string[] = [];
@@ -344,7 +626,7 @@ export function mesesDelAnio(hasta: string): string[] {
 export const pctSobreVentas = (valor: number, ventas: number): number | null => (ventas ? r2((valor / ventas) * 100) : null);
 
 /** Planilla para Excel: una fila por línea, una columna por mes + total + % sobre ventas. */
-export function planillaER(er: EstadoResultados, nombreMes: (p: string) => string): (string | number | null)[][] {
+export function planillaER(er: EstadoResultados, nombreMes: (p: string) => string, info?: BloqueInformativo): (string | number | null)[][] {
   const ventas = er.lineas.find((l) => l.id === "ventas")!.total;
   const fila = (f: FilaER, prefijo = "") => [prefijo + f.nombre, ...er.periodos.map((p) => f.valores[p]), f.total, pctSobreVentas(f.total, ventas)];
   const L = (id: LineaId) => er.lineas.find((l) => l.id === id)!;
@@ -361,6 +643,13 @@ export function planillaER(er: EstadoResultados, nombreMes: (p: string) => strin
     fila(L("ganancias")),
     fila(er.subtotales.neto),
     [],
-    ["Fuera del resultado (informativo)"], ...er.fuera.map((f) => fila(f, "  ")),
+    ...(info
+      ? [
+        ["Fuera del resultado (informativo)"],
+        ["a) Plata que entró o salió y no es venta ni gasto (mes en que se movió)"], ...info.a.map((f) => fila(f, "  ")), fila(info.totalA, "  "),
+        ["b) Ventas y gastos del mes todavía sin cobrar o pagar (al último día de cada mes)"],
+        ...[...info.b, info.faltaCobrar, info.faltaPagar].map((f) => ["  " + f.nombre, ...er.periodos.map((p) => f.valores[p]), null, null]),
+      ]
+      : [["Fuera del resultado (informativo)"], ...er.fuera.map((f) => fila(f, "  "))]),
   ];
 }

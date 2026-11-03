@@ -9,9 +9,9 @@ import { AlertTriangle, Download, Loader2 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
 import { useToast } from "@/components/ui/toast";
-import { formatCurrency, formatDate } from "@/lib/utils";
-import { LINEAS, estadoDeResultados, mesesDelAnio, pctSobreVentas, planillaER, type EstadoResultados, type FilaER, type LineaId } from "@/lib/contabilidad";
-import { CLAVE_CONTABILIDAD, traerDatosContabilidad } from "./datos";
+import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
+import { LINEAS, bloqueInformativo, estadoDeResultados, mesesDelAnio, pctSobreVentas, planillaER, type EstadoResultados, type FilaER, type LineaId } from "@/lib/contabilidad";
+import { CLAVE_CONTABILIDAD, traerDatosContabilidad, traerDatosInformativo } from "./datos";
 import { ContabilidadCashflow } from "./contabilidad-cashflow";
 
 const db = supabase as any;
@@ -47,6 +47,9 @@ function EstadoResultadosVista({ sociedadId, periodo }: { sociedadId: string; pe
   const esLazzari = sociedadActiva?.nombre === "Lazzari";
   const [datos, setDatos] = useState<Awaited<ReturnType<typeof traerDatosContabilidad>> | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Bloque informativo en dos partes (paso 3 de Nati): se carga aparte; si falla, el Estado de resultados se ve igual.
+  const [datosInfo, setDatosInfo] = useState<Awaited<ReturnType<typeof traerDatosInformativo>> | null>(null);
+  const [errorInfo, setErrorInfo] = useState(false);
   const [iibbTexto, setIibbTexto] = useState("");
   const [guardando, setGuardando] = useState(false);
   const [abierta, setAbierta] = useState<string | null>(null);
@@ -58,6 +61,10 @@ function EstadoResultadosVista({ sociedadId, periodo }: { sociedadId: string; pe
     traerDatosContabilidad(sociedadId, periodos, esLazzari)
       .then((d) => { if (!vivo) return; setDatos(d); setIibbTexto(d.iibbPct === null ? "" : String(d.iibbPct).replace(".", ",")); })
       .catch((e) => { console.error("Finanzas Lazza · Contabilidad:", e); if (vivo) setError("No se pudieron cargar los datos. Recargá la página."); });
+    setDatosInfo(null); setErrorInfo(false);
+    traerDatosInformativo(sociedadId, periodos)
+      .then((d) => { if (vivo) setDatosInfo(d); })
+      .catch((e) => { console.error("Finanzas Lazza · Contabilidad (informativo):", e); if (vivo) setErrorInfo(true); });
     return () => { vivo = false; };
   }, [sociedadId, periodos, esLazzari]);
 
@@ -76,6 +83,9 @@ function EstadoResultadosVista({ sociedadId, periodo }: { sociedadId: string; pe
     if (afuera) er.avisos.unshift(`Antes de ${mesCorto(periodos[desde])} no hay ventas en el CRM: no se muestran ${formatCurrency(Math.abs(afuera))} de gastos de esos meses (${antes.filter((p) => completo.lineas.some((l) => l.valores[p] !== 0)).map(mesCorto).join(", ")}).`);
     return er;
   }, [datos, periodos, pctIibb]);
+  const info = useMemo(() => (er && datos && datosInfo
+    ? bloqueInformativo({ er, hoy: todayAR(), gastos: datos.gastos, lineasBanco: datos.lineasBanco, tcDia: datos.tcDia, visa: datos.visa, ...datosInfo })
+    : null), [er, datos, datosInfo]);
 
   const guardarPct = async () => {
     if (pctIibb === null || !Number.isFinite(pctIibb) || pctIibb < 0 || pctIibb > 20) { toast.error("Poné un % entre 0 y 20 (por ejemplo 3,5)."); return; }
@@ -93,7 +103,7 @@ function EstadoResultadosVista({ sociedadId, periodo }: { sociedadId: string; pe
   const bajarExcel = async () => {
     if (!er) return;
     const XLSX: any = await import("xlsx");
-    const ws = XLSX.utils.aoa_to_sheet(planillaER(er, mesCorto));
+    const ws = XLSX.utils.aoa_to_sheet(planillaER(er, mesCorto, info ?? undefined));
     ws["!cols"] = [{ wch: 34 }, ...er.periodos.map(() => ({ wch: 14 })), { wch: 15 }, { wch: 10 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Estado de resultados");
@@ -106,29 +116,35 @@ function EstadoResultadosVista({ sociedadId, periodo }: { sociedadId: string; pe
   const ventasTotal = er.lineas.find((l) => l.id === "ventas")!.total;
   const L = (id: LineaId) => er.lineas.find((l) => l.id === id)!;
   const bloque = (b: string) => LINEAS.filter((l) => l.bloque === b).map((l) => L(l.id));
-  const filaAbierta = abierta ? [...er.lineas, ...er.fuera].find((f) => f.id === abierta) ?? null : null;
+  const filaAbierta = abierta ? [...er.lineas, ...(info ? [...info.a, ...info.b] : [])].find((f) => f.id === abierta) ?? null : null;
 
   const celda = (n: number, fuerte = false) => (
     <td className={`whitespace-nowrap py-1 pl-3 text-right font-mono ${fuerte ? "font-semibold" : ""} ${n < 0 ? "text-zinc-600 dark:text-zinc-300" : ""}`}>{n === 0 ? <span className="text-zinc-300 dark:text-zinc-600">—</span> : pesos(n)}</td>
   );
-  const fila = (f: FilaER, tipo: "linea" | "sub" | "fuera" = "linea") => {
-    const sub = tipo === "sub";
-    const color = sub ? (f.total >= 0 ? "text-emerald-700 dark:text-emerald-400" : "text-red-600") : "";
+  // "fuera": parte a) (suma en el acumulado); "foto": parte b) (al cierre de cada mes: el acumulado no tiene sentido).
+  const fila = (f: FilaER, tipo: "linea" | "sub" | "fuera" | "foto" | "subfuera" = "linea") => {
+    const sub = tipo === "sub" || tipo === "subfuera";
+    const color = tipo === "sub" ? (f.total >= 0 ? "text-emerald-700 dark:text-emerald-400" : "text-red-600") : "";
     const tocable = !sub;
+    const informativo = tipo === "fuera" || tipo === "foto" || tipo === "subfuera";
+    const sinAcumulado = tipo === "foto" || (tipo === "subfuera" && f.id.startsWith("b_"));
     return (
-      <tr key={f.id} className={`border-t border-zinc-100 dark:border-zinc-800 ${sub ? "bg-zinc-50 dark:bg-zinc-800/40" : ""} ${tipo === "fuera" ? "text-zinc-500" : ""} ${abierta === f.id ? "bg-orange-50 dark:bg-orange-950/20" : ""}`}>
-        <td className={`sticky left-0 z-10 bg-inherit py-1 pr-3 ${sub ? `font-semibold ${color}` : tipo === "linea" && f.id !== "ventas" ? "pl-3" : ""}`} title={f.que}>
+      <tr key={f.id} className={`border-t border-zinc-100 dark:border-zinc-800 ${sub ? "bg-zinc-50 dark:bg-zinc-800/40" : ""} ${tipo === "fuera" || tipo === "foto" ? "text-zinc-500" : ""} ${abierta === f.id ? "bg-orange-50 dark:bg-orange-950/20" : ""}`}>
+        <td className={`sticky left-0 z-10 bg-inherit py-1 pr-3 ${sub ? `font-semibold ${color}` : (tipo === "linea" && f.id !== "ventas") || tipo === "fuera" || tipo === "foto" ? "pl-3" : ""}`} title={f.que}>
           {tocable
             ? <button type="button" onClick={() => setAbierta(abierta === f.id ? null : f.id)} className="text-left hover:text-orange-600 hover:underline">{f.nombre}</button>
             : <span className={f.id === "ventas" ? "font-semibold" : ""}>{f.nombre}</span>}
           {f.id === "iibb" && er.faltaPctIibb && <span className="ml-1 text-[11px] text-amber-600">(falta el %)</span>}
         </td>
         {er.periodos.map((p) => <Fragment key={p}>{celda(f.valores[p], sub)}</Fragment>)}
-        <td className={`whitespace-nowrap border-l border-zinc-200 py-1 pl-3 text-right font-mono font-semibold dark:border-zinc-700 ${color}`}>{pesos(f.total)}</td>
-        <td className="whitespace-nowrap py-1 pl-3 text-right font-mono text-[11px] text-zinc-500">{tipo === "fuera" ? "" : pct(pctSobreVentas(f.total, ventasTotal))}</td>
+        <td className={`whitespace-nowrap border-l border-zinc-200 py-1 pl-3 text-right font-mono font-semibold dark:border-zinc-700 ${color}`}>{sinAcumulado ? "" : pesos(f.total)}</td>
+        <td className="whitespace-nowrap py-1 pl-3 text-right font-mono text-[11px] text-zinc-500">{informativo ? "" : pct(pctSobreVentas(f.total, ventasTotal))}</td>
       </tr>
     );
   };
+  const subtitulo = (t: string, aclara: string) => (
+    <tr key={t}><td colSpan={er.periodos.length + 3} className="sticky left-0 bg-white pt-1.5 pb-0.5 text-[11px] font-semibold text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">{t} <span className="font-normal text-zinc-400">({aclara})</span></td></tr>
+  );
   const titulo = (t: string) => (
     <tr key={t} className="border-t border-zinc-200 dark:border-zinc-700"><td colSpan={er.periodos.length + 3} className="sticky left-0 bg-white pt-2 pb-0.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-400 dark:bg-zinc-900">{t}</td></tr>
   );
@@ -184,7 +200,21 @@ function EstadoResultadosVista({ sociedadId, periodo }: { sociedadId: string; pe
             {fila(L("ganancias"))}
             {fila(er.subtotales.neto, "sub")}
             {titulo("Fuera del resultado (informativo)")}
-            {er.fuera.map((f) => fila(f, "fuera"))}
+            {info ? (
+              <>
+                {subtitulo("a) Plata que entró o salió y no es venta ni gasto", "por el mes en que se movió la plata; + entró, − salió")}
+                {info.a.map((f) => fila(f, "fuera"))}
+                {fila(info.totalA, "subfuera")}
+                {subtitulo("b) Ventas y gastos del mes que todavía no se cobraron o pagaron", `al último día de cada mes; ${mesCorto(er.periodos[er.periodos.length - 1])}, a hoy`)}
+                {info.b.map((f) => fila(f, "foto"))}
+                {fila(info.faltaCobrar, "subfuera")}
+                {fila(info.faltaPagar, "subfuera")}
+              </>
+            ) : (
+              <tr><td colSpan={er.periodos.length + 3} className="py-1 pl-3 text-[11px] text-zinc-400">
+                {errorInfo ? "No se pudo cargar esta parte. Recargá la página." : <span className="inline-flex items-center gap-1.5"><Loader2 className="h-3 w-3 animate-spin" /> Calculando lo que falta cobrar y pagar…</span>}
+              </td></tr>
+            )}
           </tbody>
         </table>
         <p className="mt-2 text-[11px] text-zinc-400">Tocá una línea para ver de dónde sale (Ventas y Costo de mercadería, factura por factura: el costo es solo el de compra de los artículos facturados, el de cada PR, sin el flete). Ganancias: 25 % del resultado de cada mes (si el mes da pérdida, descuenta). Ley 25.413: 100 % a cuenta de Ganancias, no es gasto.</p>

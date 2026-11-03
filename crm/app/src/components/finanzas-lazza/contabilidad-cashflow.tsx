@@ -8,12 +8,13 @@ import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Download, Loader2 } from "lucide-react";
 import { useUser } from "@/lib/auth-context";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
-import { DIA_IIBB, FILAS_CF, SEMANAS_PROYECTADAS, armarCashflow, flujo, fotoDelMes, otrasDisponibilidades, planillaCF, proyeccionCF, totalEntra, totalSale, type FilaCF, type ItemCF, type SemanaCF, type ValoresCF } from "@/lib/cashflow";
+import { DIA_IIBB, FILAS_CF, SEMANAS_PROYECTADAS, armarCashflow, flujo, fotoDelMes, iibbNeto, otrasDisponibilidades, planillaCF, proyeccionCF, totalEntra, totalSale, type FilaCF, type ItemCF, type SemanaCF, type ValoresCF } from "@/lib/cashflow";
 import { lunesDe, sumarDias } from "@/lib/caja-proyectada";
 import { guardarFotoCashflow, traerDatosCashflow } from "./datos";
 
 const pesos = (n: number) => new Intl.NumberFormat("es-AR", { maximumFractionDigits: 0 }).format(Math.round(n));
 const semanaCorta = (desde: string) => `${desde.slice(8, 10)}/${desde.slice(5, 7)}`;
+const mesCorto = (p: string) => `${["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"][Number(p.slice(5, 7)) - 1]} ${p.slice(2, 4)}`;
 const ORIGEN: Record<ItemCF["origen"], string> = { banco: "Banco", factura_venta: "Factura de venta", factura_compra: "Factura de compra", cheque_recibido: "Cheque en cartera", cheque_emitido: "Cheque propio", gasto_fijo: "Gasto fijo", premio: "Premio (estimado)", iibb: "IIBB y tasas (estimado)" };
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
 type Col = { s: SemanaCF; cual: "real" | "proy" };
@@ -124,9 +125,10 @@ export function ContabilidadCashflow({ sociedadId }: { sociedadId: string }) {
   const avisos: string[] = [...cf.avisos];
   if (!Object.keys(datos.cuentas).length) avisos.push(`${sociedadActiva?.nombre || "Esta sociedad"} no tiene cuentas de banco con extracto: no hay semanas reales ni saldo inicial, solo lo proyectado.`);
   if (p.vencidoSinCobrar.cantidad) avisos.push(`${p.vencidoSinCobrar.cantidad} factura${p.vencidoSinCobrar.cantidad === 1 ? "" : "s"} de venta vencida${p.vencidoSinCobrar.cantidad === 1 ? "" : "s"} sin cobrar por ${formatCurrency(p.vencidoSinCobrar.total)}: no se cuentan (no se sabe cuándo entran). Están en Cobrar.`);
-  if (p.chequesDeTerceros.cantidad) avisos.push(`${p.chequesDeTerceros.cantidad} cheque${p.chequesDeTerceros.cantidad === 1 ? "" : "s"} propio${p.chequesDeTerceros.cantidad === 1 ? "" : "s"} que cubre un tercero (${formatCurrency(p.chequesDeTerceros.total)}): no se restan.`);
   if (p.sinDolar.length) avisos.push(`Sin dólar del día, no se proyectan: ${p.sinDolar.join(", ")}.`);
-  avisos.push(`IIBB y tasas: el ${datos.iibb.pct} % de las ventas de cada mes, el ${DIA_IIBB} del mes siguiente (sábado o domingo, el lunes). El mes en curso va con lo facturado hasta hoy; el vencido no se cuenta.`);
+  avisos.push(`IIBB y tasas: el ${datos.iibb.pct} % de las ventas de cada mes menos el SIRCREB, las retenciones de IIBB y el saldo a favor (nunca menos de 0), el ${DIA_IIBB} del mes siguiente (sábado o domingo, el lunes). El mes en curso va con lo facturado hasta hoy; el vencido no se cuenta.`);
+  const iibbMeses = datos.iibb.pct > 0 ? iibbNeto(datos.iibb) : [];
+  const iibbUltimo = iibbMeses.length ? iibbMeses[iibbMeses.length - 1] : null;
   avisos.push("Todavía no se proyectan: IVA, SICORE y anticipos de Ganancias (VEP), la comisión de José y Ganancias (se paga en mayo 2027). En las semanas reales sí están, porque salen del banco.");
 
   return (
@@ -200,6 +202,13 @@ export function ContabilidadCashflow({ sociedadId }: { sociedadId: string }) {
               </span>
             ))}
             {" · "}<span className="font-semibold">Total ≈ $ {pesos(otras.total)}</span>
+          </p>
+        )}
+        {iibbUltimo && iibbUltimo.saldoAFavor > 0 && (
+          <p className="mt-1 text-[11px] text-zinc-600 dark:text-zinc-300"
+            title={iibbMeses.map((m) => `${mesCorto(m.mes)}: ${datos.iibb.pct} % $ ${pesos(m.bruto)} − SIRCREB $ ${pesos(m.sircreb)} − retenciones $ ${pesos(m.retenciones)} − saldo anterior $ ${pesos(m.saldoAnterior)}${m.pagado ? " (pagado)" : ""}`).join("\n")}>
+            <span className="font-semibold">Saldo a favor de IIBB</span> <span className="text-zinc-400">(estimado; no suma al saldo de arriba)</span>:{" "}
+            $ {pesos(iibbUltimo.saldoAFavor)} con lo de {mesCorto(iibbUltimo.mes)} ({datos.iibb.pct} % de las ventas menos SIRCREB y retenciones desde {mesCorto(iibbMeses[0].mes)})
           </p>
         )}
       </div>

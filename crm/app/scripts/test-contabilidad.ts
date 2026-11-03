@@ -1,6 +1,6 @@
 // Prueba de lib/contabilidad.ts (Estado de resultados por lo devengado) — npx tsx scripts/test-contabilidad.ts
 import assert from "node:assert/strict";
-import { IIBB_PCT_NATI, TASA_GANANCIAS, clasificarGasto, clasificarLineaBanco, estadoDeResultados, mesDevengado, mesesDelAnio, planillaER, sueldosPorCargar, type GastoCont, type LineaBancoCont } from "../src/lib/contabilidad";
+import { IIBB_PCT_NATI, TASA_GANANCIAS, bloqueInformativo, cierreDe, claseCargoVisa, clasificarGasto, clasificarLineaBanco, estadoDeResultados, saldoCompraAlCierre, saldosVentaAlCierre, type CompraCierre, type ConsumoVisaCont, type VentaCierre, mesDevengado, mesesDelAnio, planillaER, sueldosPorCargar, type GastoCont, type LineaBancoCont } from "../src/lib/contabilidad";
 
 // ── Mes devengado ──
 assert.equal(mesDevengado("Premio agosto — Mariana Santinelli", "2026-10-07"), "2026-08");
@@ -175,6 +175,95 @@ const planilla = planillaER(er, (p) => p);
 assert.deepEqual(planilla[0], ["Línea", "2026-09", "2026-10", "Acumulado", "% s/ventas"]);
 assert.deepEqual(planilla[1], ["Ventas", 10_000_000, 20_000_000, 30_000_000, 100]);
 assert.ok(planilla.some((f) => f[0] === "Resultado neto"));
+
+// ── Paso 3 de Nati: bloque informativo en dos partes (Augusto aprobó los 8 puntos el 03/11) ──
+// Punto 8: el impuesto de sellos del banco es gasto del banco; los cargos de la Visa (intereses, sellos) también, si no están en Gastos.
+assert.equal(clasificarLineaBanco(b("impuesto", "sellos", { fecha: "2026-10-05", monto: 1_000 })), "bancarios");
+assert.equal(claseCargoVisa("IVA RG 4240 21%"), "iva_percepcion");
+assert.equal(claseCargoVisa("PERCEPCION RG 5617 30%"), "iva_percepcion");
+assert.equal(claseCargoVisa("INTERESES FINANCIACION"), "intereses");
+assert.equal(claseCargoVisa("IMPUESTO DE SELLOS"), "bancarios");
+const visa: ConsumoVisaCont[] = [
+  { id: "v1", fecha: "2026-10-27", descripcion: "INTERESES FINANCIACION", importe: 5_000, moneda: "ARS", tipo: "cargo", clase: null, vencimiento: "2026-11-10" },
+  { id: "v2", fecha: "2026-10-27", descripcion: "IMPUESTO DE SELLOS", importe: 800, moneda: "ARS", tipo: "cargo", clase: null, vencimiento: "2026-11-10" },
+  { id: "v3", fecha: "2026-10-27", descripcion: "IVA RG 4240 21%", importe: 1_050, moneda: "ARS", tipo: "cargo", clase: null, vencimiento: "2026-11-10" },
+  { id: "v4", fecha: "2026-10-12", descripcion: "SUPERMERCADO", importe: 30_000, moneda: "ARS", tipo: "consumo", clase: "personal", vencimiento: "2026-11-10" },
+  { id: "v5", fecha: "2026-10-15", descripcion: "MERPAGO*FERRETERIA", importe: 12_000, moneda: "ARS", tipo: "consumo", clase: "compra", vencimiento: "2026-11-10" },
+  { id: "v6", fecha: "2026-09-20", descripcion: "SUPERMERCADO", importe: 7_000, moneda: "ARS", tipo: "consumo", clase: "personal", vencimiento: "2026-10-10" },
+];
+const gastosV: GastoCont[] = [{ id: "gv", fecha: "2026-10-28", descripcion: "Visa — sellos", categoria: "Bancarios", grupo: "Bancos y financieros", monto: 800, moneda: "ARS" }];
+const erV = estadoDeResultados({ periodos: ["2026-10"], base: { "2026-10": { ventas: 0, costo: 0, transportes: 0, avisosCosto: 0 } }, gastos: gastosV, lineasBanco: [], tcDia: () => null, iibbPct: 0, visa });
+assert.equal(erV.lineas.find((l) => l.id === "intereses")!.valores["2026-10"], -5_000, "intereses de la Visa al resultado");
+assert.equal(erV.lineas.find((l) => l.id === "bancarios")!.valores["2026-10"], -800, "los sellos ya estaban en Gastos: no se suman dos veces");
+
+// Al cierre: saldo de cada factura con los cobros hasta el último día del mes.
+assert.equal(cierreDe("2026-10", "2026-11-03"), "2026-10-31");
+assert.equal(cierreDe("2026-11", "2026-11-03"), "2026-11-03", "el mes en curso: a hoy");
+const ventasC: VentaCierre[] = [
+  { id: "f1", fecha: "2026-10-05", tipo: "FA", estado: "emitida", comprobante: "FA 0015-00000031", cliente: "Termo Córdoba", total: 1_210, subtotal: 1_000, moneda: "ARS", tipo_cambio: null, total_acreditado: 121 },
+  { id: "n1", fecha: "2026-11-02", tipo: "NCA", estado: "emitida", comprobante: "NC 0015-00000003", cliente: "Termo Córdoba", total: 121, subtotal: 100, moneda: "ARS", tipo_cambio: null, factura_origen_id: "f1" },
+  { id: "f2", fecha: "2026-10-20", tipo: "FA", estado: "emitida", comprobante: "FA 0015-00000032", cliente: "Corteva", total: 121, subtotal: 100, moneda: "USD", tipo_cambio: 1_500, total_acreditado: 0 },
+  { id: "f3", fecha: "2026-10-25", tipo: "FA", estado: "anulada", comprobante: "FA 0015-00000033", cliente: "X", total: 999, subtotal: 999, moneda: "ARS", tipo_cambio: null },
+];
+const cobrosC = [
+  { id: "m1", factura_id: "f1", monto: 605, moneda: "ARS", anulado: false, fecha: "2026-10-30" },
+  { id: "m2", factura_id: "f1", monto: 484, moneda: "ARS", anulado: false, fecha: "2026-11-02" },
+  { id: "m3", factura_id: "f2", monto: 121, moneda: "USD", anulado: true, fecha: "2026-10-28" },
+];
+assert.deepEqual(saldosVentaAlCierre("2026-10-31", ventasC, cobrosC, []), { f1: 605, f2: 121 }, "la NC y el cobro de noviembre no cuentan al 31/10; la anulada no");
+assert.deepEqual(saldosVentaAlCierre("2026-11-03", ventasC, cobrosC, []), { f1: 0, f2: 121 });
+assert.deepEqual(saldosVentaAlCierre("2026-10-31", ventasC, [{ ...cobrosC[0], id: "m9" }], [{ movimiento_id: "m9", factura_id: "f1", monto: 100, anulado: false, fecha: "2026-10-30" }]), { f1: 1_110, f2: 121 },
+  "un cobro con aplicaciones se cuenta por ellas");
+const compraC = (extra: Partial<CompraCierre>): CompraCierre => ({ id: "c", fecha: "2026-10-10", tipo: "mercaderia", tipo_comprobante: "FC A", estado: "pendiente", comprobante: "FC A 0001-00000010", proveedor: "Ombu", subtotal: 1_000, total: 1_210, moneda: "ARS", pagos: [], ...extra });
+assert.equal(saldoCompraAlCierre(compraC({ estado: "pagada", pagos: [{ fecha: "2026-11-05", monto: 1_210 }] }), "2026-10-31"), 1_210, "pagada en noviembre: al 31/10 se debía");
+assert.equal(saldoCompraAlCierre(compraC({ estado: "pagada" }), "2026-10-31"), 0, "pagada sin pagos cargados (otro medio): 0");
+assert.equal(saldoCompraAlCierre(compraC({ solo_iva: true }), "2026-10-31"), 0, "Solo IVA: no se paga");
+
+// El bloque completo.
+const gastosI: GastoCont[] = [
+  ...gastosV,
+  { id: "g1", fecha: "2026-10-21", descripcion: "ARCA VEP — IVA período 09/2026", categoria: "Impuestos", grupo: "Impuestos", monto: 1_500, moneda: "ARS" },
+  { id: "g2", fecha: "2026-10-22", descripcion: "IIBB Convenio Multilateral septiembre 2026", categoria: "Impuestos", grupo: "Impuestos", monto: 900, moneda: "ARS" },
+  { id: "g3", fecha: "2026-10-12", descripcion: "Seguro del auto — Federación Patronal", categoria: "Personales", grupo: "Personales", monto: 700, moneda: "ARS" },
+  { id: "g4", fecha: "2026-11-05", descripcion: "Alquiler — octubre 2026", categoria: "Local y servicios", grupo: "Local y servicios", monto: 2_000, moneda: "ARS" },
+  { id: "g5", fecha: "2026-11-10", descripcion: "Sueldo Mariana Santinelli — octubre 2026", categoria: "Sueldos", grupo: "Personal", monto: 1_500, moneda: "ARS" },
+];
+const lineasI = [
+  b("impuesto", "sircreb", { fecha: "2026-10-05", monto: 300 }),
+  b("tarjeta", null, { fecha: "2026-10-10", monto: 4_000, contra_cuenta_id: "MC" }),
+  b("tarjeta", null, { fecha: "2026-10-10", monto: 9_000, contra_cuenta_id: "VISA" }),
+];
+const erI = estadoDeResultados({
+  periodos: ["2026-10"], base: { "2026-10": { ventas: 10_000, costo: 6_000, transportes: 0, avisosCosto: 0 } }, tcDia: () => null, iibbPct: 6, visa,
+  gastos: gastosI, lineasBanco: lineasI, estimados: { "2026-10": { premios: [{ persona: "Jerónimo Casadidio", monto: 250 }], comisionJose: null } },
+});
+const info = bloqueInformativo({
+  er: erI, hoy: "2026-11-03", gastos: gastosI, lineasBanco: lineasI, tcDia: () => null, tarjetasPersonales: new Set(["MC"]), visa,
+  retenciones: [{ fecha: "2026-10-30", tipo: "retencion_iibb", monto: 60, moneda: "ARS", quien: "Corteva" }],
+  ventas: ventasC, cobros: cobrosC, aplicaciones: [],
+  compras: [compraC({}), compraC({ id: "t", tipo: "transporte", comprobante: "FC A 0002-00000020", proveedor: "Speed", subtotal: 100, total: 121 }), compraC({ id: "s", solo_iva: true })],
+});
+const A = (id: string) => info.a.find((f) => f.id === id)!.valores["2026-10"];
+const B = (id: string) => info.b.find((f) => f.id === id)!.valores["2026-10"];
+assert.equal(A("a_retiros"), -(700 + 4_000 + 7_000), "seguro del auto + pago de la Mastercard + consumo personal de la Visa que venció el 10/10 (el de octubre vence en noviembre)");
+assert.equal(A("a_impuestos_pago"), -1_500, "el VEP de IVA sí; el IIBB pagado no (punto 2)");
+assert.equal(A("a_sircreb"), -300);
+assert.equal(A("a_retenciones"), -60);
+assert.equal(A("a_iva_banco"), 0, "el IVA de la Visa de octubre sale en noviembre, con el resumen");
+assert.equal(info.totalA.valores["2026-10"], -(700 + 4_000 + 7_000 + 1_500 + 300 + 60));
+assert.equal(B("b_ventas"), 605 * 1_000 / 1_210 + 121 * 100 / 121 * 1_500, "neto al cambio de cada factura");
+assert.equal(B("b_mercaderia"), 1_000, "la de Solo IVA no");
+assert.equal(B("b_transportes"), 100);
+assert.equal(B("b_sueldos"), 1_500 + 250, "sueldo de octubre pagado el 10/11 + premio estimado");
+assert.equal(B("b_otros"), 2_000, "alquiler de octubre pagado el 05/11");
+assert.equal(B("b_visa"), 12_000 + 5_000 + 800, "consumo de la empresa, intereses y sellos (aunque estén en Gastos): se debitan el 10/11; ni el personal ni el IVA");
+assert.equal(B("b_iibb"), 600);
+assert.equal(B("b_ganancias"), -erI.lineas.find((l) => l.id === "ganancias")!.valores["2026-10"]);
+assert.equal(info.faltaCobrar.valores["2026-10"], B("b_ventas"));
+assert.equal(info.faltaPagar.total, 0, "la parte b) no acumula");
+const planI = planillaER(erI, (p) => p, info);
+assert.ok(planI.some((f) => f[0] === "  Ventas sin cobrar" && f[2] === null), "en el Excel, la parte b) sin acumulado");
+assert.ok(planI.some((f) => String(f[0]).startsWith("a) Plata que entró o salió")));
 
 assert.equal(IIBB_PCT_NATI, 6, "IIBB y Seguridad e Higiene: 6% de las ventas (Nati 29/10)");
 assert.equal(TASA_GANANCIAS, 0.25);

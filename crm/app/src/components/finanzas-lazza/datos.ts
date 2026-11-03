@@ -11,9 +11,9 @@ import { esNotaCredito, sumarMeses } from "@/lib/reportes-comprobantes";
 import { opsPorFactura, type OPResumen } from "@/lib/orden-pago-pdf";
 import { armarFilasFacturas, chequesSinAcreditarPorFactura, recibosPorFactura, type ComprobanteMes, type DocPago, type FilaFactura, type LadoFactura } from "@/lib/facturas-lazza";
 import { traerRecibos } from "./recibo-doc";
-import { DESDE_ESTIMADOS, IIBB_PCT_NATI, sueldosPorCargar, type SueldoFijo, type BaseMes, type EstimadoMes, type GastoCont, type LineaBancoCont } from "@/lib/contabilidad";
+import { DESDE_ESTIMADOS, IIBB_PCT_NATI, clasificarLineaBanco, sueldosPorCargar, type AplicacionCierre, type CobroCierre, type CompraCierre, type ConsumoVisaCont, type RetencionCont, type VentaCierre, type SueldoFijo, type BaseMes, type EstimadoMes, type GastoCont, type LineaBancoCont } from "@/lib/contabilidad";
 import { premiosPorCargar } from "@/lib/premios-lazza";
-import { claveFoto, vencimientoIibb, type ChequeCF, type DisponibilidadCF, type FijoCF, type FotoCF, type IibbCF, type LineaBancoCF, type PremioCF, type VencimientoCF } from "@/lib/cashflow";
+import { DESDE_IIBB_NETO, TARJETAS_PERSONALES, claveFoto, type ChequeCF, type DisponibilidadCF, type FijoCF, type FotoCF, type IibbCF, type LineaBancoCF, type PremioCF, type VencimientoCF } from "@/lib/cashflow";
 import { numerosDebitados } from "@/lib/cobertura-cheques";
 import { JOSE_ALVAREZ, comisionDelMes, detalleComision } from "@/lib/jose-alvarez";
 import type { Recibo } from "@/lib/recibos";
@@ -328,10 +328,16 @@ export async function traerDatosContabilidad(sociedadId: string, periodos: strin
     .filter((f) => f.moneda !== "USD").map((f) => ({ descripcion: String(f.descripcion || ""), monto: Number(f.monto) || 0 }));
   const ids: string[] = (cuentas.data || []).map((c: { id: string }) => c.id);
   const lineas = ids.length
-    ? await traerTodo<any>(() => db.from("extracto_movimientos").select("id, fecha, descripcion, monto, tipo, clasificacion, subtipo, match_movimiento_id, estado")
+    ? await traerTodo<any>(() => db.from("extracto_movimientos").select("id, fecha, descripcion, monto, tipo, clasificacion, subtipo, match_movimiento_id, estado, contra_cuenta_id")
         .in("cuenta_id", ids).gte("fecha", `${primero}-01`).lt("fecha", `${sumarMeses(ultimo, 1)}-01`).order("id"))
     : [];
   const dia = (f: unknown) => String(f).slice(0, 10);
+  // Renglones del resumen de la Visa (paso 3 de Nati): cargos del banco al resultado; consumos personales e IVA al bloque informativo.
+  // Si no se pueden leer (permisos o tabla), sin Visa: nunca frena.
+  const visa: ConsumoVisaCont[] = await traerTodo<any>(() => db.from("tarjeta_consumos")
+    .select("id, fecha, descripcion, importe, moneda, tipo, clase, tarjeta_resumenes(vencimiento)")
+    .eq("sociedad_id", sociedadId).gte("fecha", desdeGastos).lt("fecha", `${sumarMeses(ultimo, 1)}-01`).order("id"))
+    .then((rows) => rows.map((c) => ({ ...c, fecha: dia(c.fecha), vencimiento: c.tarjeta_resumenes?.vencimiento ? dia(c.tarjeta_resumenes.vencimiento) : null })), () => []);
   const gastos: GastoCont[] = gastosRaw.map((g) => ({ ...g, fecha: dia(g.fecha) }));
   const lineasBanco: LineaBancoCont[] = lineas.filter((l) => l.estado !== "ignorado").map((l) => ({ ...l, fecha: dia(l.fecha) }));
 
@@ -363,7 +369,60 @@ export async function traerDatosContabilidad(sociedadId: string, periodos: strin
     }
   }
   const pct = Number(config.data?.value?.iibbPct);
-  return { base, gastos, lineasBanco, tcDia, estimados, iibbPct: config.data?.value?.iibbPct === undefined || !Number.isFinite(pct) ? IIBB_PCT_NATI : pct };
+  return { base, gastos, lineasBanco, tcDia, estimados, visa, iibbPct: config.data?.value?.iibbPct === undefined || !Number.isFinite(pct) ? IIBB_PCT_NATI : pct };
+}
+
+/**
+ * Contabilidad → bloque informativo del Estado de resultados (paso 3 de Nati, 03/11/2026): retenciones que nos hicieron, y las
+ * facturas de venta y de compra de los meses con sus cobros y pagos con fecha (para saber cuánto se debía al cierre). Solo lee.
+ */
+export async function traerDatosInformativo(sociedadId: string, periodos: string[]) {
+  const desde = `${periodos[0]}-01`, hasta = `${sumarMeses(periodos[periodos.length - 1], 1)}-01`;
+  const dia = (f: unknown) => String(f).slice(0, 10);
+  const [ventasR, retR, comprasR] = await Promise.all([
+    traerTodo<any>(() => db.from("facturas").select("id, fecha, tipo, estado, moneda, subtotal, total, tipo_cambio, total_acreditado, factura_origen_id, punto_venta, numero, cae, clientes(razon_social)")
+      .eq("sociedad_id", sociedadId).gte("fecha", desde).lt("fecha", hasta).order("id")),
+    traerTodo<any>(() => db.from("movimientos").select("id, fecha, tipo, monto, moneda, anulado, cliente_id, factura_id, proveedor_id, clientes(razon_social)")
+      .eq("sociedad_id", sociedadId).in("tipo", ["retencion_iva", "retencion_ganancias", "retencion_iibb", "retencion_suss"]).eq("anulado", false)
+      .gte("fecha", desde).lt("fecha", hasta).order("id")),
+    traerTodo<any>(() => db.from("facturas_compra")
+      .select("id, fecha, tipo, tipo_comprobante, estado, solo_iva, numero_factura, subtotal, total, moneda, total_acreditado, proveedores(razon_social), op_facturas_compra(monto, ordenes_pago(estado, fecha))")
+      .eq("sociedad_id", sociedadId).gte("fecha", desde).lt("fecha", hasta).order("id")),
+  ]);
+  const ventas: VentaCierre[] = ventasR.map((f) => ({ ...f, fecha: dia(f.fecha), comprobante: comprobanteVenta(f), cliente: f.clientes?.razon_social ?? "" }));
+  const idsVenta = ventas.map((f) => f.id);
+  const cobros: CobroCierre[] = [], aplicaciones: AplicacionCierre[] = [];
+  for (const lote of trozos(idsVenta)) {
+    const [m, a] = await Promise.all([
+      db.from("movimientos").select("id, factura_id, monto, moneda, anulado, fecha").in("factura_id", lote),
+      db.from("cobro_aplicaciones").select("movimiento_id, factura_id, monto, movimientos(anulado, fecha)").in("factura_id", lote),
+    ]);
+    if (m.error) throw m.error;
+    if (a.error) throw a.error;
+    cobros.push(...(m.data || []).map((x: any) => ({ ...x, fecha: dia(x.fecha) })));
+    aplicaciones.push(...(a.data || []).map((x: any) => {
+      const mov = Array.isArray(x.movimientos) ? x.movimientos[0] : x.movimientos;
+      return { movimiento_id: x.movimiento_id, factura_id: x.factura_id, monto: x.monto, anulado: !!mov?.anulado, fecha: mov?.fecha ? dia(mov.fecha) : "9999-12-31" };
+    }));
+  }
+  const idsCompra = comprasR.map((f) => f.id);
+  const pagosDe = new Map<string, { fecha: string; monto: number }[]>();
+  for (const lote of trozos(idsCompra)) {
+    const { data, error } = await db.from("movimientos").select("factura_compra_id, monto, retencion_ganancias_monto, anulado, fecha").eq("tipo", "pago").in("factura_compra_id", lote);
+    if (error) throw error;
+    for (const x of data || []) {
+      if (x.anulado) continue;
+      pagosDe.set(x.factura_compra_id, [...(pagosDe.get(x.factura_compra_id) || []), { fecha: dia(x.fecha), monto: (Number(x.monto) || 0) + (Number(x.retencion_ganancias_monto) || 0) }]);
+    }
+  }
+  const compras: CompraCierre[] = comprasR.map((f) => ({
+    ...f, fecha: dia(f.fecha), comprobante: `${f.tipo_comprobante || "FC"} ${f.numero_factura || ""}`.trim(), proveedor: f.proveedores?.razon_social ?? "",
+    pagos: [...(pagosDe.get(f.id) || []), ...((f.op_facturas_compra || []) as any[]).filter((l) => l?.ordenes_pago && l.ordenes_pago.estado !== "anulada")
+      .map((l) => ({ fecha: dia(l.ordenes_pago.fecha), monto: Number(l.monto) || 0 }))],
+  }));
+  const retenciones: RetencionCont[] = retR.filter((r) => (r.cliente_id || r.factura_id) && !r.proveedor_id)
+    .map((r) => ({ fecha: dia(r.fecha), tipo: r.tipo, monto: r.monto, moneda: r.moneda, quien: r.clientes?.razon_social ?? "" }));
+  return { ventas, cobros, aplicaciones, compras, retenciones, tarjetasPersonales: TARJETAS_PERSONALES };
 }
 
 /**
@@ -434,19 +493,35 @@ export async function traerDatosCashflow(sociedadId: string, hoy: string, conPre
     activo: !!g.activo, diaVencimiento: g.dia_vencimiento, dolarReferencia: g.dolar_referencia === null ? null : Number(g.dolar_referencia), proveedorId: g.proveedor_id,
   }));
 
-  // IIBB y tasas (Augusto 29/10): % de las ventas del mes, el 22 del mes siguiente. El mes pasado solo si todavía no venció.
+  // IIBB y tasas (Augusto 29/10): % de las ventas del mes, el 22 del mes siguiente, menos SIRCREB, retenciones y saldo a favor
+  // (Nati). Todos los meses desde DESDE_IIBB_NETO, para arrastrar el saldo a favor; se proyectan solo los que no vencieron.
   const anterior = sumarMeses(mes, -1);
-  const mesesIibb = vencimientoIibb(anterior) >= hoy ? [anterior, mes] : [mes];
-  const [reportes, gastosDesde, configR] = await Promise.all([
+  const mesesIibb: string[] = [];
+  for (let p = DESDE_IIBB_NETO < anterior ? DESDE_IIBB_NETO : anterior; p <= mes; p = sumarMeses(p, 1)) mesesIibb.push(p);
+  const [reportes, gastosDesde, configR, retencionesR] = await Promise.all([
     Promise.all(mesesIibb.map(async (p) => ({ p, r: reporteBasico({ periodo: p, ...(await traerDatosReporte(sociedadId, p)) }) }))),
     traerTodo<{ descripcion: string | null; fecha: string }>(() => db.from("gastos_manuales").select("id, descripcion, fecha")
       .eq("sociedad_id", sociedadId).gte("fecha", `${mesesIibb[0]}-01`).order("id")),
     db.from("configuracion").select("value").eq("sociedad_id", sociedadId).eq("key", CLAVE_CONTABILIDAD).maybeSingle(),
+    // Retenciones de IIBB que nos hicieron los clientes (en $; las de cobros en US$ también se guardan en $).
+    traerTodo<{ fecha: string; monto: number | string | null; moneda: string | null }>(() => db.from("movimientos").select("id, fecha, monto, moneda")
+      .eq("sociedad_id", sociedadId).eq("tipo", "retencion_iibb").eq("anulado", false).gte("fecha", `${mesesIibb[0]}-01`).order("id")),
   ]);
+  const aCuenta: Record<string, { sircreb: number; retenciones: number }> = Object.fromEntries(mesesIibb.map((p) => [p, { sircreb: 0, retenciones: 0 }]));
+  // SIRCREB del banco neto de devoluciones, como la línea SIRCREB del Estado de resultados (sin las ignoradas en Bancos).
+  for (const l of crudas) {
+    const p = dia(l.fecha).slice(0, 7);
+    if (!aCuenta[p] || l.estado === "ignorado" || clasificarLineaBanco({ ...l, fecha: dia(l.fecha) }) !== "sircreb") continue;
+    aCuenta[p].sircreb += (l.tipo === "credito" ? -1 : 1) * Math.abs(Number(l.monto) || 0);
+  }
+  for (const r of retencionesR) {
+    const p = dia(r.fecha).slice(0, 7);
+    if (aCuenta[p] && r.moneda !== "USD") aCuenta[p].retenciones += Number(r.monto) || 0;
+  }
   const pct = Number(configR.data?.value?.iibbPct);
   const iibb: IibbCF = {
     pct: configR.data?.value?.iibbPct === undefined || !Number.isFinite(pct) ? IIBB_PCT_NATI : pct,
-    meses: reportes.map(({ p, r }) => ({ mes: p, ventas: r.facturado.neto })),
+    meses: reportes.map(({ p, r }) => ({ mes: p, ventas: r.facturado.neto, ...aCuenta[p] })),
     cargados: gastosDesde.map((g) => ({ descripcion: g.descripcion, fecha: dia(g.fecha) })),
   };
 

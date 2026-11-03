@@ -1,6 +1,7 @@
 // Prueba de lib/cashflow.ts (Cashflow semanal: real del banco + 12 semanas proyectadas) — npx tsx scripts/test-cashflow.ts
 import assert from "node:assert/strict";
-import { armarCashflow, cierreDelDia, filaDeGasto, filaDeLineaBanco, flujo, fotoDelMes, iibbCargado, otrasDisponibilidades, planillaCF, proyeccionCF, saldoAlArrancar, totalEntra, totalSale, vencimientoIibb, type LineaBancoCF } from "../src/lib/cashflow";
+import { armarCashflow, cierreDelDia, filaDeGasto, filaDeLineaBanco, flujo, fotoDelMes, iibbCargado, iibbNeto, otrasDisponibilidades, planillaCF, proyeccionCF, saldoAlArrancar, totalEntra, totalSale, vencimientoIibb, type ChequeCF, type LineaBancoCF } from "../src/lib/cashflow";
+import { totalACubrir } from "../src/lib/cheques-lazza";
 
 // ── A qué fila va cada cosa ──
 const gasto = (grupo: string, categoria: string, descripcion: string) => filaDeGasto({ grupo, categoria, descripcion });
@@ -50,6 +51,17 @@ assert.equal(cierreDelDia([linea("2026-10-13", -200, 9), linea("2026-10-13", 50,
 
 // ── Proyección (hoy jueves 29/10/2026) ──
 const HOY = "2026-10-29";
+const CHEQUES: ChequeCF[] = [
+  { numero: "90000200", direccion: "emitido", estado: "entregado", estadoBanco: "ACTIVO", fecha_pago: "2026-11-02", monto: 20_000, quien: "Ombu" },
+  { numero: "90000201", direccion: "emitido", estado: "entregado", estadoBanco: "ACTIVO", fecha_pago: "2026-11-03", monto: 7_000 },
+  { numero: "90000202", direccion: "emitido", estado: "entregado", estadoBanco: "PAGADO", fecha_pago: "2026-11-03", monto: 8_000 },
+  { numero: "90000203", direccion: "emitido", estado: "entregado", estadoBanco: "ACTIVO", fecha_pago: "2026-11-04", monto: 9_000, cubreTercero: "Martín Fernández" },
+  { numero: "90000205", direccion: "emitido", estado: "entregado", estadoBanco: "ACTIVO", fecha_pago: "2026-10-27", monto: 3_000 },
+  { numero: "90000206", direccion: "emitido", estado: "entregado", estadoBanco: "ACTIVO", fecha_pago: "2026-09-20", monto: 4_000 },
+  { numero: "90000204", direccion: "emitido", estado: "cobrado", estadoBanco: "PAGADO", fecha_pago: "2026-11-04", monto: 1_000 },
+  { numero: "62245658", direccion: "recibido", estado: "en_cartera", fecha_pago: "2026-10-27", monto: 40_000, quien: "Racing" },
+  { numero: "62245659", direccion: "recibido", estado: "endosado", fecha_pago: "2026-11-27", monto: 40_000 },
+];
 const p = proyeccionCF({
   hoy: HOY, hasta: "2027-01-17", dolar: 1000,
   vencimientos: [
@@ -59,16 +71,7 @@ const p = proyeccionCF({
     { lado: "compra", vence: "2026-10-15", saldo: 30_000, moneda: "ARS", comprobante: "FC 1-2", nombre: "Proveedor viejo" },
     { lado: "compra", vence: "2027-02-01", saldo: 99_000, moneda: "ARS", comprobante: "FC 1-3", nombre: "Muy lejos" },
   ],
-  cheques: [
-    { numero: "90000200", direccion: "emitido", estado: "entregado", estadoBanco: "ACTIVO", fecha_pago: "2026-11-02", monto: 20_000, quien: "Ombu" },
-    { numero: "90000201", direccion: "emitido", estado: "entregado", estadoBanco: "ACTIVO", fecha_pago: "2026-11-03", monto: 7_000 },
-    { numero: "90000202", direccion: "emitido", estado: "entregado", estadoBanco: "PAGADO", fecha_pago: "2026-11-03", monto: 8_000 },
-    { numero: "90000203", direccion: "emitido", estado: "entregado", estadoBanco: "ACTIVO", fecha_pago: "2026-11-04", monto: 9_000, cubreTercero: "Martín Fernández" },
-    { numero: "90000205", direccion: "emitido", estado: "entregado", estadoBanco: "ACTIVO", fecha_pago: "2026-10-27", monto: 3_000 },
-    { numero: "90000204", direccion: "emitido", estado: "cobrado", estadoBanco: "PAGADO", fecha_pago: "2026-11-04", monto: 1_000 },
-    { numero: "62245658", direccion: "recibido", estado: "en_cartera", fecha_pago: "2026-10-27", monto: 40_000, quien: "Racing" },
-    { numero: "62245659", direccion: "recibido", estado: "endosado", fecha_pago: "2026-11-27", monto: 40_000 },
-  ],
+  cheques: CHEQUES,
   debitados: new Set(["90000201"]),
   fijos: [
     { id: "f1", descripcion: "Sueldo Sebastián Pereyra", grupo: "Personal", categoria: "Sueldos", monto: 1_500_000, moneda: "ARS", activo: true, diaVencimiento: null },
@@ -87,7 +90,12 @@ assert.equal(de("Muy lejos").length, 0, "después de la semana 12 no entra");
 assert.deepEqual(de("Cheque 90000200").map((i) => [i.fecha, i.monto, i.fila]), [["2026-11-02", -20_000, "proveedores"]]);
 assert.equal(de("Cheque 90000201").length + de("Cheque 90000202").length + de("Cheque 90000204").length, 0, "debitados, pagados o cobrados no salen otra vez");
 assert.deepEqual(de("Cheque 90000205").map((i) => [i.fecha, i.monto, i.atrasado]), [[HOY, -3_000, undefined]], "cheque sin debitar: se cuenta hoy, pero no está atrasado (30 días)");
-assert.deepEqual(p.chequesDeTerceros, { total: 9_000, cantidad: 1 });
+assert.deepEqual(de("Cheque 90000203").map((i) => [i.fecha, i.monto, i.detalle]), [["2026-11-04", -9_000, "Cheque 90000203 (lo cubre Martín Fernández)"]],
+  "P07: los que cubre Martín F. suman en a cubrir (Augusto)");
+assert.equal("chequesDeTerceros" in p, false, "ya no se avisan aparte");
+assert.equal(de("Cheque 90000206").length, 0, "P07: más de 30 días de la fecha de pago: venció, no se cubre");
+assert.equal(-p.items.filter((i) => i.origen === "cheque_emitido").reduce((t, i) => t + i.monto, 0),
+  totalACubrir(CHEQUES, HOY, "2027-01-17", new Set(["90000201"])).ARS, "P07: el Cashflow da lo mismo que el total a cubrir de Inicio y Finanzas");
 assert.deepEqual(de("Cheque 62245658").map((i) => [i.fecha, i.monto, i.fila]), [[HOY, 40_000, "cobros"]], "en cartera ya en fecha: se deposita hoy");
 assert.equal(de("Cheque 62245659").length, 0, "endosado: ya no está");
 assert.deepEqual(de("Sueldo Sebastián").map((i) => [i.fecha, i.monto, i.fila]),
@@ -116,6 +124,24 @@ assert.deepEqual(ii.map((i) => [i.fecha, i.monto, i.fila, i.origen]), [["2026-11
 assert.match(ii[0].detalle, /IIBB y tasas octubre — 6 % de las ventas \(\$ 100\.000\.000, lo facturado hasta hoy\) \(estimado\)/);
 assert.deepEqual(conIibb("2026-11-05", [{ mes: "2026-10", ventas: 100_000_000 }]).map((i) => i.detalle.includes("hasta hoy")), [false], "octubre cerrado");
 assert.equal(conIibb("2026-11-05", [{ mes: "2026-10", ventas: 100_000_000 }], [{ descripcion: "IIBB Convenio Multilateral octubre 2026", fecha: "2026-11-18" }]).length, 0, "ya cargado en Gastos");
+
+// ── IIBB neto (Nati): % de las ventas − SIRCREB − retenciones − saldo a favor, nunca menos de 0 ──
+// Como septiembre 2026 de Lazzari: el SIRCREB (9,6 M) y las retenciones (1,3 M) pasan el 6 %: no se pagó IIBB en octubre.
+const netoMeses = [
+  { mes: "2026-09", ventas: 50_000_000, sircreb: 9_600_000, retenciones: 1_300_000 },
+  { mes: "2026-10", ventas: 100_000_000, sircreb: 3_200_000, retenciones: 700_000 },
+  { mes: "2026-11", ventas: 150_000_000, sircreb: 1_000_000, retenciones: 0 },
+];
+assert.deepEqual(iibbNeto({ pct: 6, meses: netoMeses, cargados: [] }).map((m) => [m.mes, m.bruto, m.saldoAnterior, m.aPagar, m.saldoAFavor]), [
+  ["2026-09", 3_000_000, 0, 0, 7_900_000],
+  ["2026-10", 6_000_000, 7_900_000, 0, 5_800_000],
+  ["2026-11", 9_000_000, 5_800_000, 2_200_000, 0],
+]);
+assert.deepEqual(iibbNeto({ pct: 6, meses: netoMeses, cargados: [{ descripcion: "IIBB Convenio Multilateral octubre 2026", fecha: "2026-11-23" }] }).map((m) => [m.mes, m.pagado, m.saldoAFavor, m.aPagar]),
+  [["2026-09", false, 7_900_000, 0], ["2026-10", true, 0, 0], ["2026-11", false, 0, 8_000_000]], "un mes pagado deja el saldo a favor en 0");
+const neto = proyeccionCF({ hoy: "2026-11-05", hasta: "2027-01-24", dolar: 1000, vencimientos: [], cheques: [], fijos: [], pagosFijos: [], iibb: { pct: 6, meses: netoMeses, cargados: [] } }).items;
+assert.deepEqual(neto.map((i) => [i.fecha, i.monto]), [["2026-12-22", -2_200_000]], "octubre cubierto por el saldo a favor: no sale nada el 23/11");
+assert.match(neto[0].detalle, /IIBB y tasas noviembre — 6 % de las ventas \(\$ 150\.000\.000, lo facturado hasta hoy\) menos SIRCREB \$ 1\.000\.000, saldo a favor \$ 5\.800\.000 \(estimado\)/);
 assert.deepEqual(proyeccionCF({ hoy: HOY, hasta: "2026-11-30", dolar: null, vencimientos: [{ lado: "venta", vence: "2026-11-20", saldo: 5, moneda: "USD", comprobante: "FA 1", nombre: "X" }], cheques: [], fijos: [], pagosFijos: [] }).sinDolar, ["FA 1 — X (US$ 5)"]);
 
 // ── Semanas ──
