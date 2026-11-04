@@ -18,13 +18,15 @@ import { useToast } from "@/components/ui/toast";
 import { Select } from "@/components/ui/input";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import {
-  GRUPOS, GRUPOS_EDITABLES, MEDIOS, nombreGrupo, armarFilasGastos, filasDeTransportes, etiquetaMedio, filtrarGastos, fijosCubiertos, fijosSinCargar, gastoParecido, grupoDe, mesDelDetalleFijo, numeroVep, totalesPorGrupo, yaEstaEnBancoOVisa,
-  type FacturaTransporteRow, type FijoRow, type FilaGasto, type GastoRow, type Grupo,
+  MEDIOS, armarFilasGastos, filasDeTransportes, etiquetaMedio, filtrarGastos, fijosCubiertos, fijosSinCargar, gastoParecido, grupoDe, mesDelDetalleFijo, numeroVep, totalesPorGrupo, yaEstaEnBancoOVisa,
+  type FacturaTransporteRow, type FijoRow, type FilaGasto, type GastoRow,
 } from "@/lib/gastos-lazza";
+import { clavesExtra, gruposElegibles, nombreDeGrupo, type GrupoGasto } from "@/lib/gastos-grupos";
+import { EditarPestanas } from "./gastos-pestanas";
 import { montoSicore, sugerirGastoFijo } from "@/lib/gasto-fijo-factura";
 import { gastoConVep, type DatosVep } from "@/lib/vep";
 import { sumarMeses } from "@/lib/reportes-comprobantes";
-import { rangoMes } from "./datos";
+import { rangoMes, traerGruposGastos } from "./datos";
 import { linkArchivo } from "@/lib/archivo-link";
 import { PremiosCarga } from "./premios";
 import { PagoJose } from "./pago-jose";
@@ -33,9 +35,7 @@ const db = supabase as any;
 const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 const control = "h-8 rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
 const sel = "!h-8 !py-0 !px-2 text-sm";
-const opcionesGrupo = GRUPOS.map((g) => ({ value: g, label: nombreGrupo(g) }));
-// En la ventana del gasto no se elige Transportes: esas filas son facturas de transporte (se manejan en Transportes y en Pagar).
-const opcionesGrupoEditable = GRUPOS_EDITABLES.map((g) => ({ value: g, label: nombreGrupo(g) }));
+type Opcion = { value: string; label: string };
 type ColOrden = "fecha" | "grupo" | "detalle" | "tipo" | "pago" | "monto";
 const COLUMNAS: { col: ColOrden; label: string }[] = [
   { col: "fecha", label: "Fecha" }, { col: "grupo", label: "Grupo" }, { col: "detalle", label: "Detalle" },
@@ -46,7 +46,7 @@ const faltaFuncion = (e: any) => e && (e.code === "PGRST202" || e.code === "4288
 const plata = (m: { ARS: number; USD: number }) => [m.ARS > 0.005 || !m.USD ? formatCurrency(m.ARS) : "", m.USD > 0.005 ? formatCurrency(m.USD, "USD") : ""].filter(Boolean).join(" + ");
 
 // archivo y nota: el VEP leído por la IA (se adjunta y su vencimiento/organismo va a las notas al guardar).
-interface Borrador { id: string | null; fecha: string; grupo: Grupo; detalle: string; fijo: boolean; medio: string; monto: string; moneda: "ARS" | "USD"; fijoId: string | null; archivo?: File | null; nota?: string }
+interface Borrador { id: string | null; fecha: string; grupo: string; detalle: string; fijo: boolean; medio: string; monto: string; moneda: "ARS" | "USD"; fijoId: string | null; archivo?: File | null; nota?: string }
 interface PagoGasto { id: string; gasto_manual_id: string; monto: number; conciliado: boolean; cruzado: boolean }
 interface Sicore { mes: string; monto: number }
 /** Factura de compra del proveedor de un gasto fijo (para "cubierto por la factura"). */
@@ -69,7 +69,10 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
   const [borrador, setBorrador] = useState<Borrador | null>(null);
   const [guardando, setGuardando] = useState(false);
   const [verFijos, setVerFijos] = useState(false);
-  const [grupo, setGrupo] = useState<"" | Grupo>("");
+  const [grupo, setGrupo] = useState("");
+  // Pestañas (03/11/2026): nombre, orden, línea y ocultas, de la tabla gastos_grupos (sin la tabla, las 9 de siempre).
+  const [grupos, setGrupos] = useState<GrupoGasto[]>([]);
+  const [verPestanas, setVerPestanas] = useState(false);
   const [tipo, setTipo] = useState<"" | "fijo" | "eventual">("");
   const [soloDebito, setSoloDebito] = useState(false);
   const [texto, setTexto] = useState("");
@@ -93,7 +96,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
       }
       const { desde, hasta } = rangoMes(periodo);
       const anterior = rangoMes(sumarMeses(periodo, -1));
-      const [gs, fs, ops, directos, trs] = await Promise.all([
+      const [gs, fs, ops, directos, trs, gr] = await Promise.all([
         traerTodo<GastoRow>(() => db.from("gastos_manuales").select("*").eq("sociedad_id", sociedadId).gte("fecha", desde).lt("fecha", hasta).order("id")),
         traerTodo<FijoRow>(() => db.from("gastos_fijos").select("*").eq("sociedad_id", sociedadId).order("id")),
         // Fijo "SICORE auto": retenciones de Ganancias del mes anterior, OP y pagos directos (como el TXT SICORE).
@@ -101,6 +104,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
         traerTodo<any>(() => db.from("movimientos").select("id, fecha, anulado, retencion_ganancias_monto").eq("sociedad_id", sociedadId).eq("tipo", "pago").gte("fecha", anterior.desde).lt("fecha", anterior.hasta).gt("retencion_ganancias_monto", 0).order("id")),
         // Grupo Transportes: las facturas de transporte del mes (solo se muestran; se pagan con OP).
         traerTodo<any>(() => db.from("facturas_compra").select("id, fecha, numero_factura, total, moneda, estado, archivo_url, proveedores(razon_social)").eq("sociedad_id", sociedadId).eq("tipo", "transporte").neq("estado", "anulada").gte("fecha", desde).lt("fecha", hasta).order("id")),
+        traerGruposGastos(sociedadId),
       ]);
       // Fijos con proveedor (auditoría D4): si su factura del mes ya está en Compras, el fijo queda "cubierto por la factura".
       const provs = [...new Set(fs.filter((f) => f.activo !== false && f.proveedor_id).map((f) => f.proveedor_id as string))];
@@ -122,6 +126,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
         for (const p of ps) if (cruz.has(p.id)) p.cruzado = true;
       }
       if (!vivo) return;
+      setGrupos(gr);
       setTransportes(trs.map((f: any) => ({ ...f, proveedor: f.proveedores?.razon_social ?? null })));
       setFacturasFijos(fcs);
       setGastos(gs); setFijos(fs); setPagos(ps); setSicore(montoSicore(retenciones, `${periodo}-01`));
@@ -130,8 +135,10 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
   }, [sociedadId, periodo, esMesActual, recarga]);
 
   const recargar = () => setRecarga((n) => n + 1);
-  const filas = useMemo(() => [...armarFilasGastos(gastos || [], fijos), ...filasDeTransportes(transportes)]
-    .sort((a, b) => b.fecha.localeCompare(a.fecha) || a.grupo.localeCompare(b.grupo) || a.detalle.localeCompare(b.detalle)), [gastos, fijos, transportes]);
+  const extras = useMemo(() => clavesExtra(grupos), [grupos]);
+  const nombreGrupo = useCallback((c: string | null | undefined) => nombreDeGrupo(grupos, c), [grupos]);
+  const filas = useMemo(() => [...armarFilasGastos(gastos || [], fijos, extras), ...filasDeTransportes(transportes)]
+    .sort((a, b) => b.fecha.localeCompare(a.fecha) || a.grupo.localeCompare(b.grupo) || a.detalle.localeCompare(b.detalle)), [gastos, fijos, transportes, extras]);
   const visibles = useMemo(() => {
     const base = filtrarGastos(filas, { grupo, tipo, soloDebito, texto }).filter((x) => !moneda || x.moneda === moneda);
     const clave = (x: (typeof base)[number]): string | number => {
@@ -149,10 +156,15 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
       const c = typeof ka === "number" && typeof kb === "number" ? ka - kb : String(ka).localeCompare(String(kb), "es");
       return c * orden.dir || String(a.fecha).localeCompare(String(b.fecha)) * -1;
     });
-  }, [filas, grupo, tipo, soloDebito, texto, moneda, orden]);
-  const totales = useMemo(() => totalesPorGrupo(filas), [filas]);
+  }, [filas, grupo, tipo, soloDebito, texto, moneda, orden, nombreGrupo]);
+  // Una pestaña oculta no se muestra salvo que tenga gastos en el mes (siguen sumando).
+  const todosTotales = useMemo(() => totalesPorGrupo(filas, grupos.length ? grupos.map((g) => g.clave) : undefined), [filas, grupos]);
+  const totales = useMemo(() => todosTotales.filter((t) => t.n > 0 || !grupos.find((g) => g.clave === t.grupo)?.oculto), [todosTotales, grupos]);
+  const opcionesGrupo: Opcion[] = useMemo(() => totales.map((t) => ({ value: t.grupo, label: nombreGrupo(t.grupo) })), [totales, nombreGrupo]);
+  // En la ventana del gasto no se elige Transportes: esas filas son facturas de transporte (se manejan en Transportes y en Pagar).
+  const opcionesEditable = useCallback((actual?: string | null): Opcion[] => gruposElegibles(grupos.length ? grupos : [], actual).map((g) => ({ value: g.clave, label: g.nombre })), [grupos]);
   const totalVisible = useMemo(() => ({ ARS: visibles.filter((x) => x.moneda === "ARS").reduce((s, x) => s + x.monto, 0), USD: visibles.filter((x) => x.moneda === "USD").reduce((s, x) => s + x.monto, 0) }), [visibles]);
-  const pendientes = useMemo(() => fijosSinCargar(fijos, gastos || [], periodo), [fijos, gastos, periodo]);
+  const pendientes = useMemo(() => fijosSinCargar(fijos, gastos || [], periodo, extras), [fijos, gastos, periodo, extras]);
   const cubiertos = useMemo(() => fijosCubiertos(pendientes, facturasFijos), [pendientes, facturasFijos]);
   const pagosDe = useCallback((gastoId: string) => pagos.filter((p) => p.gasto_manual_id === gastoId), [pagos]);
   /** Monto con que se carga el fijo: el "SICORE auto" toma las retenciones del mes anterior; los demás, su monto. */
@@ -333,7 +345,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
         ))}
         <div className="rounded-lg border border-zinc-300 bg-zinc-50 px-2 py-1.5 dark:border-zinc-600 dark:bg-zinc-800">
           <span className="block text-[11px] text-zinc-500">Total {nombreMes}</span>
-          <span className="block truncate font-mono text-xs font-bold text-zinc-900 dark:text-white">{plata({ ARS: totales.reduce((s, t) => s + t.ARS, 0), USD: totales.reduce((s, t) => s + t.USD, 0) })}</span>
+          <span className="block truncate font-mono text-xs font-bold text-zinc-900 dark:text-white">{plata({ ARS: todosTotales.reduce((s, t) => s + t.ARS, 0), USD: todosTotales.reduce((s, t) => s + t.USD, 0) })}</span>
         </div>
       </div>
 
@@ -344,14 +356,17 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
           <Search className="absolute left-2.5 top-2 h-4 w-4 text-zinc-400" />
           <input value={texto} onChange={(e) => setTexto(e.target.value)} placeholder="Buscar detalle" className={`${control} w-full pl-8`} />
         </div>
-        <div className="w-44"><Select value={grupo} onChange={(e) => setGrupo(e.target.value as "" | Grupo)} options={opcionesGrupo} placeholder="Todos los grupos" className={sel} /></div>
+        <div className="w-44"><Select value={grupo} onChange={(e) => setGrupo(e.target.value)} options={opcionesGrupo} placeholder="Todos los grupos" className={sel} /></div>
         <div className="w-36"><Select value={tipo} onChange={(e) => setTipo(e.target.value as typeof tipo)} options={[{ value: "fijo", label: "Fijos" }, { value: "eventual", label: "Eventuales" }]} placeholder="Fijos y eventuales" className={sel} /></div>
         <div className="w-44"><Select value={moneda} onChange={(e) => setMoneda(e.target.value as typeof moneda)} options={[{ value: "ARS", label: "Pesos ($)" }, { value: "USD", label: "Dólares (US$)" }]} placeholder="Todas las monedas" className={sel} /></div>
         <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-300"><input type="checkbox" checked={soloDebito} onChange={(e) => setSoloDebito(e.target.checked)} className="h-4 w-4 accent-orange-500" /> Solo 🔁</label>
         <button type="button" onClick={() => setVerFijos((v) => !v)} className="text-xs text-orange-600 hover:underline">{verFijos ? "Ocultar gastos fijos" : "Editar gastos fijos"}</button>
+        <button type="button" onClick={() => setVerPestanas((v) => !v)} className="text-xs text-orange-600 hover:underline">{verPestanas ? "Cerrar pestañas" : "Editar pestañas"}</button>
       </div>
 
-      {borrador && !borrador.id && <Editor b={borrador} cambiar={setBorrador} guardar={guardar} cancelar={() => setBorrador(null)} guardando={guardando} titulo={borrador.fijoId ? "Cargar gasto fijo" : "Nuevo gasto"} fijos={fijos} />}
+      {verPestanas && <EditarPestanas grupos={grupos} sociedadId={sociedadId} onCambio={recargar} onCerrar={() => setVerPestanas(false)} />}
+
+      {borrador && !borrador.id && <Editor b={borrador} cambiar={setBorrador} guardar={guardar} cancelar={() => setBorrador(null)} guardando={guardando} titulo={borrador.fijoId ? "Cargar gasto fijo" : "Nuevo gasto"} fijos={fijos} opcionesGrupo={opcionesEditable(borrador.grupo)} />}
 
       {!gastos ? (
         <p className="flex items-center gap-2 py-6 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Cargando…</p>
@@ -371,7 +386,7 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
               {visibles.map((f) => borrador?.id === f.id ? (
                 <tr key={f.id}><td colSpan={7} className="p-1"><Editor b={borrador} cambiar={setBorrador} guardar={guardar} cancelar={() => setBorrador(null)} guardando={guardando} titulo="Editar gasto"
                   aviso={pagosDe(f.id).some((p) => p.cruzado || p.conciliado) ? "Ya está cruzado con el banco: si cambiás el monto, la línea del banco no va a coincidir (se puede guardar igual)." : undefined}
-                  fijos={fijos} original={f} /></td></tr>
+                  fijos={fijos} original={f} opcionesGrupo={opcionesEditable(borrador.grupo)} /></td></tr>
               ) : (
                 <tr key={f.id} onClick={() => { if (!f.facturaCompraId) setBorrador(desdeFila(f)); }} title={f.facturaCompraId ? "Factura de transporte: se liquida en Transportes y se paga en Pagar" : undefined} className={`${f.facturaCompraId ? "" : "cursor-pointer "}border-t border-zinc-100 hover:bg-orange-50/40 dark:border-zinc-800 dark:hover:bg-zinc-800/50`}>
                   <td className="whitespace-nowrap px-2 py-1.5">{formatDate(f.fecha)}</td>
@@ -417,15 +432,15 @@ export function FinanzasLazzaGastos({ sociedadId, periodo }: { sociedadId: strin
         </div>
       )}
 
-      {verFijos && <FijosEditables fijos={fijos} sociedadId={sociedadId} onCambio={recargar} sicore={sicore} tituloSicore={tituloSicore} />}
+      {verFijos && <FijosEditables fijos={fijos} sociedadId={sociedadId} onCambio={recargar} sicore={sicore} tituloSicore={tituloSicore} extras={extras} opcionesGrupo={opcionesEditable} />}
     </div>
   );
 }
 
 /** Formulario de un gasto (nuevo o editar), en una línea. "Leer VEP (IA)" lo completa y adjunta el archivo; no guarda solo. */
-function Editor({ b, cambiar, guardar, cancelar, guardando, titulo, aviso, fijos, original }: {
+function Editor({ b, cambiar, guardar, cancelar, guardando, titulo, aviso, fijos, original, opcionesGrupo }: {
   b: Borrador; cambiar: Dispatch<SetStateAction<Borrador | null>>; guardar: (b: Borrador) => void; cancelar: () => void; guardando: boolean; titulo: string; aviso?: string;
-  fijos: FijoRow[]; original?: FilaGasto;
+  fijos: FijoRow[]; original?: FilaGasto; opcionesGrupo: Opcion[];
 }) {
   const { toast } = useToast();
   const [leyendo, setLeyendo] = useState(false);
@@ -486,7 +501,7 @@ function Editor({ b, cambiar, guardar, cancelar, guardando, titulo, aviso, fijos
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         <input type="date" value={b.fecha} onChange={(e) => set({ fecha: e.target.value })} className={control} />
-        <div className="w-44"><Select value={b.grupo} onChange={(e) => set({ grupo: e.target.value as Grupo })} options={opcionesGrupoEditable} className={sel} /></div>
+        <div className="w-44"><Select value={b.grupo} onChange={(e) => set({ grupo: e.target.value })} options={opcionesGrupo} className={sel} /></div>
         <input value={b.detalle} onChange={(e) => set({ detalle: e.target.value })} placeholder="Detalle" className={`${control} min-w-[220px] flex-1`} autoFocus />
         <div className="w-28"><Select value={b.fijo ? "fijo" : "eventual"} onChange={(e) => set({ fijo: e.target.value === "fijo" })} options={[{ value: "fijo", label: "Fijo" }, { value: "eventual", label: "Eventual" }]} className={sel} /></div>
         <div className="w-48"><Select value={b.medio} onChange={(e) => set({ medio: e.target.value })} options={opcionesMedio} className={sel} /></div>
@@ -516,11 +531,11 @@ function Editor({ b, cambiar, guardar, cancelar, guardando, titulo, aviso, fijos
 
 /** Los gastos fijos (lo que se repite todos los meses): grupo, detalle, monto, día, pago (🔁) y activo, todo editable.
  *  Los de Impuestos pueden llevar "SICORE auto": se cargan con las retenciones de Ganancias del mes anterior. */
-function FijosEditables({ fijos, sociedadId, onCambio, sicore, tituloSicore }: { fijos: FijoRow[]; sociedadId: string; onCambio: () => void; sicore: Sicore | null; tituloSicore: string }) {
+function FijosEditables({ fijos, sociedadId, onCambio, sicore, tituloSicore, extras, opcionesGrupo }: { fijos: FijoRow[]; sociedadId: string; onCambio: () => void; sicore: Sicore | null; tituloSicore: string; extras: readonly string[]; opcionesGrupo: (actual?: string | null) => Opcion[] }) {
   const { toast } = useToast();
   const [edit, setEdit] = useState<Record<string, Partial<FijoRow>>>({});
   const [guardando, setGuardando] = useState<string | null>(null);
-  const lista = [...fijos].sort((a, b) => Number(b.activo !== false) - Number(a.activo !== false) || grupoDe(a).localeCompare(grupoDe(b)) || String(a.descripcion).localeCompare(String(b.descripcion)));
+  const lista = [...fijos].sort((a, b) => Number(b.activo !== false) - Number(a.activo !== false) || grupoDe(a, extras).localeCompare(grupoDe(b, extras)) || String(a.descripcion).localeCompare(String(b.descripcion)));
   const val = <K extends keyof FijoRow>(f: FijoRow, k: K): FijoRow[K] => (edit[f.id] && k in edit[f.id] ? edit[f.id][k] : f[k]) as FijoRow[K];
   const set = (id: string, k: Partial<FijoRow>) => setEdit((e) => ({ ...e, [id]: { ...e[id], ...k } }));
   async function guardar(f: FijoRow) {
@@ -544,7 +559,7 @@ function FijosEditables({ fijos, sociedadId, onCambio, sicore, tituloSicore }: {
           {lista.map((f) => (
             <tr key={f.id} className={`border-t border-zinc-100 dark:border-zinc-800 ${val(f, "activo") === false ? "opacity-50" : ""}`}>
               <td className="px-1 py-1"><input type="checkbox" checked={val(f, "activo") !== false} onChange={(e) => set(f.id, { activo: e.target.checked })} className="h-4 w-4 accent-orange-500" /></td>
-              <td className="px-1 py-1"><div className="w-44"><Select value={grupoDe({ grupo: val(f, "grupo"), categoria: f.categoria })} onChange={(e) => set(f.id, { grupo: e.target.value })} options={opcionesGrupoEditable} className={sel} /></div></td>
+              <td className="px-1 py-1"><div className="w-44"><Select value={grupoDe({ grupo: val(f, "grupo"), categoria: f.categoria }, extras)} onChange={(e) => set(f.id, { grupo: e.target.value })} options={opcionesGrupo(grupoDe({ grupo: val(f, "grupo"), categoria: f.categoria }, extras))} className={sel} /></div></td>
               <td className="px-1 py-1"><input value={String(val(f, "descripcion") || "")} onChange={(e) => set(f.id, { descripcion: e.target.value })} className={`${control} w-full min-w-[220px]`} /></td>
               <td className="px-1 py-1"><div className="w-48"><Select value={String(val(f, "medio_pago") || "")} onChange={(e) => set(f.id, { medio_pago: e.target.value || null })} options={opcionesMedio} placeholder="Sin definir" className={sel} /></div></td>
               <td className="px-1 py-1"><input type="number" min={1} max={31} value={val(f, "dia_vencimiento") ?? ""} onChange={(e) => set(f.id, { dia_vencimiento: e.target.value ? Number(e.target.value) : null })} className={`${control} w-16`} /></td>

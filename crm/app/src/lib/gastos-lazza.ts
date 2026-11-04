@@ -32,8 +32,12 @@ const sinAcentos = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toL
 export function grupoDeCategoria(categoria: string | null | undefined): Grupo {
   return POR_CATEGORIA[sinAcentos(String(categoria || ""))] || "Operativos";
 }
-export function grupoDe(g: { grupo?: string | null; categoria?: string | null }): Grupo {
-  return (GRUPOS as readonly string[]).includes(String(g.grupo || "")) ? (g.grupo as Grupo) : grupoDeCategoria(g.categoria);
+/** Grupo del gasto. `extras`: claves de las pestañas nuevas (lib/gastos-grupos, 03/11/2026); sin ellas, solo las 9 de siempre. */
+export function grupoDe(g: { grupo?: string | null; categoria?: string | null }): Grupo;
+export function grupoDe(g: { grupo?: string | null; categoria?: string | null }, extras: readonly string[]): string;
+export function grupoDe(g: { grupo?: string | null; categoria?: string | null }, extras: readonly string[] = []): string {
+  const v = String(g.grupo || "");
+  return (GRUPOS as readonly string[]).includes(v) || (v && extras.includes(v)) ? v : grupoDeCategoria(g.categoria);
 }
 
 /** Formas de pago (las que ya usa la base + débito automático). */
@@ -59,7 +63,7 @@ export interface FijoRow {
 }
 
 export interface FilaGasto {
-  id: string; fecha: string; grupo: Grupo; detalle: string; fijo: boolean; medio: string; monto: number; moneda: "ARS" | "USD";
+  id: string; fecha: string; grupo: string; detalle: string; fijo: boolean; medio: string; monto: number; moneda: "ARS" | "USD";
   fijoId: string | null; cargadoSolo: boolean; comprobante: string | null;
   /** Fila de una factura de transporte (solo lectura en Gastos: se maneja en Transportes y en Pagar). */
   facturaCompraId?: string | null;
@@ -79,12 +83,12 @@ const mon = (m: unknown): "ARS" | "USD" => (String(m || "").toUpperCase() === "U
 export const esGastoFijo = (g: { gasto_fijo_id?: string | null; tipo_recurrencia?: string | null }): boolean =>
   !!g.gasto_fijo_id || g.tipo_recurrencia === "fijo" || g.tipo_recurrencia === "mensual";
 
-export function armarFilasGastos(gastos: GastoRow[], fijos: FijoRow[]): FilaGasto[] {
+export function armarFilasGastos(gastos: GastoRow[], fijos: FijoRow[], extras: readonly string[] = []): FilaGasto[] {
   const fijoPorId = new Map(fijos.map((f) => [f.id, f]));
   return gastos.map((g) => {
     const f = g.gasto_fijo_id ? fijoPorId.get(g.gasto_fijo_id) : undefined;
     return {
-      id: g.id, fecha: String(g.fecha).slice(0, 10), grupo: grupoDe(g), detalle: g.descripcion || "",
+      id: g.id, fecha: String(g.fecha).slice(0, 10), grupo: grupoDe(g, extras), detalle: g.descripcion || "",
       fijo: esGastoFijo(g),
       // Un gasto de un fijo con débito automático se muestra 🔁 aunque se haya cargado con otro medio.
       medio: f?.medio_pago === "debito_automatico" ? "debito_automatico" : (g.medio_pago || ""),
@@ -105,16 +109,16 @@ export function filasDeTransportes(facturas: FacturaTransporteRow[]): FilaGasto[
   }));
 }
 
-export interface FiltroGastos { grupo?: "" | Grupo; tipo?: "" | "fijo" | "eventual"; soloDebito?: boolean; texto?: string }
+export interface FiltroGastos { grupo?: string; tipo?: "" | "fijo" | "eventual"; soloDebito?: boolean; texto?: string }
 export function filtrarGastos(filas: FilaGasto[], f: FiltroGastos): FilaGasto[] {
   const q = sinAcentos(f.texto || "");
   return filas.filter((x) => (!f.grupo || x.grupo === f.grupo) && (!f.tipo || (f.tipo === "fijo") === x.fijo)
     && (!f.soloDebito || x.medio === "debito_automatico") && (!q || sinAcentos(`${x.detalle} ${x.grupo} ${etiquetaMedio(x.medio)}`).includes(q)));
 }
 
-/** Total por grupo (en el orden de GRUPOS) y total general, por moneda. */
-export function totalesPorGrupo(filas: FilaGasto[]): { grupo: Grupo; ARS: number; USD: number; n: number }[] {
-  return GRUPOS.map((grupo) => {
+/** Total por grupo (en el orden de las pestañas, o el de GRUPOS) y total general, por moneda. */
+export function totalesPorGrupo(filas: FilaGasto[], orden: readonly string[] = GRUPOS): { grupo: string; ARS: number; USD: number; n: number }[] {
+  return orden.map((grupo) => {
     const l = filas.filter((x) => x.grupo === grupo);
     return { grupo, n: l.length, ARS: r2(l.filter((x) => x.moneda === "ARS").reduce((s, x) => s + x.monto, 0)), USD: r2(l.filter((x) => x.moneda === "USD").reduce((s, x) => s + x.monto, 0)) };
   });
@@ -201,9 +205,9 @@ export function fijosCubiertos<F extends { proveedor_id: string | null }>(fijos:
 }
 
 /** Fijos activos que todavía no tienen gasto cargado en el mes (para "Cargar"). */
-export function fijosSinCargar(fijos: FijoRow[], gastosDelMes: GastoRow[], mes: string): (FijoRow & { grupoFinal: Grupo; vence: string | null })[] {
+export function fijosSinCargar(fijos: FijoRow[], gastosDelMes: GastoRow[], mes: string, extras: readonly string[] = []): (FijoRow & { grupoFinal: string; vence: string | null })[] {
   const cargados = new Set(gastosDelMes.filter((g) => String(g.fecha).slice(0, 7) === mes && g.gasto_fijo_id).map((g) => g.gasto_fijo_id));
   return fijos.filter((f) => f.activo !== false && !cargados.has(f.id))
-    .map((f) => ({ ...f, grupoFinal: grupoDe(f), vence: venceEnMes(f.dia_vencimiento, mes) }))
+    .map((f) => ({ ...f, grupoFinal: grupoDe(f, extras), vence: venceEnMes(f.dia_vencimiento, mes) }))
     .sort((a, b) => (a.vence || "9").localeCompare(b.vence || "9") || String(a.descripcion).localeCompare(String(b.descripcion)));
 }

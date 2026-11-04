@@ -61,7 +61,7 @@ export interface LineaBancoCF {
   id: string; cuenta_id: string; fecha: string; descripcion: string | null; monto: number | string | null;
   tipo: string | null; clasificacion: string | null; subtipo: string | null;
   saldo: number | string | null;
-  gasto?: Pick<GastoCont, "grupo" | "categoria" | "descripcion"> | null;
+  gasto?: Pick<GastoCont, "grupo" | "categoria" | "descripcion" | "linea_grupo"> | null;
   /** Marcada "ignorar" en Bancos (ya estaba cargada en Gastos sin atar): igual es plata que salió; la nota dice qué era. */
   ignorada?: boolean;
   nota?: string | null;
@@ -75,7 +75,7 @@ export const ceroCF = (): ValoresCF => Object.fromEntries(FILAS_CF.map((f) => [f
 const conSigno = (l: Pick<LineaBancoCF, "tipo" | "monto">) => (l.tipo === "credito" ? 1 : -1) * Math.abs(num(l.monto));
 
 /** A qué fila va un gasto (cargado o fijo): el mismo criterio que el Estado de resultados. */
-export function filaDeGasto(g: Pick<GastoCont, "grupo" | "categoria" | "descripcion">): FilaCF {
+export function filaDeGasto(g: Pick<GastoCont, "grupo" | "categoria" | "descripcion" | "linea_grupo">): FilaCF {
   switch (clasificarGasto(g)) {
     case "retiros": return "retiros";
     case "colaboradores_lsj": case "colaborador_m": case "comisiones": return "sueldos";
@@ -155,7 +155,7 @@ export interface ChequeCF {
   numero: string; direccion: string | null; estado: string; estadoBanco?: string | null; fecha_pago: string | null;
   monto: number | string | null; moneda?: string | null; cubreTercero?: string | null; quien?: string | null;
 }
-export interface FijoCF extends GastoFijoCaja { grupo?: string | null; categoria?: string | null }
+export interface FijoCF extends GastoFijoCaja { grupo?: string | null; categoria?: string | null; linea_grupo?: GastoCont["linea_grupo"] }
 export interface PremioCF { persona: string; monto: number; mes: string }
 /**
  * IIBB y tasas: % de las ventas de cada mes (las de Reportes), lo pagado a cuenta en el mes (SIRCREB del banco neto de devoluciones
@@ -278,7 +278,7 @@ export function proyeccionCF(x: {
   for (const g of x.fijos) {
     const r = gastosFijosEnVentana({ hoy: x.hoy, dias, fijos: [g], pagos: x.pagosFijos, facturasCompra: x.facturasCompra, dolar: x.dolar });
     sinDolar.push(...r.sinDolar);
-    const fila = filaDeGasto({ grupo: g.grupo ?? null, categoria: g.categoria ?? null, descripcion: g.descripcion });
+    const fila = filaDeGasto({ grupo: g.grupo ?? null, categoria: g.categoria ?? null, descripcion: g.descripcion, linea_grupo: g.linea_grupo });
     // El sueldo que se paga a principio de mes es el del mes anterior (Augusto 29/10): el detalle dice el mes del sueldo.
     const esSueldo = /^sueldo\b/.test(sinAcentos(g.descripcion));
     for (const s of r.salidas) {

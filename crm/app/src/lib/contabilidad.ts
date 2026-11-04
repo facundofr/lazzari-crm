@@ -74,6 +74,8 @@ export interface GastoCont {
   monto: number | string | null; moneda?: string | null;
   /** Forma de pago (gastos_manuales.medio_pago): con la Mastercard personal no suma en retiros (cuenta su pago). */
   medio_pago?: string | null;
+  /** Línea elegida para su pestaña en Gastos (lib/gastos-grupos conLineaDeGrupo); si no hay, la regla de siempre. */
+  linea_grupo?: LineaId | FueraId | null;
 }
 /** Línea del extracto del banco (extracto_movimientos), ya clasificada en Bancos. */
 export interface LineaBancoCont {
@@ -144,12 +146,14 @@ export function mesDevengado(descripcion: string | null | undefined, fecha: stri
 const esMariana = (s: string) => /\bmariana\b|santinelli/.test(s);
 
 /** A qué línea va un gasto cargado en Gastos (grupo + categoría + detalle). */
-export function clasificarGasto(g: Pick<GastoCont, "grupo" | "categoria" | "descripcion">): LineaId | FueraId {
+export function clasificarGasto(g: Pick<GastoCont, "grupo" | "categoria" | "descripcion"> & { linea_grupo?: LineaId | FueraId | null }): LineaId | FueraId {
   const grupo = grupoDe(g);
   const cat = sinAcentos(g.categoria);
   const d = sinAcentos(g.descripcion);
   // El plan de pagos de ARBA es de Augusto, lo paga la empresa (Augusto 29/10): retiro, esté en el grupo que esté.
   if (/arba plan de pagos/.test(d)) return "retiros";
+  // La pestaña tiene una línea elegida en Gastos › Editar pestañas (03/11/2026, lib/gastos-grupos conLineaDeGrupo): va ahí.
+  if (g.linea_grupo) return g.linea_grupo;
   if (grupo === "Personales") return "retiros";
   if (grupo === "Premios") return esMariana(d) ? "colaborador_m" : "colaboradores_lsj";
   if (grupo === "Personal") {

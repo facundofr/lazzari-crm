@@ -13,6 +13,7 @@ import { armarFilasFacturas, chequesSinAcreditarPorFactura, recibosPorFactura, t
 import { traerRecibos } from "./recibo-doc";
 import { DESDE_ESTIMADOS, IIBB_PCT_NATI, clasificarLineaBanco, sueldosPorCargar, type AplicacionCierre, type CobroCierre, type CompraCierre, type ConsumoVisaCont, type RetencionCont, type VentaCierre, type SueldoFijo, type BaseMes, type EstimadoMes, type GastoCont, type LineaBancoCont } from "@/lib/contabilidad";
 import { premiosPorCargar } from "@/lib/premios-lazza";
+import { armarGrupos, conLineaDeGrupo, type GrupoGasto } from "@/lib/gastos-grupos";
 import { DESDE_IIBB_NETO, TARJETAS_PERSONALES, claveFoto, type ChequeCF, type DisponibilidadCF, type FijoCF, type FotoCF, type IibbCF, type LineaBancoCF, type PremioCF, type VencimientoCF } from "@/lib/cashflow";
 import { numerosDebitados } from "@/lib/cobertura-cheques";
 import { JOSE_ALVAREZ, comisionDelMes, detalleComision } from "@/lib/jose-alvarez";
@@ -315,6 +316,18 @@ export async function traerComprobantesMes(sociedadId: string, periodo: string):
 export const CLAVE_CONTABILIDAD = "contabilidad";
 
 /**
+ * Pestañas de Gastos de la sociedad (tabla gastos_grupos, 03/11/2026). Sin la tabla o si falla, las 9 de siempre: nunca frena.
+ */
+export async function traerGruposGastos(sociedadId: string): Promise<GrupoGasto[]> {
+  try {
+    const { data, error } = await db.from("gastos_grupos").select("id, clave, nombre, orden, linea, oculto, base").eq("sociedad_id", sociedadId);
+    return armarGrupos(error ? null : data);
+  } catch {
+    return armarGrupos(null);
+  }
+}
+
+/**
  * Contabilidad → Estado de resultados (29/10/2026): lo que necesita estadoDeResultados para `periodos`.
  * Ventas, costo y transportes de cada mes salen de Reportes (la misma cuenta). Los gastos se traen desde un mes antes
  * hasta 3 después, porque cada uno cuenta en el mes que dice su detalle (el premio de octubre se paga en noviembre).
@@ -323,7 +336,7 @@ export const CLAVE_CONTABILIDAD = "contabilidad";
 export async function traerDatosContabilidad(sociedadId: string, periodos: string[], conEstimados: boolean) {
   const primero = periodos[0], ultimo = periodos[periodos.length - 1];
   const desdeGastos = `${sumarMeses(primero, -1)}-01`;
-  const [reportes, gastosRaw, cuentas, tcDia, config, sueldosFijos] = await Promise.all([
+  const [reportes, gastosRaw, cuentas, tcDia, config, sueldosFijos, grupos] = await Promise.all([
     Promise.all(periodos.map(async (p) => ({ p, r: reporteBasico({ periodo: p, ...(await traerDatosReporte(sociedadId, p)) }) }))),
     traerTodo<any>(() => db.from("gastos_manuales").select("id, fecha, descripcion, categoria, grupo, monto, moneda, medio_pago")
       .eq("sociedad_id", sociedadId).gte("fecha", desdeGastos).lt("fecha", `${sumarMeses(ultimo, 4)}-01`).order("id")),
@@ -334,6 +347,7 @@ export async function traerDatosContabilidad(sociedadId: string, periodos: strin
     conEstimados
       ? db.from("gastos_fijos").select("descripcion, monto, moneda").eq("sociedad_id", sociedadId).eq("activo", true).eq("grupo", "Personal").ilike("descripcion", "sueldo %")
       : Promise.resolve({ data: [] as { descripcion: string; monto: number; moneda: string }[], error: null }),
+    traerGruposGastos(sociedadId),
   ]);
   if (cuentas.error) throw cuentas.error;
   if (sueldosFijos.error) throw sueldosFijos.error;
@@ -351,7 +365,8 @@ export async function traerDatosContabilidad(sociedadId: string, periodos: strin
     .select("id, fecha, descripcion, importe, moneda, tipo, clase, tarjeta_resumenes(vencimiento)")
     .eq("sociedad_id", sociedadId).gte("fecha", desdeGastos).lt("fecha", `${sumarMeses(ultimo, 1)}-01`).order("id"))
     .then((rows) => rows.map((c) => ({ ...c, fecha: dia(c.fecha), vencimiento: c.tarjeta_resumenes?.vencimiento ? dia(c.tarjeta_resumenes.vencimiento) : null })), () => []);
-  const gastos: GastoCont[] = gastosRaw.map((g) => ({ ...g, fecha: dia(g.fecha) }));
+  // Cada gasto con la línea de su pestaña, si se eligió una en Gastos › Editar pestañas.
+  const gastos: GastoCont[] = conLineaDeGrupo(gastosRaw.map((g) => ({ ...g, fecha: dia(g.fecha) })), grupos);
   const lineasBanco: LineaBancoCont[] = lineas.filter((l) => l.estado !== "ignorado").map((l) => ({ ...l, fecha: dia(l.fecha) }));
 
   const base: Record<string, BaseMes> = {};
@@ -445,7 +460,7 @@ export async function traerDatosInformativo(sociedadId: string, periodos: string
  */
 export async function traerDatosCashflow(sociedadId: string, hoy: string, conPremios: boolean) {
   const mes = hoy.slice(0, 7);
-  const [cuentasR, deudas, chequesR, fijosR, pagosFijos, comprasMes, dolarR, fotosR] = await Promise.all([
+  const [cuentasR, deudas, chequesR, fijosR, pagosFijos, comprasMes, dolarR, fotosR, grupos] = await Promise.all([
     db.from("cuentas_financieras").select("id, nombre, tipo, moneda, saldo_banco, saldo_banco_fecha").eq("sociedad_id", sociedadId).eq("activa", true),
     traerDeudas(sociedadId, hoy),
     traerTodo<any>(() => db.from("echeqs").select("id, numero, direccion, estado, estado_banco, fecha_pago, monto, moneda, cubre_tercero, origen_nombre, destino_nombre")
@@ -457,6 +472,7 @@ export async function traerDatosCashflow(sociedadId: string, hoy: string, conPre
       .eq("sociedad_id", sociedadId).gte("fecha", `${mes}-01`).order("id")),
     leerDolarDelDia(db, hoy).catch(() => null),
     db.from("configuracion").select("key, value").eq("sociedad_id", sociedadId).like("key", "cashflow_foto_%"),
+    traerGruposGastos(sociedadId),
   ]);
   if (cuentasR.error) throw cuentasR.error;
   if (fijosR.error) throw fijosR.error;
@@ -486,7 +502,7 @@ export async function traerDatosCashflow(sociedadId: string, hoy: string, conPre
   for (const lote of trozos([...new Set(gastoDeMov.values())])) {
     const { data, error } = await db.from("gastos_manuales").select("id, grupo, categoria, descripcion").in("id", lote);
     if (error) throw error;
-    for (const g of data || []) gastos.set(g.id, { grupo: g.grupo, categoria: g.categoria, descripcion: g.descripcion });
+    for (const g of conLineaDeGrupo((data || []) as { id: string; grupo: string | null; categoria: string | null; descripcion: string | null }[], grupos)) gastos.set(g.id, { grupo: g.grupo, categoria: g.categoria, descripcion: g.descripcion, linea_grupo: g.linea_grupo });
   }
   const dia = (f: unknown) => String(f).slice(0, 10);
   const lineas: LineaBancoCF[] = crudas.map((l) => {
@@ -501,8 +517,8 @@ export async function traerDatosCashflow(sociedadId: string, hoy: string, conPre
     numero: String(c.numero ?? ""), direccion: c.direccion, estado: c.estado, estadoBanco: c.estado_banco, fecha_pago: c.fecha_pago ? dia(c.fecha_pago) : null,
     monto: c.monto, moneda: c.moneda, cubreTercero: c.cubre_tercero, quien: c.direccion === "emitido" ? c.destino_nombre : c.origen_nombre,
   }));
-  const fijos: FijoCF[] = (fijosR.data || []).map((g: any) => ({
-    id: g.id, descripcion: g.descripcion || "", grupo: g.grupo, categoria: g.categoria, monto: Number(g.monto) || 0, moneda: g.moneda === "USD" ? "USD" : "ARS",
+  const fijos: FijoCF[] = conLineaDeGrupo((fijosR.data || []) as any[], grupos).map((g: any) => ({
+    id: g.id, descripcion: g.descripcion || "", grupo: g.grupo, categoria: g.categoria, linea_grupo: g.linea_grupo, monto: Number(g.monto) || 0, moneda: g.moneda === "USD" ? "USD" : "ARS",
     activo: !!g.activo, diaVencimiento: g.dia_vencimiento, dolarReferencia: g.dolar_referencia === null ? null : Number(g.dolar_referencia), proveedorId: g.proveedor_id,
   }));
 
