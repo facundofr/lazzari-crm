@@ -28,6 +28,18 @@ export function mismoPago(a: PagoComparable, b: PagoComparable): boolean {
   return String(a.fecha || "").slice(0, 10) === String(b.fecha || "").slice(0, 10);
 }
 
+/**
+ * El pago que trae la línea del banco (Cargar cobro / Cargar pago desde Bancos) y el que se lee del comprobante son el mismo
+ * aunque la fecha no coincida: el banco lo registra unos días después (04/11/2026, Mateo: comprobante del viernes 30/10,
+ * débito del lunes 02/11; antes quedaban 2 transferencias). Misma familia e importe y hasta `dias` días de diferencia.
+ */
+export function mismoPagoQueLinea(linea: PagoComparable, leido: PagoComparable, dias = 7): boolean {
+  if (cent(linea.monto) <= 0 || familia(linea.tipo) !== familia(leido.tipo) || cent(linea.monto) !== cent(leido.monto)) return false;
+  const fa = Date.parse(String(linea.fecha || "").slice(0, 10)), fb = Date.parse(String(leido.fecha || "").slice(0, 10));
+  if (Number.isNaN(fa) || Number.isNaN(fb)) return true;
+  return Math.abs(fa - fb) <= dias * 86_400_000;
+}
+
 /** Misma retención: mismo tipo e importe; si las dos tienen certificado, el mismo. */
 export function mismaRetencion(a: RetencionComparable, b: RetencionComparable): boolean {
   if (cent(a.monto) <= 0 || String(a.tipo) !== String(b.tipo) || cent(a.monto) !== cent(b.monto)) return false;

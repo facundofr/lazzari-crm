@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { claveArchivo, mismaRetencion, mismoPago, sinRepetir, type PagoComparable, type RetencionComparable } from "../src/lib/comprobante-medios";
+import { claveArchivo, mismaRetencion, mismoPago, mismoPagoQueLinea, sinRepetir, type PagoComparable, type RetencionComparable } from "../src/lib/comprobante-medios";
 
 // Mismo pago
 assert.equal(mismoPago({ tipo: "transferencia", monto: 100, fecha: "2026-10-26" }, { tipo: "transferencia", monto: 100.004, fecha: "2026-10-26" }), true, "misma transferencia");
@@ -33,5 +33,16 @@ const r3 = sinRepetir([], [t(100)], mismoPago);
 assert.deepEqual(r3, { agregar: [t(100)], repetidos: [] }, "sin nada cargado entra todo");
 
 assert.equal(claveArchivo({ name: "comprobante.pdf", size: 1234 }), "comprobante.pdf|1234");
+
+// Línea del banco vs comprobante (04/11/2026, Mateo): comprobante del viernes 30/10, débito del lunes 02/11.
+const linea: PagoComparable = { tipo: "transferencia", monto: 60000, fecha: "2026-11-02" };
+const leido: PagoComparable = { tipo: "transferencia", monto: 60000, numero: "30454379010261030", fecha: "2026-10-30" };
+assert.equal(mismoPago(linea, leido), false, "con la regla común no coincide (otra fecha)");
+assert.equal(mismoPagoQueLinea(linea, leido), true, "con la línea del banco es el mismo pago");
+assert.equal(sinRepetir([linea], [leido], (a, b) => mismoPago(a, b) || mismoPagoQueLinea(a, b)).agregar.length, 0, "no se agrega otra transferencia");
+assert.equal(mismoPagoQueLinea(linea, { ...leido, monto: 60001 }), false, "otro importe");
+assert.equal(mismoPagoQueLinea(linea, { ...leido, fecha: "2026-10-20" }), false, "más de 7 días");
+assert.equal(mismoPagoQueLinea(linea, { ...leido, tipo: "echeq" }), false, "otra familia");
+assert.equal(mismoPagoQueLinea(linea, { ...leido, fecha: null }), true, "sin fecha leída: mismo importe y familia");
 
 console.log("test-comprobante-medios: OK");

@@ -9,7 +9,7 @@ import { buildOrdenPagoPlan, pagoOriginal, type OpParsed } from "@/lib/orden-pag
 import { fechaMedioCobro, avisoFechaCobroFutura } from "@/lib/fecha-cobro";
 import { repartirCobro, avisoDiferenciaCobro, facturasParaRegistrar } from "@/lib/cobro-reparto";
 import { fuentesSaldoFavorCliente, repartirSaldoFavorCliente, faltaSegunOrden, cubreConSaldoFavor, type FuenteSaldoFavorCliente } from "@/lib/saldo-favor-cliente";
-import { claveArchivo, mismaRetencion, mismoPago, sinRepetir } from "@/lib/comprobante-medios";
+import { claveArchivo, mismaRetencion, mismoPago, mismoPagoQueLinea, sinRepetir } from "@/lib/comprobante-medios";
 import { movimientoParecido, renglonesRepetidos, TIPOS_COBRO } from "@/lib/cobro-parecido";
 import { ZonaArchivos } from "@/components/ui/zona-archivos";
 import { useToast } from "@/components/ui/toast";
@@ -39,6 +39,8 @@ interface MedioPago {
   cheque_banco: string;
   cheque_numero: string;
   cheque_fecha_pago: string;
+  /** 04/11/2026: vino de la línea del banco (Cargar cobro): el comprobante del mismo pago lo completa, no se suma otra vez. */
+  de_linea_banco?: boolean;
 }
 
 interface RetencionLinea {
@@ -118,7 +120,8 @@ function mapTipoDB(tipo: string): string {
 
 // Mismo pago / misma retención (lib/comprobante-medios.ts): para no sumar dos veces un comprobante y para avisar renglones repetidos.
 const pagoDe = (x: MedioPago) => ({ tipo: x.tipo, monto: num(x.monto), numero: x.cheque_numero || x.referencia, fecha: x.fecha });
-const mismoMedio = (a: MedioPago, b: MedioPago) => mismoPago(pagoDe(a), pagoDe(b));
+// El de la línea del banco es el mismo pago aunque el banco lo registre unos días después del comprobante (04/11/2026).
+const mismoMedio = (a: MedioPago, b: MedioPago) => mismoPago(pagoDe(a), pagoDe(b)) || (!!a.de_linea_banco && mismoPagoQueLinea(pagoDe(a), pagoDe(b)));
 const retDe = (x: RetencionLinea) => ({ tipo: x.tipo, monto: num(x.monto), certificado: x.certificado });
 const mismaRet = (a: RetencionLinea, b: RetencionLinea) => mismaRetencion(retDe(a), retDe(b));
 
@@ -136,7 +139,7 @@ export default function CobroMasivoLiquidacion({
 }: Props) {
   const { toast } = useToast();
   const [opReferencia, setOpReferencia] = useState("");
-  const [medios, setMedios] = useState<MedioPago[]>(() => [medioInicial ? { ...newMedio(), monto: toDecimalInput(medioInicial.monto), fecha: medioInicial.fecha } : newMedio()]);
+  const [medios, setMedios] = useState<MedioPago[]>(() => [medioInicial ? { ...newMedio(), monto: toDecimalInput(medioInicial.monto), fecha: medioInicial.fecha, de_linea_banco: true } : newMedio()]);
   const [retenciones, setRetenciones] = useState<RetencionLinea[]>(() => (retencionesIniciales || [])
     .map((r) => ({ ...newRetencion(), tipo: r.tipo, monto: toDecimalInput(r.monto), observaciones: r.observaciones || "", certificado: r.certificado || "",
       estimada: true, origenInicial: r.origen || "estimada" })));

@@ -1,6 +1,6 @@
 // Prueba rápida: npx tsx scripts/test-cbu.ts
 import assert from "node:assert/strict";
-import { cambiosBancarios, cbuNuevoDelComprobante, cbuValido, datosBancariosDeMails, proponerCbu, remitenteDeFicha, type FichaBancaria } from "../src/lib/cbu";
+import { bancoDelCbu, cambiosBancarios, cbuNuevoDelComprobante, cbuValido, datosBancariosDeMails, proponerCbu, remitenteDeFicha, type FichaBancaria } from "../src/lib/cbu";
 
 // Dígitos verificadores (CBU real de la ficha de BMS Building Management System SRL).
 assert.ok(cbuValido("0070037520000043301748"));
@@ -59,7 +59,22 @@ assert.equal(motivo({}, [ficha({ cuit: "30999999999" })]), "El CUIT del mail no 
   assert.equal(cbuNuevoDelComprobante([{ cbu_destino: "0070037520000043301748" }], "0070037520000043301748"), null, "ya lo tiene");
   assert.equal(cbuNuevoDelComprobante([{ cbu_destino: "0070037520000043301749" }], null), null, "CBU mal leído");
   assert.deepEqual(cbuNuevoDelComprobante([{ tipo: "transferencia" } as any, { cbu_destino: "0070-0375-20000043301748", destinatario: "BMS SRL", cuit_destinatario: "33-71446094-9" }], null),
-    { cbu: "0070037520000043301748", alias: null, titular: "BMS SRL", cuitTitular: "33714460949", banco: null });
+    { cbu: "0070037520000043301748", alias: null, titular: "BMS SRL", cuitTitular: "33714460949", banco: "Banco Galicia" });
+  // El banco es el de destino, nunca el de origen (04/11/2026, Mateo: proponía BBVA, que es el nuestro).
+  assert.equal(cbuNuevoDelComprobante([{ cbu_destino: "0070037520000043301748", banco: "BBVA" } as any], null)?.banco, "Banco Galicia", "sale del CBU, no del banco de origen");
+  assert.equal(cbuNuevoDelComprobante([{ cbu_destino: "0110138220013810040337", banco: "BBVA", banco_destino: "BBVA" } as any], null)?.banco, "Banco Nación", "el CBU manda");
+  // Banco por el código del CBU (casos reales del 04/11/2026).
+  assert.equal(bancoDelCbu("0110138220013810040337"), "Banco Nación", "Sáez");
+  assert.equal(bancoDelCbu("0140483203658353151231"), "Banco Provincia", "José Rodríguez");
+  assert.equal(bancoDelCbu("0150839802000104482742"), "ICBC", "La Nueva P.F. Viajes");
+  assert.equal(bancoDelCbu("1910005655000502139864"), "Banco Credicoop", "De Pascale");
+  assert.equal(bancoDelCbu("4530000800011590953951"), "Naranja X", "Mateo");
+  assert.equal(bancoDelCbu("0000168300000027296383"), "Lemon", "Cáceres (CVU)");
+  assert.equal(bancoDelCbu("0000999900000027296383"), null, "billetera desconocida");
+  assert.equal(bancoDelCbu("999"), null);
+  // Aviso (no frena) si el banco no es el del CBU.
+  assert.ok(cambiosBancarios({ cuit: "20046951639", cbu: null }, { cbu: "0110138220013810040337", banco: "BBVA" }).avisos.some((a) => a.includes("es de Banco Nación")));
+  assert.ok(!cambiosBancarios({ cuit: "20046951639", cbu: null }, { cbu: "0110138220013810040337", banco: "Banco de la Nación Argentina" }).avisos.some((a) => a.includes("es de")), "mismo banco escrito distinto");
 }
 
 console.log("test-cbu OK");

@@ -203,7 +203,9 @@ export function buildOrdenPagoPlan(parsed: OpParsed, docs: PlanDoc[]): OrdenPago
   const netoIncluidas = lineas.reduce((s, l, i) => s + (l.doc ? netoLinea[i] : 0), 0);
   const totalMediosC = mediosOp.reduce((s, m) => s + cents(toNumber(m.monto)), 0);
   const totalNetoC = netoLinea.reduce((s, n) => s + n, 0);
-  if (Math.abs(totalMediosC - totalNetoC) > 100) {
+  // Si los documentos no traen ningún pago (ej. solo certificados de retención), el pago es el que ya
+  // está en el formulario (la línea del banco o lo cargado a mano): ahí cuenta la diferencia de la ventana.
+  if (totalMediosC > 0 && Math.abs(totalMediosC - totalNetoC) > 100) {
     avisos.push(`La orden no cierra: facturas − retenciones = $${fromCents(totalNetoC).toFixed(2)}, pero los pagos suman $${fromCents(totalMediosC).toFixed(2)}. Revisá los importes.`);
   }
 

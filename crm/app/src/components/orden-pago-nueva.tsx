@@ -23,7 +23,7 @@ import { calcularPagoParcial } from "@/lib/op-parcial";
 import { pesosDeUsd, brutoPesosDeUsd, cotizacionValida } from "@/lib/op-usd-pesos";
 import { diaHabilAnterior } from "@/lib/dias-habiles";
 import { parseDecimalInput, toDecimalInput } from "@/lib/decimal-input";
-import { claveArchivo, mismoPago, sinRepetir } from "@/lib/comprobante-medios";
+import { claveArchivo, mismoPago, mismoPagoQueLinea, sinRepetir } from "@/lib/comprobante-medios";
 import { useToast } from "@/components/ui/toast";
 import { textoOP } from "@/lib/cartel-guardado";
 import { FileText, Minimize2, Maximize2, X, Search, Loader2, Sparkles, ShieldCheck, Landmark, Plus, Trash2, Paperclip } from "lucide-react";
@@ -89,6 +89,8 @@ export interface OpMedioPago {
   elegir_a_mano?: boolean;
   /** 26/10/2026: comprobante del que salió (claveArchivo), para no sumarlo dos veces si se vuelve a subir. */
   archivo?: string;
+  /** 04/11/2026: vino de la línea del banco (Cargar pago): el comprobante del mismo pago lo completa, no se suma otra vez. */
+  de_linea_banco?: boolean;
 }
 const BANCOS_ARGENTINA = [
   "Banco Galicia", "Banco Nación", "Banco Provincia", "Banco Santander",
@@ -197,7 +199,7 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
   // Notas de crédito del proveedor con crédito disponible (se usan en la OP restando del pago)
   interface OpNCDisponible { id: string; numero: string; tipo_comprobante: string; fecha: string; total: number; subtotal: number; disponible: number; moneda: string; selected: boolean; monto_a_aplicar: number }
   const [opNCDisponibles, setOpNCDisponibles] = useState<OpNCDisponible[]>([]);
-  const [opMedios, setOpMedios] = useState<OpMedioPago[]>(() => [pagoInicial ? { ...makeOpMedio(), monto: pagoInicial.monto, fecha: pagoInicial.fecha, banco: "BBVA" } : makeOpMedio()]);
+  const [opMedios, setOpMedios] = useState<OpMedioPago[]>(() => [pagoInicial ? { ...makeOpMedio(), monto: pagoInicial.monto, fecha: pagoInicial.fecha, banco: "BBVA", de_linea_banco: true } : makeOpMedio()]);
   const [opMonthlyBase, setOpMonthlyBase] = useState(0); // Acumulado mensual de bases sin IVA (de OPs previas)
   // Facturas en US$ se pagan en pesos: cotización BNA divisa vendedor del día hábil anterior al pago (editable).
   const [opCotizacion, setOpCotizacion] = useState("");
@@ -654,7 +656,8 @@ export function OrdenPagoNueva({ sociedadId, proveedorId, pagoParcialFCId = null
       // Lo que ya está cargado no se suma de nuevo: lo leído del mismo archivo se reemplaza; de otro comprobante
       // se agrega solo lo que no estaba (ej. transferencia + cheque). Lo repetido se avisa (lib/comprobante-medios.ts).
       const comparable = (m: OpMedioPago) => ({ tipo: m.tipo, monto: Number(m.monto), numero: m.numero_cheque, fecha: m.fecha_cobro || m.fecha });
-      const igual = (a: OpMedioPago, b: OpMedioPago) => mismoPago(comparable(a), comparable(b));
+      // El de la línea del banco es el mismo pago aunque el banco lo registre unos días después del comprobante.
+      const igual = (a: OpMedioPago, b: OpMedioPago) => mismoPago(comparable(a), comparable(b)) || (!!a.de_linea_banco && mismoPagoQueLinea(comparable(a), comparable(b)));
       const { agregar, repetidos } = sinRepetir(opMedios.filter(m => m.archivo !== archivo), mapped, igual);
       const conCheques = await chequesDelComprobante(agregar, archivo);
       setOpMedios(prev => {

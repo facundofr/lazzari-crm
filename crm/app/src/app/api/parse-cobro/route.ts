@@ -26,6 +26,7 @@ Te voy a pasar una o varias imágenes/PDFs de comprobantes de pago (transferenci
       "destinatario": "nombre del beneficiario si aparece",
       "cbu_destino": "CBU o CVU de la cuenta de destino (22 dígitos), solo números, copiado dígito por dígito; null si no se lee completo y claro",
       "alias_destino": "alias de la cuenta de destino si aparece",
+      "banco_destino": "banco o billetera de la cuenta de destino (la del beneficiario, no la de origen) si aparece; null si no",
       "cuit_destinatario": "CUIT del beneficiario, solo dígitos, si aparece",
       "cuit_ordenante": "CUIT del ordenante si aparece",
       "organismo": "organismo que practicó la retención, si corresponde",

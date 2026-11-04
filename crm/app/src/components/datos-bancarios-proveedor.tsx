@@ -9,7 +9,7 @@ import { useState } from "react";
 import { Landmark, Loader2, Pencil, Sparkles } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { CopiarBtn } from "@/components/copiar-btn";
-import { cambiosBancarios, type DatosBancariosProveedor } from "@/lib/cbu";
+import { bancoDelCbu, cambiosBancarios, type DatosBancariosProveedor } from "@/lib/cbu";
 
 export interface ProveedorBancario extends Partial<DatosBancariosProveedor> {
   id: string; razon_social: string; cuit?: string | null; numero_cuenta?: string | null; tipo_cuenta?: string | null;
@@ -45,7 +45,9 @@ export function DatosBancariosProveedor({ proveedor, sociedadId, delComprobante,
       base.cbu = delComprobante.cbu;
       // Del comprobante solo se completa lo que la ficha no tiene (el CBU es lo que se viene a cambiar).
       if (!p.alias_bancario && delComprobante.alias) base.alias_bancario = delComprobante.alias;
-      if (!p.banco && delComprobante.banco) base.banco = delComprobante.banco;
+      // El banco sale del CBU nuevo (04/11/2026): si se sabe, reemplaza al de la ficha (era de la cuenta vieja).
+      const bancoCbu = bancoDelCbu(delComprobante.cbu);
+      if (bancoCbu || (!p.banco && delComprobante.banco)) base.banco = bancoCbu || delComprobante.banco || "";
       if (!p.titular_cuenta && delComprobante.titular) base.titular_cuenta = delComprobante.titular;
       if (!p.cuit_titular_cuenta && delComprobante.cuitTitular) base.cuit_titular_cuenta = delComprobante.cuitTitular;
     }

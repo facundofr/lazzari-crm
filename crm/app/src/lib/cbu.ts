@@ -20,6 +20,26 @@ export function cbuValido(cbu: unknown): boolean {
   return dv(d.slice(0, 7), [7, 1, 3, 9, 7, 1, 3]) === Number(d[7]) && dv(d.slice(8, 21), [3, 9, 7, 1, 3, 9, 7, 1, 3, 9, 7, 1, 3]) === Number(d[21]);
 }
 
+/**
+ * Banco del CBU por sus 3 primeros números (código de entidad del BCRA); en un CVU (empieza con 000), la billetera.
+ * Augusto 04/11/2026: el banco que leía la IA del comprobante era el de ORIGEN (BBVA) y quedó mal en 3 fichas; el CBU no se equivoca.
+ * Solo los códigos conocidos: si no está, null (se deja lo que diga el comprobante o la persona).
+ */
+const BANCOS_POR_CODIGO: Record<string, string> = {
+  "007": "Banco Galicia", "011": "Banco Nación", "014": "Banco Provincia", "015": "ICBC", "017": "BBVA", "020": "Banco de Córdoba",
+  "027": "Banco Supervielle", "029": "Banco Ciudad", "034": "Banco Patagonia", "044": "Banco Hipotecario", "072": "Banco Santander",
+  "143": "Brubank", "150": "HSBC", "191": "Banco Credicoop", "285": "Banco Macro", "299": "Banco Comafi", "322": "Banco Industrial",
+  "330": "Banco de Santa Fe", "384": "Wilobank", "386": "Banco de Entre Ríos", "389": "Banco Columbia", "453": "Naranja X",
+};
+const BILLETERAS_CVU: [string, string][] = [["00000031", "Mercado Pago"], ["00000079", "Ualá"], ["00001683", "Lemon"]];
+export function bancoDelCbu(cbu: unknown): string | null {
+  const d = digitos(cbu);
+  if (d.length !== 22) return null;
+  if (d.startsWith("000")) return BILLETERAS_CVU.find(([p]) => d.startsWith(p))?.[1] ?? null;
+  return BANCOS_POR_CODIGO[d.slice(0, 3)] ?? null;
+}
+const normalBanco = (s: unknown) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\bbanco\b|\bde la\b|\bdel\b|\bde\b|[^a-z0-9]/g, "");
+
 export type TipoFicha = "cliente" | "proveedor";
 export interface FichaBancaria { id: string; tipo: TipoFicha; nombre: string; cuit: string | null; cbu: string | null; correos: string[] }
 export interface DatoBancarioMail {
@@ -122,17 +142,27 @@ export function cambiosBancarios(ficha: Partial<DatosBancariosProveedor> & { cui
   if ((cambios.cbu || cambios.cuit_titular_cuenta) && cuitTit && digitos(ficha.cuit) && cuitTit !== digitos(ficha.cuit)) {
     avisos.push(`El titular de la cuenta (CUIT ${cuitTit}) no es el CUIT del proveedor (${digitos(ficha.cuit)}).`);
   }
+  // 04/11/2026: el banco tiene que ser el del CBU (avisa, no frena).
+  const cbuFinal = "cbu" in cambios ? cambios.cbu : limpio("cbu", ficha.cbu);
+  const bancoFinal = "banco" in cambios ? cambios.banco : limpio("banco", ficha.banco);
+  const delCbu = bancoDelCbu(cbuFinal);
+  const parecido = (x: string, y: string) => !!x && !!y && (x.includes(y) || y.includes(x));
+  if ((cambios.cbu || "banco" in cambios) && delCbu && bancoFinal && !parecido(normalBanco(bancoFinal), normalBanco(delCbu))) {
+    avisos.push(`El CBU es de ${delCbu} y el banco dice ${bancoFinal}: revisalo.`);
+  }
   return { cambios, avisos };
 }
 
 /** El CBU de destino que leyó la IA en el comprobante de la transferencia, si es válido y no es el de la ficha. */
-export function cbuNuevoDelComprobante(pagos: { cbu_destino?: unknown; alias_destino?: unknown; destinatario?: unknown; cuit_destinatario?: unknown; banco?: unknown }[], fichaCbu: string | null | undefined): { cbu: string; alias: string | null; titular: string | null; cuitTitular: string | null; banco: string | null } | null {
+export function cbuNuevoDelComprobante(pagos: { cbu_destino?: unknown; alias_destino?: unknown; destinatario?: unknown; cuit_destinatario?: unknown; banco_destino?: unknown }[], fichaCbu: string | null | undefined): { cbu: string; alias: string | null; titular: string | null; cuitTitular: string | null; banco: string | null } | null {
   for (const p of pagos) {
     const cbu = digitos(p.cbu_destino);
     if (!cbuValido(cbu) || cbu === digitos(fichaCbu)) continue;
     const txt = (v: unknown) => String(v ?? "").trim() || null;
     const cuit = digitos(p.cuit_destinatario);
-    return { cbu, alias: txt(p.alias_destino), titular: txt(p.destinatario), cuitTitular: cuit.length === 11 ? cuit : null, banco: txt(p.banco) };
+    // 04/11/2026 (Mateo): el banco es el de la cuenta de destino. "banco" del comprobante es el de origen (el nuestro, BBVA):
+    // antes se proponía ese y quedaba mal en la ficha. Si no se lee el de destino, va vacío.
+    return { cbu, alias: txt(p.alias_destino), titular: txt(p.destinatario), cuitTitular: cuit.length === 11 ? cuit : null, banco: bancoDelCbu(cbu) ?? txt(p.banco_destino) };
   }
   return null;
 }

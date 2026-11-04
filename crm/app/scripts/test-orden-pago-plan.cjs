@@ -128,4 +128,22 @@ assert.equal(pagoOriginal(mezcla, new Set(), "echeq", 200, "A").cheque_numero, "
 assert.equal(pagoOriginal(mezcla, new Set(), "echeq", 999).cheque_numero, "A");
 assert.equal(pagoOriginal(mezcla, new Set(), "retencion_iibb", 3, "C-1").certificado, "C-1");
 
+// Solo certificados de retención (Cargill 04/11/2026): sin pagos leídos no avisa "no cierra" (el pago ya está en el formulario).
+const cargill = {
+  orden_pago_cliente: "2000083106",
+  facturas_pagadas: [{ tipo: "A", punto_venta: 15, numero: 11, importe_pagado: 355341.31 }],
+  pagos: [
+    { tipo: "retencion_iva", monto: 30835.41, certificado: "0003-2026017714" },
+    { tipo: "retencion_ganancias", monto: 1393.41, certificado: "0003-2026016788" },
+    { tipo: "retencion_iibb", monto: 5139.23, certificado: "B20265011" },
+  ],
+};
+const planCargill = buildOrdenPagoPlan(cargill, [{ id: "fa11", numero: "FA 0015-00000011" }]);
+assert.equal(planCargill.retenciones.length, 3);
+assert.equal(planCargill.medios.length, 0);
+assert.ok(!planCargill.avisos.some((a) => a.includes("no cierra")), planCargill.avisos.join(" | "));
+// Con un pago leído que no cierra, avisa igual
+const noCierra = buildOrdenPagoPlan({ ...cargill, pagos: [...cargill.pagos, { tipo: "transferencia", monto: 300000 }] }, [{ id: "fa11", numero: "FA 0015-00000011" }]);
+assert.ok(noCierra.avisos.some((a) => a.includes("no cierra")));
+
 console.log("OK: orden de pago repartida por factura (caso Termo Córdoba).");
