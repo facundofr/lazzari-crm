@@ -99,6 +99,40 @@ assert.deepEqual(avisosDePaso({ ars: [{} as never], usd: [], avisos: ["y"] }, "a
   assert.equal(repartirSinImportes(conBase as never, { ars, usd: [] }).aviso, null);
   assert.equal(baseDelCertificado("Base imponible 2315359.20, alícuota 2,00%"), 2315359.2);
   assert.equal(baseDelCertificado("sin datos"), 0);
+
+  // Aviso de pago de Corteva (Pioneer ACH, doc 160014886) + certificado juntos: el aviso trae el bruto y las deducciones de cada factura
+  // y la transferencia de $ 21.273.385. Cada paso sale exacto: pesos $ 5.143.784,60 y dólares $ 16.129.600,40.
+  const aviso: Array<[string, number, number]> = [
+    ["0015-00000050", 13072.28, 566347.65], ["0015-00000049", 24794.44, 800033.85], ["0015-00000047", 136064.19, 4390337.99],
+    ["0015-00000004", 238873.39, 7707647.97], ["0015-00000041", 133541.1, 4308926.16], ["0016-00000012", 125762.44, 4057927.83],
+    ["0015-00000048", 3654.73, 117926.12],
+  ];
+  const conAviso = {
+    ...conBase,
+    facturas_pagadas: aviso.map(([cmp, d, b]) => ({ comprobante: cmp, importe_pagado: b, deducciones: d })),
+    pagos: [{ tipo: "transferencia", monto: 21273385, fecha: "2026-11-04", referencia: "160014886" }, ...conBase.pagos],
+  };
+  const rep = repartirSinImportes(conAviso as never, { ars, usd });
+  assert.equal(rep.aviso, null, "con importes por factura no se reparte por neto");
+  const c = (n: number) => Math.round(n * 100);
+  const pArs = buildOrdenPagoPlan(rep.ars, ars.map((f) => ({ id: f.id, numero: f.numero })));
+  assert.deepEqual(pArs.medios.map((m) => [m.tipo, c(m.monto)]), [["transferencia", 514378460]]);
+  assert.equal(c(pArs.retenciones.reduce((s, x) => s + x.monto, 0)), 16451336, "retenciones en $ = deducciones de FA 47, 48 y 49");
+  const porFactura = Object.fromEntries(pArs.incluidas.map((i) => [i.docId, c(i.retenciones)]));
+  assert.deepEqual(porFactura, { "49": 2479444, "47": 13606419, "48": 365473 }, "cada factura con su deducción exacta");
+  assert.ok(pArs.avisos.some((a) => a.includes("según lo descontado")));
+  assert.ok(!pArs.avisos.some((a) => a.includes("no viene separada por factura")));
+  const pUsd = buildOrdenPagoPlan(rep.usd, usd.map((d) => ({ id: d.id, numero: d.numero })));
+  assert.deepEqual(pUsd.medios.map((m) => c(m.monto)), [1612960040]);
+  assert.equal(c(pUsd.retenciones.reduce((s, x) => s + x.monto, 0)), 51124921);
+  const gan = (p: typeof pArs) => c(p.retenciones.find((x) => x.tipo === "retencion_ganancias")!.monto);
+  assert.equal(gan(pArs) + gan(pUsd), 35831604, "Ganancias entre los 2 pasos = certificado");
+  console.log(`  Corteva con aviso: $ Ganancias ${gan(pArs) / 100} + IIBB ${(16451336 - gan(pArs)) / 100}`);
+  // Solo el aviso, sin certificado: la transferencia igual se reparte bien y avisa que faltan las retenciones
+  const soloAviso = buildOrdenPagoPlan({ ...conAviso, pagos: [conAviso.pagos[0]] } as never, ars.map((f) => ({ id: f.id, numero: f.numero })));
+  assert.deepEqual(soloAviso.medios.map((m) => c(m.monto)), [514378460]);
+  assert.equal(soloAviso.retenciones.length, 0);
+  assert.ok(soloAviso.avisos.some((a) => a.includes("arrastrá el certificado")));
 }
 
 console.log("test-cobro-orden-pago OK");

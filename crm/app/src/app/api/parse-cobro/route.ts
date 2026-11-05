@@ -81,6 +81,16 @@ Reglas para facturas_pagadas:
 - Si la factura viene SIN punto de venta (ej. "FC 65" en la columna NRO.COMP), poné "punto_venta": null y "numero": 65. Nunca uses la fecha ni otra columna como número.
 - importe_pagado es la columna "Pago" / "Importe pagado" (lo que se cancela de esa factura), no el total de la orden.
 - Las notas de crédito restan: usá tipo "NC" e importe_pagado positivo.
+- Si el aviso trae por factura "Importe bruto" y "Deducciones" (o "Retenciones" / "Descuentos"), importe_pagado es el importe BRUTO
+  (incluye lo descontado) y agregá "deducciones": lo descontado de esa factura (número plano). Sin esa columna, no pongas "deducciones".
+- Las deducciones por factura NO son pagos: no armes retenciones en "pagos" con esa columna. Las retenciones salen solo de los
+  certificados o constancias de retención adjuntos (con su número de certificado).
+
+Reglas para el pago:
+- Un AVISO DE PAGO ("Aviso de pago", "les hemos compensado/abonado las partidas", "Documento de pago ... Importe de pago", ACH)
+  con un importe total del pago y sin cheques es UNA transferencia por ese importe, con la fecha del documento de pago y su número como referencia.
+- Si vienen el aviso de pago y el certificado de retención de la MISMA operación (mismo número de documento o de pago), es una sola orden:
+  facturas_pagadas del aviso (sin repetir), la transferencia del aviso y las retenciones del certificado.
 
 Reglas para retenciones en "pagos":
 - Cada retención lleva "certificado" y, si el certificado detalla importes por comprobante ("Comprobantes origen" o similar), agregá

@@ -15,6 +15,8 @@ export interface OpFacturaPagada {
   numero?: number | string | null;
   comprobante?: string | null;
   importe_pagado?: number | string | null;
+  /** Lo que el cliente descontó de esa factura (retenciones), si el aviso lo trae por factura (ej. Corteva: columna "Deducciones"). */
+  deducciones?: number | string | null;
 }
 
 export interface OpPago {
@@ -124,7 +126,7 @@ export function buildOrdenPagoPlan(parsed: OpParsed, docs: PlanDoc[]): OrdenPago
   const unicoPorNumero = (n: number) => { const ds = docsPorNumero.get(n) || []; return ds.length === 1 ? ds[0] : null; };
 
   // Facturas de la OP con su importe (las NC restan).
-  type Linea = { clave: string; comprobante: string; importeC: number; doc: PlanDoc | null };
+  type Linea = { clave: string; comprobante: string; importeC: number; dedC: number; doc: PlanDoc | null };
   const lineas: Linea[] = [];
   for (const f of parsed.facturas_pagadas || []) {
     const importe = toNumber(f.importe_pagado);
@@ -146,7 +148,7 @@ export function buildOrdenPagoPlan(parsed: OpParsed, docs: PlanDoc[]): OrdenPago
     const signo = String(f.tipo || "").toUpperCase().startsWith("NC") ? -1 : 1;
     const [pv, num] = clave.split("-").map(Number);
     const comprobante = `${f.tipo ? `${String(f.tipo).toUpperCase()} ` : ""}${pv ? `${String(pv).padStart(4, "0")}-` : ""}${String(num).padStart(8, "0")}`;
-    lineas.push({ clave, comprobante, importeC: signo * cents(Math.abs(importe)), doc });
+    lineas.push({ clave, comprobante, importeC: signo * cents(Math.abs(importe)), dedC: signo > 0 ? Math.max(0, cents(Math.abs(toNumber(f.deducciones)))) : 0, doc });
   }
 
   const referencia = String(parsed.orden_pago_cliente || "");
@@ -179,8 +181,38 @@ export function buildOrdenPagoPlan(parsed: OpParsed, docs: PlanDoc[]): OrdenPago
   }
 
   // Retenciones por factura: detalle explícito o, si no hay, proporcional al importe pagado.
+  // Si el aviso de pago trae lo descontado de cada factura ("Deducciones", Corteva 05/11/2026) y suma lo mismo que las
+  // retenciones, las que no traen detalle se reparten según esas deducciones: cada factura queda con su descuento exacto.
+  const totalDedC = lineas.reduce((s, l) => s + l.dedC, 0);
+  const totalRetC = retencionesOp.reduce((s, r) => s + cents(toNumber(r.monto)), 0);
+  const porDeducciones = totalDedC > 0 && retencionesOp.length > 0 && Math.abs(totalDedC - totalRetC) <= 100;
+  const sinDetalleRet = retencionesOp.map((r) => !(r.detalle || []).length);
+  const ultimaSinDetalle = sinDetalleRet.lastIndexOf(true);
   const retPorLinea: number[][] = lineas.map(() => retencionesOp.map(() => 0));
+  if (porDeducciones && sinDetalleRet.some(Boolean)) {
+    // Lo ya asignado por detalle se descuenta de las deducciones de cada factura antes de repartir el resto.
+    const conDetalleC = lineas.map(() => 0);
+    retencionesOp.forEach((r, j) => {
+      if (sinDetalleRet[j]) return;
+      (r.detalle || []).forEach((d) => {
+        const i = lineas.findIndex((l) => l.clave === comprobanteKey(d.punto_venta, d.numero, d.comprobante));
+        if (i >= 0) conDetalleC[i] += cents(toNumber(d.importe));
+      });
+    });
+    const pesos = lineas.map((l, i) => Math.max(0, l.dedC - conDetalleC[i]));
+    const exacto = totalDedC === totalRetC && !sinDetalleRet.some((s) => !s);
+    retencionesOp.forEach((r, j) => {
+      if (!sinDetalleRet[j]) return;
+      // La última cierra cada factura justo en su deducción (solo si los totales coinciden al centavo).
+      const partes = exacto && j === ultimaSinDetalle
+        ? lineas.map((l, i) => l.dedC - retPorLinea[i].reduce((s, x) => s + x, 0))
+        : prorratear(cents(toNumber(r.monto)), pesos);
+      partes.forEach((p, i) => { retPorLinea[i][j] += p; });
+    });
+    if (lineas.length > 1) avisos.push("Las retenciones se repartieron según lo descontado en cada factura del aviso de pago.");
+  }
   retencionesOp.forEach((r, j) => {
+    if (porDeducciones && sinDetalleRet[j]) return;
     const totalC = cents(toNumber(r.monto));
     const detalle = (r.detalle || [])
       .map(d => ({ clave: comprobanteKey(d.punto_venta, d.numero, d.comprobante), importeC: cents(toNumber(d.importe)) }))
@@ -201,7 +233,10 @@ export function buildOrdenPagoPlan(parsed: OpParsed, docs: PlanDoc[]): OrdenPago
   });
 
   // Medios: primero cubren lo neto de las facturas del formulario; el resto queda para las otras.
-  const netoLinea = lineas.map((l, i) => l.importeC - retPorLinea[i].reduce((s, x) => s + x, 0));
+  // Aviso de pago con deducciones por factura pero sin el certificado: lo descontado igual se resta del pago de cada factura.
+  const dedSinCertificado = !retencionesOp.length && totalDedC > 0;
+  if (dedSinCertificado) avisos.push(`El aviso de pago descuenta $${fromCents(totalDedC).toFixed(2)} de retenciones que no vienen detalladas: cargalas (o arrastrá el certificado de retención).`);
+  const netoLinea = lineas.map((l, i) => l.importeC - (dedSinCertificado ? l.dedC : retPorLinea[i].reduce((s, x) => s + x, 0)));
   const netoIncluidas = lineas.reduce((s, l, i) => s + (l.doc ? netoLinea[i] : 0), 0);
   const totalMediosC = mediosOp.reduce((s, m) => s + cents(toNumber(m.monto)), 0);
   const totalNetoC = netoLinea.reduce((s, n) => s + n, 0);
