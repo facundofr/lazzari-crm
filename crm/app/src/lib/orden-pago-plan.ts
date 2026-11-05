@@ -35,6 +35,8 @@ export interface OpParsed {
   pagador?: { razon_social?: string | null; cuit?: string | null } | null;
   facturas_pagadas?: OpFacturaPagada[] | null;
   pagos?: OpPago[] | null;
+  /** Copia de un paso de un cobro en $ y US$ con su parte de las retenciones ya repartida (lib/cobro-orden-pago, repartirSinImportes). */
+  retenciones_repartidas?: boolean;
 }
 
 /** Factura abierta en el formulario. `numero` formateado, ej. "FA 0015-00000007". */
@@ -60,7 +62,7 @@ export interface OrdenPagoPlan {
 const cents = (n: number) => Math.round(n * 100);
 const fromCents = (c: number) => c / 100;
 
-function toNumber(value: unknown): number {
+export function toNumber(value: unknown): number {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
   if (typeof value !== "string") return 0;
   const n = Number(value.replace(/[^\d.,-]/g, "").replace(/\.(?=\d{3}(\D|$))/g, "").replace(",", "."));
@@ -86,7 +88,7 @@ export function comprobanteKey(pv: unknown, numero: unknown, texto?: unknown): s
 }
 
 /** Reparte `total` (en centavos) en proporción a `pesos`; el último absorbe el redondeo. */
-function prorratear(total: number, pesos: number[]): number[] {
+export function prorratear(total: number, pesos: number[]): number[] {
   const suma = pesos.reduce((s, p) => s + p, 0);
   if (!suma) return pesos.map(() => 0);
   const out: number[] = [];
@@ -167,7 +169,7 @@ export function buildOrdenPagoPlan(parsed: OpParsed, docs: PlanDoc[]): OrdenPago
 
   // Sin detalle de facturas: se asume que toda la OP es para las facturas del formulario.
   if (!lineas.length) {
-    avisos.push("La IA no encontró el detalle de facturas pagadas: se cargó la orden completa. Revisá que corresponda solo a estas facturas.");
+    if (!parsed.retenciones_repartidas) avisos.push("La IA no encontró el detalle de facturas pagadas: se cargó la orden completa. Revisá que corresponda solo a estas facturas.");
     return {
       referencia, fecha, pagadorCuit, incluidas: [], otras: [],
       medios: mediosOp.map(m => mapMedio(m, cents(toNumber(m.monto)))),

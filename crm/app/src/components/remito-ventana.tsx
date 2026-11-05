@@ -26,6 +26,7 @@ import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { renglonesParaEntregar } from "@/lib/remitos-armado";
+import { observacionesParaCliente } from "@/lib/observaciones-cliente";
 import { valorSugerido, sugeridoEnPesos, excesos, agruparPorSucursal, ocAnteriorDistinta, numeroCAI, nombrePDFRemito, descripcionCorta, type RenglonVentana } from "@/lib/remitos-crear";
 import { buscarCandidatos, type CatalogoCandidato } from "@/lib/catalogo-busqueda";
 import { abrirRemitoPDF, remitoPDFBase64 } from "@/lib/remito-pdf";
@@ -258,7 +259,7 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
   /** Carga el PR con lo que falta entregar. Si se edita un remito, sus cantidades no cuentan como ya remitidas. */
   async function cargarPR(id: string, excluirRemito: string | null): Promise<{ cab: PRCab; renglones: Renglon[] }> {
     const [{ data: p, error: e1 }, { data: items }, { data: rems }, { data: ocs }] = await Promise.all([
-      db.from("presupuestos").select("id, numero, cliente_id, sucursal_id, modalidad_emision, oc_cliente, moneda, estado, clientes(razon_social)").eq("id", id).eq("sociedad_id", sociedadId).single(),
+      db.from("presupuestos").select("id, numero, cliente_id, sucursal_id, modalidad_emision, oc_cliente, moneda, estado, observaciones, clientes(razon_social)").eq("id", id).eq("sociedad_id", sociedadId).single(),
       db.from("presupuesto_items").select("id, descripcion, cantidad, unidad, orden, precio_venta").eq("presupuesto_id", id).order("orden"),
       db.from("remitos").select("id, fecha, created_at, oc_cliente").eq("anulado", false).eq("presupuesto_id", id),
       db.from("ordenes_compra").select("id, estado").eq("presupuesto_origen_id", id).eq("sociedad_id", sociedadId),
@@ -287,6 +288,10 @@ export function RemitoVentana({ open, onClose, prId, remitoId, onGuardado }: Rem
     setOcAnterior(ocAnteriorDistinta(p.oc_cliente, otros));
     setOcDonde(null);
     setTipo(p.modalidad_emision === "manual" ? "sincai" : "cai");
+    // Remito nuevo desde el PR (05/11/2026, pedido de Augusto): trae las observaciones del PR para no copiarlas a mano; se pueden editar.
+    // Al editar un remito ya hecho manda lo que tiene el remito (cargarRemito lo pone después).
+    // Mismo filtro que el PDF del PR: los renglones automáticos de costo/margen son internos y no salen en el remito.
+    if (!excluirRemito) setObservaciones(observacionesParaCliente(p.observaciones));
     const sucs = p.cliente_id ? await cargarSucursales(p.cliente_id) : [];
     const sucId = p.sucursal_id && sucs.some((s) => s.id === p.sucursal_id) ? p.sucursal_id : (sucs[0]?.id || "");
     setSucursal(sucId);

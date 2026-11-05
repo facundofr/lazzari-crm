@@ -19,7 +19,7 @@ import { FxSettlementDialog } from "@/components/fx-settlement-dialog";
 import { cobradoPorFactura } from "@/lib/saldo-clientes";
 import { useToast } from "@/components/ui/toast";
 import type { OpParsed } from "@/lib/orden-pago-plan";
-import { avisosDePaso, facturasDeOrdenPago, numerosDeOrdenPago, type FacturasDeOrdenPago } from "@/lib/cobro-orden-pago";
+import { avisosDePaso, facturasDeOrdenPago, numerosDeOrdenPago, repartirSinImportes, type FacturasDeOrdenPago } from "@/lib/cobro-orden-pago";
 import { clientesACobrar, facturasACobrar, monedaDelCobro, type ClienteACobrar, type FacturaACobrar } from "@/lib/finanzas-lazza";
 import { traerDeudas } from "./datos";
 
@@ -92,7 +92,7 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
   const [saltoDirecto, setSaltoDirecto] = useState(directo);
   // «Cobrar todas las facturas de esta orden de pago» (arreglo 11, 27/10/2026): primero las de pesos y después las de dólares.
   // Sin `parsed`: facturas tildadas a mano en $ y en US$ (05/11/2026), mismo paso a paso sin la OP del cliente.
-  const [secuencia, setSecuencia] = useState<(FacturasDeOrdenPago & { parsed?: OpParsed; paso: "ars" | "usd" }) | null>(null);
+  const [secuencia, setSecuencia] = useState<(FacturasDeOrdenPago & { parsed?: OpParsed; parsedUsd?: OpParsed; paso: "ars" | "usd" }) | null>(null);
   // Certificado / OP del cliente arrastrado antes de tildar (05/11/2026): la IA lo lee y arma el cobro de las facturas que nombra.
   const [leyendo, setLeyendo] = useState(false);
 
@@ -154,7 +154,9 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
       const r = await traerFacturasDeOrdenPago(sociedadId, cliente.id, parsed);
       if (r.sinDetalle) { toast.warning("La IA no encontró el detalle de facturas en la orden de pago."); return; }
       if (!r.ars.length && !r.usd.length) { toast.warning(`No hay facturas pendientes para cobrar en esta orden de pago. ${r.avisos.join(" ")}`); return; }
-      setSecuencia({ ...r, parsed, paso: r.ars.length ? "ars" : "usd" });
+      // Certificado sin importe por factura que paga $ y US$: cada paso lleva solo su parte de las retenciones (05/11/2026).
+      const rep = repartirSinImportes(parsed, r);
+      setSecuencia({ ...r, avisos: rep.aviso ? [rep.aviso, ...r.avisos] : r.avisos, parsed: rep.ars, parsedUsd: rep.usd, paso: r.ars.length ? "ars" : "usd" });
     } catch (e) {
       console.error("Finanzas Lazza · Cobrar toda la OP:", e);
       toast.error(e instanceof Error ? e.message : "No se pudieron buscar las facturas de la orden de pago.");
@@ -200,7 +202,7 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
     }
     return (
       <FxSettlementDialog kind="cobro" sociedadId={sociedadId} counterpartyId={cliente.id}
-        documents={secuencia.usd} ordenPago={secuencia.parsed} ordenPagoAvisos={avisosDePaso(secuencia, "usd")}
+        documents={secuencia.usd} ordenPago={secuencia.parsedUsd || secuencia.parsed} ordenPagoAvisos={avisosDePaso(secuencia, "usd")}
         onClose={onClose} onSuccess={listo} />
     );
   }

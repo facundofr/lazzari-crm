@@ -2,7 +2,7 @@
 // trae varias facturas; se buscan todas en el sistema y se arma el cobro en dos pasos: primero las de pesos y después las de dólares.
 // Las ya cobradas o que no están se informan y no se tocan. Misma regla que Facturación (facturacion-content.tsx, iniciarCobroOrdenPago).
 // Función pura. Prueba: scripts/test-cobro-orden-pago.ts
-import { comprobanteKey, type OpParsed } from "./orden-pago-plan";
+import { comprobanteKey, prorratear, toNumber, type OpParsed } from "./orden-pago-plan";
 import { elegirFacturaDeOrdenPago, esNotaCredito } from "./ventas-documentos";
 import type { FacturaACobrar } from "./finanzas-lazza";
 
@@ -85,4 +85,55 @@ export function avisosDePaso(r: Pick<FacturasDeOrdenPago, "ars" | "usd" | "aviso
   const pasos = (r.ars.length ? 1 : 0) + (r.usd.length ? 1 : 0);
   const lineas = pasos === 2 ? [paso === "ars" ? "Paso 1 de 2: facturas en pesos. Al confirmar se abre el cobro de las facturas en dólares." : "Paso 2 de 2: facturas en dólares."] : [];
   return [...lineas, ...r.avisos];
+}
+
+const esRetencionOP = (tipo: unknown) => /^(retencion|percepcion)_/.test(String(tipo || "").toLowerCase());
+
+/** Base imponible que la IA dejó en las notas del certificado ("Base imponible 2315359.20", "base 18.139.802,14"). */
+export function baseDelCertificado(texto: unknown): number {
+  const m = String(texto || "").match(/base(?:\s+(?:imponible|acumulada|de\s+retenci[oó]n|retenci[oó]n|documento|sujeta))?\s*[:=]?\s*\$?\s*(\d[\d.,]*\d)/i);
+  return m ? toNumber(m[1]) : 0;
+}
+
+/**
+ * Certificado u OP del cliente que paga facturas en $ y en US$ y NO trae el importe de cada factura
+ * (ej. certificados de retención de Corteva, 05/11/2026): antes cada paso cargaba las retenciones enteras (repetidas).
+ * Se arma una copia por paso con solo su parte: retenciones según el neto de cada factura en pesos (US$ al cambio de cada
+ * factura; si el certificado trae la base, la parte en dólares es la base menos el neto en pesos) y medios según el saldo.
+ * Las copias no llevan facturas con importe (así el paso en dólares no deduce un tipo de cambio que el cliente no informó).
+ */
+export function repartirSinImportes(parsed: OpParsed, r: Pick<FacturasDeOrdenPago, "ars" | "usd">): { ars: OpParsed; usd: OpParsed; aviso: string | null } {
+  const igual = { ars: parsed, usd: parsed };
+  const sinImportes = (parsed.facturas_pagadas || []).every((f) => !(toNumber(f.importe_pagado) > 0));
+  const conMonto = (parsed.pagos || []).filter((p) => toNumber(p.monto) > 0);
+  if (!r.ars.length || !r.usd.length || !sinImportes || !conMonto.some((p) => esRetencionOP(p.tipo))) return { ...igual, aviso: null };
+  if (r.usd.some((d) => !(Number(d.cotizacion) > 0))) {
+    return { ...igual, aviso: "El certificado no trae el importe de cada factura y hay facturas en US$ sin cotización: revisá las retenciones de cada paso (pueden venir enteras)." };
+  }
+  const netoArs = r.ars.reduce((s, f) => s + (Number(f.subtotal) > 0 ? Number(f.subtotal) : f.saldo / 1.21), 0);
+  const netoUsd = r.usd.reduce((s, d) => s + (Number(d.subtotal) > 0 ? Number(d.subtotal) : d.saldo / 1.21) * Number(d.cotizacion), 0);
+  const saldoArs = r.ars.reduce((s, f) => s + f.saldo, 0);
+  const saldoUsd = r.usd.reduce((s, d) => s + d.saldo * Number(d.cotizacion), 0);
+  const partes = (p: (typeof conMonto)[number]) => {
+    const totalC = Math.round(toNumber(p.monto) * 100);
+    if (!esRetencionOP(p.tipo)) return prorratear(totalC, [Math.round(saldoArs * 100), Math.round(saldoUsd * 100)]);
+    const n = p as typeof p & { notas?: string | null; concepto?: string | null };
+    const base = baseDelCertificado(`${n.notas || ""} ${n.concepto || ""}`);
+    const usd = base > netoArs + 1 ? base - netoArs : netoUsd;
+    return prorratear(totalC, [Math.round(netoArs * 100), Math.round(usd * 100)]);
+  };
+  const ars: typeof conMonto = [], usd: typeof conMonto = [];
+  let retArs = 0, retUsd = 0;
+  for (const p of conMonto) {
+    const [a, u] = partes(p);
+    if (a > 0) ars.push({ ...p, monto: a / 100, detalle: null });
+    if (u > 0) usd.push({ ...p, monto: u / 100, detalle: null });
+    if (esRetencionOP(p.tipo)) { retArs += a; retUsd += u; }
+  }
+  const plata = (c: number) => (c / 100).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const copia = (pagos: typeof conMonto): OpParsed => ({ ...parsed, facturas_pagadas: [], pagos, retenciones_repartidas: true });
+  return {
+    ars: copia(ars), usd: copia(usd),
+    aviso: `El certificado no trae el importe de cada factura: las retenciones se repartieron según el neto de cada factura ($ ${plata(retArs)} a las de pesos y $ ${plata(retUsd)} a las de dólares). Revisalas antes de confirmar.`,
+  };
 }
