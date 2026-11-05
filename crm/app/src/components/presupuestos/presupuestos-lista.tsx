@@ -1772,7 +1772,8 @@ export default function PresupuestosLista() {
       const matchNumero = pr.numero.toLowerCase().includes(s);
       const matchCliente = pr.clienteNombre.toLowerCase().includes(s);
       const matchItems = pr.items?.some(it => (it.descripcion || "").toLowerCase().includes(s) || (it.codigo || "").toLowerCase().includes(s));
-      if (!matchNumero && !matchCliente && !matchItems) return false;
+      const matchSolicitante = (pr.contactoNombre || "").toLowerCase().includes(s);
+      if (!matchNumero && !matchCliente && !matchItems && !matchSolicitante) return false;
     }
     if (vendedorFilter && (pr as any).vendedorId !== vendedorFilter) return false;
     if (operadorFilter && (pr as any).creadoPorId !== operadorFilter) return false;
@@ -2827,7 +2828,7 @@ export default function PresupuestosLista() {
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
             <input
               type="text"
-              placeholder="Buscar por N° PR, cliente o items..."
+              placeholder="Buscar por N° PR, cliente, solicitante o items..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="h-8 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
@@ -2865,7 +2866,7 @@ export default function PresupuestosLista() {
               if (pr.estado !== "solicitud" && pr.estado !== "pendiente" && pr.estado !== "postergado" && pr.estado !== "vencido") return false;
               if (search) {
                 const s = search.toLowerCase();
-                if (!pr.numero.toLowerCase().includes(s) && !pr.clienteNombre.toLowerCase().includes(s) && !pr.items?.some(it => (it.descripcion || "").toLowerCase().includes(s) || (it.codigo || "").toLowerCase().includes(s))) return false;
+                if (!pr.numero.toLowerCase().includes(s) && !pr.clienteNombre.toLowerCase().includes(s) && !(pr.contactoNombre || "").toLowerCase().includes(s) && !pr.items?.some(it => (it.descripcion || "").toLowerCase().includes(s) || (it.codigo || "").toLowerCase().includes(s))) return false;
               }
               if (vendedorFilter && (pr as any).vendedorId !== vendedorFilter) return false;
               if (operadorFilter && (pr as any).creadoPorId !== operadorFilter) return false;
@@ -3051,7 +3052,13 @@ export default function PresupuestosLista() {
               },
               {
                 key: "sucursalNombre", label: "Sucursal", sortable: true,
-                render: (row) => <span className="block max-w-[130px] truncate text-xs text-zinc-600 dark:text-zinc-300" title={row.sucursalNombre || ""}>{row.sucursalNombre || "—"}</span>,
+                // Abajo de la sucursal, el solicitante del PR (la persona del cliente que lo pidió), chico y gris.
+                render: (row) => (
+                  <span className="block max-w-[130px]">
+                    <span className="block truncate text-xs text-zinc-600 dark:text-zinc-300" title={row.sucursalNombre || ""}>{row.sucursalNombre || "—"}</span>
+                    {row.contactoNombre && <span className="block truncate text-[11px] text-zinc-400" title={`Solicitante: ${row.contactoNombre}`}>{row.contactoNombre}</span>}
+                  </span>
+                ),
               },
               {
                 key: "subtotal", label: "Subtotal s/IVA", className: "text-right", sortable: true,
