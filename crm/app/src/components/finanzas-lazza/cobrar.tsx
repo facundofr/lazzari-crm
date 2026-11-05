@@ -6,7 +6,8 @@
 // Lugar central: tarjeta "Cobrar" del inicio (FinanzasLazzaCobrar: clientes que deben → Cobrar). Atajos a la misma ventana:
 // Cuentas corrientes (ficha del cliente), Vencimientos y Facturas (facturas de venta) y Recibos ("Nuevo cobro").
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, HandCoins, Loader2, Search, X } from "lucide-react";
+import { AlertTriangle, HandCoins, Loader2, Search, Sparkles, Upload, X } from "lucide-react";
+import { ZonaArchivos } from "@/components/ui/zona-archivos";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
@@ -90,7 +91,10 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
   const [liquidando, setLiquidando] = useState(false);
   const [saltoDirecto, setSaltoDirecto] = useState(directo);
   // «Cobrar todas las facturas de esta orden de pago» (arreglo 11, 27/10/2026): primero las de pesos y después las de dólares.
-  const [secuencia, setSecuencia] = useState<(FacturasDeOrdenPago & { parsed: OpParsed; paso: "ars" | "usd" }) | null>(null);
+  // Sin `parsed`: facturas tildadas a mano en $ y en US$ (05/11/2026), mismo paso a paso sin la OP del cliente.
+  const [secuencia, setSecuencia] = useState<(FacturasDeOrdenPago & { parsed?: OpParsed; paso: "ars" | "usd" }) | null>(null);
+  // Certificado / OP del cliente arrastrado antes de tildar (05/11/2026): la IA lo lee y arma el cobro de las facturas que nombra.
+  const [leyendo, setLeyendo] = useState(false);
 
   // Lista de clientes solo si hay que elegir uno.
   useEffect(() => {
@@ -157,6 +161,34 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
     }
   }
 
+  // Tildadas en $ y en US$: el mismo paso a paso, primero las de pesos y después las de dólares.
+  function cobrarMezcla() {
+    const ars = seleccion.filter((f) => f.moneda !== "USD");
+    const usd = seleccion.filter((f) => f.moneda === "USD")
+      .map((f) => ({ id: f.id, numero: f.numero, saldo: f.saldo, total: f.total, subtotal: f.subtotal, cotizacion: Number(f.tipo_cambio) || undefined }));
+    setSecuencia({ sinDetalle: false, ars, usd, avisos: [], paso: ars.length ? "ars" : "usd" });
+    if (ars.length && usd.length) toast.info("Paso 1 de 2: facturas en pesos. Al confirmar se abre el cobro de las facturas en dólares.");
+  }
+
+  // El certificado u OP del cliente, sin tildar nada: la misma lectura con IA que la liquidación (/api/parse-cobro).
+  async function leerCertificado(files: File[]) {
+    if (!files.length || !cliente) return;
+    setLeyendo(true);
+    try {
+      const form = new FormData();
+      files.forEach((file) => form.append("file", file));
+      form.append("contexto", "orden_pago_cliente");
+      const response = await fetch("/api/parse-cobro", { method: "POST", body: form });
+      const json = await response.json();
+      if (!response.ok || !json.success) throw new Error(json.error || "No se pudo leer el certificado");
+      await iniciarCobroOrdenPago((json.data || {}) as OpParsed);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "No se pudo leer el certificado");
+    } finally {
+      setLeyendo(false);
+    }
+  }
+
   if (secuencia && cliente) {
     if (secuencia.paso === "ars") {
       return (
@@ -197,7 +229,7 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
         <div className="flex items-start justify-between gap-2">
           <div>
             <h2 className="text-base font-bold text-zinc-900 dark:text-white">Cobrar{cliente ? ` · ${cliente.nombre}` : ""}</h2>
-            <p className="text-sm text-zinc-500">{cliente ? "Tildá las facturas que paga y seguí a la liquidación." : "Elegí el cliente."}</p>
+            <p className="text-sm text-zinc-500">{cliente ? "Arrastrá el certificado de pago o tildá las facturas que paga." : "Elegí el cliente."}</p>
           </div>
           <button type="button" aria-label="Cerrar" onClick={onClose} className="rounded p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
         </div>
@@ -222,6 +254,17 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
         ) : (
           <>
             {!clienteId && <button type="button" onClick={() => { setCliente(null); setFacturas(null); }} className="text-xs text-orange-600 hover:underline">← Otro cliente</button>}
+            <ZonaArchivos onArchivos={(files) => void leerCertificado(files)} disabled={leyendo} className="p-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <label className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border border-orange-300 bg-orange-50 px-3 py-1.5 text-sm font-semibold text-orange-700 hover:bg-orange-100 dark:border-orange-800 dark:bg-orange-950/30 dark:text-orange-300 ${leyendo ? "pointer-events-none opacity-60" : ""}`}>
+                  {leyendo ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Upload className="h-4 w-4" /><Sparkles className="h-3.5 w-3.5" /></>}
+                  {leyendo ? "Leyendo con IA…" : "Cargar certificado de pago"}
+                  <input type="file" multiple accept="application/pdf,image/png,image/jpeg,image/webp" className="hidden" disabled={leyendo}
+                    onChange={(event) => { const files = Array.from(event.target.files || []); void leerCertificado(files); event.target.value = ""; }} />
+                </label>
+                <span className="text-xs text-zinc-500">o arrastralo acá: la IA busca las facturas que paga (en $ y en US$) y arma el cobro, sin tildar nada.</span>
+              </div>
+            </ZonaArchivos>
             {medioInicial && <p className="text-xs text-zinc-500">Entró al banco {formatCurrency(medioInicial.monto)} el {formatDate(medioInicial.fecha)}. 💡 = factura con ese saldo.</p>}
             <div className="overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-700">
               <table className="w-full text-sm">
@@ -250,7 +293,7 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
             </div>
             {mezcla && (
               <p className="flex items-center gap-1.5 rounded-lg bg-amber-50 p-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
-                <AlertTriangle className="h-4 w-4 shrink-0" /> Tildaste facturas en $ y en US$: se cobran por separado (primero unas, después las otras).
+                <AlertTriangle className="h-4 w-4 shrink-0" /> Tildaste facturas en $ y en US$: se cobran en 2 pasos seguidos, primero las de pesos y después las de dólares.
               </p>
             )}
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-700">
@@ -262,9 +305,9 @@ export function CobrarCliente({ sociedadId, clienteId, clienteNombre, preselecci
               </span>
               <div className="flex gap-2">
                 <button type="button" onClick={onClose} className="rounded-lg border border-zinc-200 px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
-                <button type="button" disabled={!moneda} onClick={() => setLiquidando(true)}
+                <button type="button" disabled={!moneda && !mezcla} onClick={() => { if (mezcla) cobrarMezcla(); else setLiquidando(true); }}
                   className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
-                  Seguir a la liquidación{moneda === "USD" ? " (US$)" : ""}
+                  {mezcla ? "Seguir: primero $, después US$" : `Seguir a la liquidación${moneda === "USD" ? " (US$)" : ""}`}
                 </button>
               </div>
             </div>

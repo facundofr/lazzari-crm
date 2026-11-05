@@ -428,7 +428,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
           const { error: eGasto } = await db.from("gastos_manuales").insert({
             descripcion: `Compra crédito fiscal IVA — ${factura.tipo} ${numero} — ${proveedor.razon_social}`, categoria: "Impuestos", grupo: "Impuestos",
             monto: costo, moneda: factura.moneda, fecha: factura.fecha || todayAR(), proveedor_id: proveedor.id, sociedad_id: sociedadId, created_by: profile?.id,
-            tipo_recurrencia: "eventual", tipo_gasto: "Compra IVA", medio_pago: "efectivo",
+            tipo_recurrencia: "eventual", tipo_gasto: "Compra IVA", medio_pago: "transferencia", // el costo de la Solo IVA se transfiere (antes quedaba "efectivo")
           });
           if (eGasto) toast.warning(`La factura quedó, pero no se pudo cargar el costo en Gastos (${eGasto.message}): cargalo a mano en Finanzas › Gastos.`);
           else pagoTxt += ` · costo ${formatCurrency(costo, factura.moneda)} a Gastos`;
