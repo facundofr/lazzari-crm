@@ -262,7 +262,9 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     motivoRechazo: row.motivo_rechazo ?? undefined,
     markupGeneral: row.markup_general,
     descuentoGeneralPorcentaje: Number(row.descuento_general_porcentaje) || 0,
-    items: (row.presupuesto_items ?? []).map((it, idx) => ({
+    // En el orden que dejó el vendedor (Augusto 06/11/2026: "lo ordeno como yo quiero… cuando lo guardas lo ordena de otra
+    // manera"). La base devuelve los renglones sin orden fijo; la vista, el PDF y el mail salen de acá.
+    items: [...(row.presupuesto_items ?? [])].sort((a, b) => Number(a.orden ?? 0) - Number(b.orden ?? 0)).map((it, idx) => ({
       id: it.id ?? `item-${idx}`,
       productoId: "",
       codigo: it.codigo,
