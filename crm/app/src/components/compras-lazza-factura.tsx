@@ -225,7 +225,9 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
     if (!items.length) items = [{ ...renglonVacio(pct), precio_unitario: netoEst }]; // sin renglones (QR o texto): uno solo con el neto, editable
     const neto = round2(items.reduce((a, it) => a + netoRenglon(it), 0));
     const total = leida.total > 0 ? leida.total : round2(neto + imp.iva + imp.percepciones);
-    const f: FacturaCarga = { ...leida, tipo, items, subtotal: neto, iva: imp.iva, percepciones: imp.percepciones, total, ivaPorcentaje: pct };
+    // TC: si la IA no lo encuentra, queda el que ya trajo el QR de la misma factura.
+    const tipoCambio = leida.tipoCambio ?? (leida.moneda === "USD" && factura?.moneda === "USD" ? factura.tipoCambio ?? null : null);
+    const f: FacturaCarga = { ...leida, tipo, items, subtotal: neto, iva: imp.iva, percepciones: imp.percepciones, total, ivaPorcentaje: pct, tipoCambio };
     const buscar = f.cuit.length === 11 && !(proveedor && digitos(proveedor.cuit) === f.cuit);
     if (buscar) { setProveedor(null); setBuscandoProv(true); } // así no aparece "no está cargado" mientras busca
     setFactura(f); setOrigen(como); setFilasKey(k => k + 1);
@@ -330,6 +332,16 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
     return data as Proveedor;
   }
 
+  /**
+   * Tipo de cambio de la factura en US$ (06/11/2026): Finanzas › IVA lo usa en vez del dólar del día, como ARCA. Las RPC no lo
+   * guardan: va aparte. Si falla (o falta la columna), la factura ya quedó: solo se avisa.
+   */
+  async function guardarTipoCambio(facturaId: string) {
+    if (!factura || factura.moneda !== "USD" || !(Number(factura.tipoCambio) > 1)) return;
+    const { error: eTc } = await db.from("facturas_compra").update({ tipo_cambio: Math.round(Number(factura.tipoCambio) * 10000) / 10000 }).eq("id", facturaId);
+    if (eTc) toast.warning(`La factura quedó, pero sin el tipo de cambio (${eTc.message}): el IVA usa el dólar del día.`);
+  }
+
   // Nota de crédito: sin pago; queda como crédito en la cuenta corriente del proveedor (se usa al pagarle).
   async function guardarNC(proveedor: Proveedor) {
     if (!factura) return;
@@ -353,6 +365,7 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
       });
       if (e) throw new Error(e.message);
       if (!data?.factura_compra_id) throw new Error("La base no confirmó la nota de crédito. No se guardó nada.");
+      await guardarTipoCambio(data.factura_compra_id);
       await subirArchivo(data.factura_compra_id);
       toast.success(`✔ ${factura.tipo} ${numero} cargada · queda como crédito de ${proveedor.razon_social}`);
       window.dispatchEvent(new Event(EVENTO_FACTURAS_COMPRA));
@@ -413,6 +426,8 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
         const { error: eCond } = await db.from("facturas_compra").update(condicion).eq("id", facturaId);
         if (eCond) toast.warning(`La forma de pago quedó solo en las notas (${eCond.message}).`);
       }
+
+      if (facturaId) await guardarTipoCambio(facturaId);
 
       // d) PDF y pago (si algo de esto falla, la factura ya quedó: solo se avisa).
       if (facturaId) await subirArchivo(facturaId);
@@ -529,6 +544,12 @@ export default function ComprasLazzaFactura({ sociedadId, onClose, conVisaInicia
                     <select value={factura.moneda} onChange={e => setFactura({ ...factura, moneda: e.target.value === "USD" ? "USD" : "ARS" })} className="mt-0.5 block w-20 rounded border border-zinc-300 bg-white px-1 py-0.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100">
                       <option>ARS</option><option>USD</option>
                     </select></label>
+                  {factura.moneda === "USD" && (
+                    <label className="text-[11px] text-zinc-500" title="El tipo de cambio impreso en la factura (el que usa ARCA para el IVA). Sin él, el IVA usa el dólar BNA del día.">Tipo de cambio
+                      <input key={`tc-${filasKey}`} defaultValue={factura.tipoCambio ? aTexto(factura.tipoCambio) : ""} onChange={e => setFactura({ ...factura, tipoCambio: num(e.target.value) > 1 ? num(e.target.value) : null })}
+                        placeholder="ej. 1506,50" inputMode="decimal"
+                        className={`mt-0.5 block w-24 rounded border bg-white px-1.5 py-0.5 text-right text-sm text-zinc-900 dark:bg-zinc-900 dark:text-zinc-100 ${factura.tipoCambio ? "border-zinc-300 dark:border-zinc-600" : "border-amber-400"}`} /></label>
+                  )}
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">

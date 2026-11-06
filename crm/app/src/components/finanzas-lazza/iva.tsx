@@ -118,7 +118,7 @@ export function FinanzasLazzaIva({ sociedadId, periodo }: { sociedadId: string; 
             </>
           )}
         </div>
-        <p className="mt-1 text-[11px] text-zinc-500">Estimado con lo cargado en el sistema. No incluye saldo a favor de meses anteriores. US$ al TC de cada comprobante (compras: dólar BNA del día).</p>
+        <p className="mt-1 text-[11px] text-zinc-500">Estimado con lo cargado en el sistema. No incluye saldo a favor de meses anteriores. US$ al TC de cada comprobante (compras sin TC cargado: dólar BNA del día).</p>
         {r.sinCotizacion.length > 0 && <p className="mt-1 text-[11px] text-amber-600">En US$ sin cotización (no suman): {r.sinCotizacion.join(", ")}</p>}
       </div>
       {r.percepciones.filas.length > 0 && (

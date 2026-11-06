@@ -105,8 +105,10 @@ export async function traerComprasDelMes(sociedadId: string, periodo: string): P
   const armar = (campos: string) => () => db.from("facturas_compra").select(campos)
     .eq("sociedad_id", sociedadId).gte("fecha", desde).lt("fecha", hasta).order("id");
   const base = "id, fecha, tipo_comprobante, estado, moneda, subtotal, iva, percepciones, total, numero_factura, proveedores(razon_social)";
-  // solo_iva puede no existir en alguna base vieja: sin la columna, se trae igual.
-  const rows = await traerTodo<any>(armar(`${base}, solo_iva`)).catch(() => traerTodo<any>(armar(base)));
+  // solo_iva y tipo_cambio (06/11/2026) pueden no existir todavía: sin la columna, se trae igual (el IVA usa el dólar del día).
+  const rows = await traerTodo<any>(armar(`${base}, solo_iva, tipo_cambio`))
+    .catch(() => traerTodo<any>(armar(`${base}, solo_iva`)))
+    .catch(() => traerTodo<any>(armar(base)));
   return rows.map((r) => ({ ...r, fecha: String(r.fecha).slice(0, 10), proveedor: r.proveedores?.razon_social ?? "" }));
 }
 

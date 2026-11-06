@@ -191,6 +191,13 @@ assert.equal(ivaEst.estimado, 10000 - 2139 - 3000); // la de sin certificado no 
 assert.deepEqual([ivaEst.vep.pagado, ivaEst.vep.filas.map((f) => f.id), ivaEst.vep.diferencia, ivaEst.vep.coincide], [4000, ["g1"], 4000 - 4861, true]);
 assert.deepEqual([ivaEst.vep.sinImpuesto.monto, ivaEst.vep.sinImpuesto.filas.map((f) => f.id)], [2520000, ["g2"]]);
 assert.deepEqual([ivaEst.percepciones.monto, ivaEst.percepciones.filas.length], [270, 2]);
+// Compras en US$ (06/11/2026): con el TC de la factura (el de ARCA); sin TC, el dólar BNA del día.
+const ivaUsd = ivaDelMes({ periodo: "2026-10", ventas: [], tcDia, compras: [
+  { id: "u1", fecha: "2026-10-14", tipo_comprobante: "FC A", estado: "pagada", moneda: "USD", iva: 598.5, tipo_cambio: 1512.5 },
+  { id: "u2", fecha: "2026-10-14", tipo_comprobante: "FC A", estado: "pagada", moneda: "USD", iva: 100 },
+  { id: "u3", fecha: "2026-10-14", tipo_comprobante: "NC A", estado: "recibida", moneda: "USD", iva: 10, tipo_cambio: "1506.5" },
+] });
+assert.deepEqual(ivaUsd.compras.filas.map((f) => f.iva), [905231.25, 150000, -15065]);
 // A favor y VEP que no coincide (caso septiembre: el estimado da a favor y se pagó un VEP)
 const ivaFavor = ivaDelMes({ periodo: "2026-09", ventas: [], compras: [], tcDia, retenciones: [{ id: "r", fecha: "2026-09-03", monto: 5000, descripcion: "certificado 9" }],
   gastos: [{ id: "g", fecha: "2026-10-21", monto: 1500, descripcion: "ARCA VEP — VEP IVA — pago 21/10" }] });

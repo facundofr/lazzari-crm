@@ -28,6 +28,8 @@ export interface FacturaCarga {
   vencimiento: string;
   cae: string;
   moneda: "ARS" | "USD";
+  /** Tipo de cambio de la factura en US$ (QR de ARCA o IA); el IVA lo usa en vez del dólar del día (06/11/2026). */
+  tipoCambio?: number | null;
   subtotal: number;
   iva: number;
   ivaPorcentaje: number;
@@ -80,6 +82,7 @@ export function facturaDesdeDatos(file: File, d: any): FacturaCarga {
     vencimiento: d.fecha_vencimiento || "",
     cae: d.cae || "",
     moneda: d.moneda === "USD" ? "USD" : "ARS",
+    tipoCambio: d.moneda === "USD" && Number(d.tipo_cambio) > 1 ? Number(d.tipo_cambio) : null,
     subtotal: Number(d.subtotal) || 0,
     iva: Number(d.iva) || 0,
     ivaPorcentaje: ivaPct,

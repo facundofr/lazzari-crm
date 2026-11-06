@@ -399,6 +399,8 @@ export interface FacturaCompraFL {
   percepciones?: number | string | null;
   total?: number | string | null;
   solo_iva?: boolean | null;
+  /** Tipo de cambio de la factura en US$ (06/11/2026). Sin él, el IVA usa el dólar BNA del día. */
+  tipo_cambio?: number | string | null;
   numero_factura?: string | null;
   proveedor?: string | null;
   fecha_vencimiento?: string | null;
@@ -519,7 +521,8 @@ export function ivaDelMes(input: {
   for (const f of input.compras) {
     if (periodoDeFecha(f.fecha) !== periodo || !incluirEnLibroIVACompras(f)) continue;
     const comp = `${f.tipo_comprobante || "FC"} ${f.numero_factura || "S/N"}`;
-    const tc = tcComprobante(f.moneda, null, f.fecha, tcDia);
+    // El TC impreso en la factura (el que usa ARCA); si no se cargó, el dólar BNA del día (06/11/2026).
+    const tc = tcComprobante(f.moneda, f.tipo_cambio, f.fecha, tcDia);
     if (!tc) { sinCotizacion.push(comp); c.filas.push({ id: f.id, fecha: f.fecha, comprobante: comp, nombre: f.proveedor || "", iva: 0, aviso: "US$ sin cotización" }); continue; }
     const iva = num(f.iva) * tc;
     const nc = esNotaCredito(f.tipo_comprobante);

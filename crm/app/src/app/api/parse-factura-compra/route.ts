@@ -21,6 +21,7 @@ Te voy a pasar un PDF o imagen de una factura de compra o nota de pedido de prov
   "cae": "número CAE si aparece, o null",
   "tipo_comprobante": "A, B, C, etc. si se identifica",
   "moneda": "ARS" o "USD",
+  "tipo_cambio": 1450.5,
   "referencias_oc": ["1199"],
   "comprobantes_asociados": ["0001-00012345"],
   "items": [
@@ -69,6 +70,7 @@ Reglas:
 - El número de factura debe incluir punto de venta si aparece (ej: 0001-00012345).
 - Percepciones: devolvé el total en "percepciones" y además desglosá en "percepcion_iibb" (número o null), "percepcion_iva" (número o null), "percepcion_ganancias" (número o null). Si no podés identificar el tipo, poné todo en "percepciones" y dejá los campos individuales en null.
 - La moneda por defecto es "ARS" salvo que se indique lo contrario.
+- "tipo_cambio": solo si la factura está en dólares (moneda "USD"): el tipo de cambio impreso en el comprobante ("Tipo de cambio", "Cotización", "TC", "Tipo de Cambio: 1.506,50" → 1506.5). Es el que usa ARCA para el IVA. Si la factura es en pesos o no lo imprime, null. No lo calcules ni lo inventes.
 - "referencias_oc": números de NUESTRA orden de compra que el emisor imprime en la factura (ej.: "Su OC N° 1199", "O.C. 2026-1199", "Orden de compra: 1199", "Su pedido 1199", "Ref. cliente OC-1199"). Devolvé solo el número tal como aparece, sin el texto. Si no aparece ninguna, devolvé []. NO pongas el número de remito, de pedido interno del proveedor ni el número de la factura.
 - "comprobantes_asociados": solo en notas de crédito o débito: números de las facturas que anula o ajusta (ej.: "Comprobante asociado: FC A 0001-00012345", "Ref. Fact. 0001-12345"). Mismo formato que numero_factura. Si no es NC/ND o no aparece, devolvé [].
 - Si el documento es una NOTA DE PEDIDO, COTIZACIÓN, PRESUPUESTO o PROFORMA (no es factura fiscal), devolvé tipo_comprobante como "Nota de Pedido".
